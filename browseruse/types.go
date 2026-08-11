@@ -39,6 +39,13 @@ type TabService interface {
 	CloseTab(ctx context.Context, sessionID, tabID string) ([]BrowserTab, error)
 }
 
+// LiveTabService is an optional host-facing extension for deterministic tab
+// navigation and fresh screenshots. OpenTab never invokes an LLM.
+type LiveTabService interface {
+	OpenTab(ctx context.Context, sessionID, rawURL string) ([]BrowserTab, error)
+	TabScreenshot(ctx context.Context, sessionID, tabID string) (*Screenshot, error)
+}
+
 // DebugService is an optional extension implemented by services that expose
 // bounded, operator-facing browser job and network-load metadata.
 type DebugService interface {

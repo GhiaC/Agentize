@@ -6,6 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -54,6 +55,24 @@ class BrowserTab(BaseModel):
 	url: str = Field(default="", max_length=2_000)
 	title: str = Field(default="", max_length=500)
 	active: bool = False
+
+
+class OpenBrowserTabRequest(BaseModel):
+	"""A direct, non-LLM navigation request for one persistent session."""
+
+	model_config = ConfigDict(extra="forbid")
+	url: str = Field(min_length=1, max_length=2_000)
+
+	@field_validator("url")
+	@classmethod
+	def safe_web_url(cls, value: str) -> str:
+		value = value.strip()
+		if "://" not in value:
+			value = "https://" + value
+		parsed = urlsplit(value)
+		if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+			raise ValueError("url must be an HTTP or HTTPS address without credentials")
+		return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
 
 
 class StartJobRequest(BaseModel):

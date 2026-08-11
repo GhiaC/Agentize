@@ -149,6 +149,29 @@ class JobManager:
 		async with lock:
 			return await lister(session_id)
 
+	async def open_tab(self, session_id: str, url: str) -> list[BrowserTab]:
+		opener = getattr(self.runner, "open_tab", None)
+		if opener is None:
+			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support opening tabs")
+		lock = await self._session_lock(session_id)
+		async with lock:
+			return await opener(session_id, url)
+
+	async def tab_screenshot(self, session_id: str, tab_id: str) -> bytes:
+		reader = getattr(self.runner, "tab_screenshot", None)
+		if reader is None:
+			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tab screenshots")
+		lock = await self._session_lock(session_id)
+		async with lock:
+			try:
+				return await reader(session_id, tab_id)
+			except KeyError:
+				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab not found") from None
+			except FileNotFoundError:
+				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab screenshot is not available") from None
+			except ValueError as exc:
+				raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+
 	async def close_tab(self, session_id: str, tab_id: str) -> list[BrowserTab]:
 		closer = getattr(self.runner, "close_tab", None)
 		if closer is None:

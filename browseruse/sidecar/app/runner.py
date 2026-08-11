@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import mimetypes
 import os
 import shutil
@@ -19,6 +20,7 @@ from .models import BrowserDownload, BrowserTab, BrowserUpload, JobResult, Start
 
 
 MAX_DOWNLOAD_BYTES = 25 << 20
+MAX_TAB_SCREENSHOT_BYTES = 10 << 20
 
 
 @dataclass
@@ -108,6 +110,43 @@ class BrowserUseRunner:
 			return []
 		await persistent.browser.start()
 		return await self._snapshot_tabs(persistent.browser)
+
+	async def open_tab(self, session_id: str, url: str) -> list[BrowserTab]:
+		self._validate_direct_url(url)
+		browser = self._browser_for_direct_tab(session_id)
+		await browser.start()
+		created = await browser.cdp_client.send.Target.createTarget(params={"url": url})
+		if isinstance(created, dict):
+			target_id = str(created.get("targetId", ""))
+		else:
+			target_id = str(getattr(created, "target_id", "") or getattr(created, "targetId", ""))
+		if not target_id:
+			raise RuntimeError("Chromium did not return a target id for the new tab")
+		browser.agent_focus_target_id = None
+		await browser.get_or_create_cdp_session(target_id, focus=True)
+		await browser.cdp_client.send.Target.activateTarget(params={"targetId": target_id})
+		await asyncio.sleep(0.25)
+		return await self._snapshot_tabs(browser)
+
+	async def tab_screenshot(self, session_id: str, tab_id: str) -> bytes:
+		persistent = self._sessions.get(session_id)
+		if persistent is None:
+			raise BrowserTabNotFound(tab_id)
+		browser = persistent.browser
+		await browser.start()
+		current_tabs = await self._snapshot_tabs(browser)
+		if not any(tab.id == tab_id for tab in current_tabs):
+			raise BrowserTabNotFound(tab_id)
+		browser.agent_focus_target_id = None
+		await browser.get_or_create_cdp_session(tab_id, focus=True)
+		await browser.cdp_client.send.Target.activateTarget(params={"targetId": tab_id})
+		await asyncio.sleep(0.1)
+		data = await browser.take_screenshot(full_page=False, format="png")
+		if not data:
+			raise FileNotFoundError("browser tab screenshot is empty")
+		if len(data) > MAX_TAB_SCREENSHOT_BYTES:
+			raise ValueError(f"browser tab screenshot exceeds {MAX_TAB_SCREENSHOT_BYTES} byte limit")
+		return data
 
 	async def close_tab(self, session_id: str, tab_id: str) -> list[BrowserTab]:
 		persistent = self._sessions.get(session_id)
@@ -245,6 +284,41 @@ class BrowserUseRunner:
 		browser = BrowserSession(browser_profile=profile)
 		self._sessions[session_id] = _PersistentBrowser(browser=browser, downloads_dir=downloads_dir)
 		return browser
+
+	def _browser_for_direct_tab(self, session_id: str) -> BrowserSession:
+		session_key = self._session_key(session_id)
+		profile_dir = self.settings.data_dir / "profiles" / session_key
+		downloads_dir = self.settings.data_dir / "downloads" / "sessions" / session_key
+		artifact_dir = self.settings.data_dir / "browser-sessions" / session_key
+		profile_dir.mkdir(parents=True, exist_ok=True)
+		downloads_dir.mkdir(parents=True, exist_ok=True)
+		artifact_dir.mkdir(parents=True, exist_ok=True)
+		return self._get_or_create_browser(
+			session_id,
+			StartJobRequest(task="Direct URL open"),
+			profile_dir,
+			downloads_dir,
+			artifact_dir / "network.har",
+		)
+
+	def _validate_direct_url(self, url: str) -> None:
+		parsed = urlparse(url)
+		host = (parsed.hostname or "").strip(".").lower()
+		if parsed.scheme not in {"http", "https"} or not host or parsed.username or parsed.password:
+			raise ValueError("url must be an HTTP or HTTPS address without credentials")
+		if any(_domain_matches(host, value) for value in self.settings.prohibited_domains):
+			raise ValueError("url host is prohibited by browser policy")
+		if self.settings.allowed_domains and not any(_domain_matches(host, value) for value in self.settings.allowed_domains):
+			raise ValueError("url host is not in the browser allowlist")
+		if self.settings.block_ip_addresses:
+			if host == "localhost" or host.endswith(".localhost"):
+				raise ValueError("local addresses are blocked by browser policy")
+			try:
+				address = ipaddress.ip_address(host)
+			except ValueError:
+				address = None
+			if address is not None and not address.is_global:
+				raise ValueError("non-public IP addresses are blocked by browser policy")
 
 	def _download_snapshot(self, directory: Path) -> dict[str, tuple[int, int]]:
 		if not directory.is_dir():
@@ -384,6 +458,14 @@ def _truncate(value: str, limit: int) -> str:
 def _is_web_page(value: str | None) -> bool:
 	parsed = urlparse(value or "")
 	return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _domain_matches(host: str, rule: str) -> bool:
+	rule = str(rule or "").strip().lower()
+	if "://" in rule:
+		rule = (urlparse(rule).hostname or "").lower()
+	rule = rule.lstrip("*.").strip(".")
+	return bool(rule) and (host == rule or host.endswith("." + rule))
 
 
 def _required_key(name: str) -> str:

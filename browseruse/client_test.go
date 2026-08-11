@@ -213,6 +213,20 @@ func TestClientListsAndClosesPersistentTabs(t *testing.T) {
 				t.Fatalf("unexpected tabs method: %s", request.Method)
 			}
 			return jsonResponse(http.StatusOK, `{"tabs":[{"id":"tab-1","url":"https://example.com","active":true}]}`), nil
+		case "/v1/tabs/open":
+			if request.Method != http.MethodPost {
+				t.Fatalf("unexpected open method: %s", request.Method)
+			}
+			var input map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input["url"] != "https://openai.com" {
+				t.Fatalf("unexpected open input: %#v, %v", input, err)
+			}
+			return jsonResponse(http.StatusOK, `{"tabs":[{"id":"tab-2","url":"https://openai.com","active":true}]}`), nil
+		case "/v1/tabs/tab-2/screenshot":
+			if request.Method != http.MethodGet {
+				t.Fatalf("unexpected screenshot method: %s", request.Method)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"image/png"}}, Body: io.NopCloser(bytes.NewReader([]byte("PNG")))}, nil
 		case "/v1/tabs/tab-1/close":
 			if request.Method != http.MethodPost {
 				t.Fatalf("unexpected close method: %s", request.Method)
@@ -230,6 +244,14 @@ func TestClientListsAndClosesPersistentTabs(t *testing.T) {
 	tabs, err := client.Tabs(context.Background(), "session-42")
 	if err != nil || len(tabs) != 1 || tabs[0].ID != "tab-1" || !tabs[0].Active {
 		t.Fatalf("unexpected tabs: %#v, %v", tabs, err)
+	}
+	opened, err := client.OpenTab(context.Background(), "session-42", "https://openai.com")
+	if err != nil || len(opened) != 1 || opened[0].ID != "tab-2" {
+		t.Fatalf("unexpected opened tabs: %#v, %v", opened, err)
+	}
+	shot, err := client.TabScreenshot(context.Background(), "session-42", "tab-2")
+	if err != nil || string(shot.Data) != "PNG" || shot.MIMEType != "image/png" {
+		t.Fatalf("unexpected tab screenshot: %#v, %v", shot, err)
 	}
 	remaining, err := client.CloseTab(context.Background(), "session-42", "tab-1")
 	if err != nil || len(remaining) != 0 {

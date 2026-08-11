@@ -8,7 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import Settings
 from .jobs import JobManager
-from .models import BrowserDebugResponse, BrowserDownloadsResponse, BrowserTabsResponse, HealthResponse, JobResponse, StartJobRequest
+from .models import BrowserDebugResponse, BrowserDownloadsResponse, BrowserTabsResponse, HealthResponse, JobResponse, OpenBrowserTabRequest, StartJobRequest
 from .runner import BrowserUseRunner
 
 
@@ -154,6 +154,35 @@ async def list_tabs(
 	session_id: str = Depends(require_session),
 ) -> BrowserTabsResponse:
 	return BrowserTabsResponse(tabs=await manager.tabs(session_id))
+
+
+@app.post(
+	"/v1/tabs/open",
+	response_model=BrowserTabsResponse,
+	dependencies=[Depends(require_auth)],
+)
+async def open_tab(
+	request: OpenBrowserTabRequest,
+	session_id: str = Depends(require_session),
+) -> BrowserTabsResponse:
+	return BrowserTabsResponse(tabs=await manager.open_tab(session_id, request.url))
+
+
+@app.get(
+	"/v1/tabs/{tab_id}/screenshot",
+	dependencies=[Depends(require_auth)],
+	response_class=Response,
+)
+async def get_tab_screenshot(
+	tab_id: str,
+	session_id: str = Depends(require_session),
+) -> Response:
+	data = await manager.tab_screenshot(session_id, tab_id)
+	return Response(
+		content=data,
+		media_type="image/png",
+		headers={"Cache-Control": "no-store", "Content-Disposition": f'inline; filename="browser-tab-{tab_id}.png"'},
+	)
 
 
 @app.post(

@@ -75,6 +75,7 @@ class TabRunner(CompletingRunner):
 		self.current = [BrowserTab(id="tab-1", url="https://example.com", active=True)]
 		self.tabs_session = ""
 		self.closed = ""
+		self.opened = ""
 
 	async def tabs(self, session_id: str):
 		self.tabs_session = session_id
@@ -87,6 +88,18 @@ class TabRunner(CompletingRunner):
 			raise KeyError(tab_id)
 		self.current = []
 		return self.current
+
+	async def open_tab(self, session_id: str, url: str):
+		self.tabs_session = session_id
+		self.opened = url
+		self.current = [BrowserTab(id="tab-2", url=url, active=True)]
+		return self.current
+
+	async def tab_screenshot(self, session_id: str, tab_id: str):
+		self.tabs_session = session_id
+		if not any(tab.id == tab_id for tab in self.current):
+			raise KeyError(tab_id)
+		return b"TAB-PNG"
 
 
 class BlockingRunner:
@@ -178,6 +191,18 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
 		self.assertEqual(runner.closed, "tab-1")
 		with self.assertRaises(HTTPException) as caught:
 			await manager.close_tab("session-1", "missing")
+		self.assertEqual(caught.exception.status_code, 404)
+		await manager.shutdown()
+
+	async def test_direct_tab_open_and_screenshot_share_session_lock(self):
+		runner = TabRunner()
+		manager = JobManager(settings(), runner)
+		opened = await manager.open_tab("session-1", "https://openai.com")
+		self.assertEqual(opened[0].id, "tab-2")
+		self.assertEqual(runner.opened, "https://openai.com")
+		self.assertEqual(await manager.tab_screenshot("session-1", "tab-2"), b"TAB-PNG")
+		with self.assertRaises(HTTPException) as caught:
+			await manager.tab_screenshot("session-1", "missing")
 		self.assertEqual(caught.exception.status_code, 404)
 		await manager.shutdown()
 

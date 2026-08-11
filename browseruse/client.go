@@ -46,6 +46,7 @@ var (
 	_ ScreenshotService = (*Client)(nil)
 	_ DownloadService   = (*Client)(nil)
 	_ TabService        = (*Client)(nil)
+	_ LiveTabService    = (*Client)(nil)
 	_ DebugService      = (*Client)(nil)
 )
 
@@ -243,6 +244,46 @@ func (c *Client) Tabs(ctx context.Context, sessionID string) ([]BrowserTab, erro
 		return nil, err
 	}
 	return response.Tabs, nil
+}
+
+// OpenTab opens a web URL directly in a persistent browser session without an
+// autonomous browser task or LLM call.
+func (c *Client) OpenTab(ctx context.Context, sessionID, rawURL string) ([]BrowserTab, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return nil, errors.New("browser-use URL is required")
+	}
+	var response struct {
+		Tabs []BrowserTab `json:"tabs"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/v1/tabs/open", sessionID, map[string]string{"url": rawURL}, &response); err != nil {
+		return nil, err
+	}
+	return response.Tabs, nil
+}
+
+// TabScreenshot returns a fresh PNG of one persistent browser tab.
+func (c *Client) TabScreenshot(ctx context.Context, sessionID, tabID string) (*Screenshot, error) {
+	tabID, err := tabPath(tabID)
+	if err != nil {
+		return nil, err
+	}
+	payload, contentType, err := c.doBytes(
+		ctx,
+		http.MethodGet,
+		"/v1/tabs/"+url.PathEscape(tabID)+"/screenshot",
+		sessionID,
+		c.maxScreenshotBytes,
+		"image/png",
+		"browser-use tab screenshot",
+	)
+	if err != nil {
+		return nil, err
+	}
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	return &Screenshot{Data: payload, Name: "browser-tab-" + tabID + ".png", MIMEType: contentType}, nil
 }
 
 // CloseTab closes one tab in a persistent browser session and returns the
