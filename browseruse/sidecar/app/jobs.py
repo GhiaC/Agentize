@@ -19,6 +19,7 @@ from .models import (
 	JobStatus,
 	StartJobRequest,
 )
+from .runner import BrowserTabUnavailable
 
 
 class BrowserRunner(Protocol):
@@ -167,6 +168,8 @@ class JobManager:
 				return await reader(session_id, tab_id)
 			except KeyError:
 				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab not found") from None
+			except BrowserTabUnavailable as exc:
+				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 			except FileNotFoundError:
 				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab screenshot is not available") from None
 			except ValueError as exc:
@@ -182,6 +185,8 @@ class JobManager:
 				return await inspector(session_id, tab_id)
 			except KeyError:
 				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab not found") from None
+			except BrowserTabUnavailable as exc:
+				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 
 	async def act_on_tab(self, session_id: str, tab_id: str, request):
 		actor = getattr(self.runner, "act_on_tab", None)
@@ -193,6 +198,8 @@ class JobManager:
 				return await actor(session_id, tab_id, request)
 			except KeyError:
 				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab not found") from None
+			except BrowserTabUnavailable as exc:
+				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 			except ValueError as exc:
 				raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -206,6 +213,8 @@ class JobManager:
 				return await closer(session_id, tab_id)
 			except KeyError:
 				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab not found") from None
+			except BrowserTabUnavailable as exc:
+				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 
 	async def debug(self, job_limit: int, load_limit: int) -> BrowserDebugResponse:
 		async with self._jobs_lock:

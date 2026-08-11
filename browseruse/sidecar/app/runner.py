@@ -34,6 +34,10 @@ class BrowserTabNotFound(KeyError):
 	"""Raised when a tab is not owned by the requested browser session."""
 
 
+class BrowserTabUnavailable(RuntimeError):
+	"""Raised when Chromium has detached or stopped responding for a tab."""
+
+
 class BrowserUseRunner:
 	def __init__(self, settings: Settings):
 		self.settings = settings
@@ -125,7 +129,6 @@ class BrowserUseRunner:
 			raise RuntimeError("Chromium did not return a target id for the new tab")
 		browser.agent_focus_target_id = None
 		await browser.get_or_create_cdp_session(target_id, focus=True)
-		await browser.cdp_client.send.Target.activateTarget(params={"targetId": target_id})
 		await asyncio.sleep(0.25)
 		return await self._snapshot_tabs(browser)
 
@@ -139,10 +142,15 @@ class BrowserUseRunner:
 		if not any(tab.id == tab_id for tab in current_tabs):
 			raise BrowserTabNotFound(tab_id)
 		browser.agent_focus_target_id = None
-		await browser.get_or_create_cdp_session(tab_id, focus=True)
-		await browser.cdp_client.send.Target.activateTarget(params={"targetId": tab_id})
+		await self._tab_cdp_session(browser, tab_id)
 		await asyncio.sleep(0.1)
-		data = await browser.take_screenshot(full_page=True, format="png")
+		# A full-page capture can be unbounded on applications with virtual or
+		# infinite scrolling, leaving the CDP WebSocket blocked until its timeout.
+		# The direct-tab tool only needs the currently visible page state.
+		try:
+			data = await browser.take_screenshot(full_page=False, format="png")
+		except (RuntimeError, TimeoutError) as exc:
+			raise BrowserTabUnavailable("browser tab screenshot timed out; reopen the tab and retry") from exc
 		if not data:
 			raise FileNotFoundError("browser tab screenshot is empty")
 		if len(data) > MAX_TAB_SCREENSHOT_BYTES:
@@ -184,8 +192,11 @@ class BrowserUseRunner:
 		browser = await self._owned_direct_tab(session_id, tab_id)
 		if request.action == "navigate":
 			self._validate_direct_url(request.url)
-			await browser.get_or_create_cdp_session(tab_id, focus=True)
-			await browser.cdp_client.send.Page.navigate(params={"url": request.url})
+			cdp_session = await self._tab_cdp_session(browser, tab_id)
+			await self._send_to_tab(
+				"Page.navigate",
+				cdp_session.cdp_client.send.Page.navigate(params={"url": request.url}, session_id=cdp_session.session_id),
+			)
 			await asyncio.sleep(0.35)
 			result = "navigation started"
 		elif request.action == "wait":
@@ -223,8 +234,7 @@ class BrowserUseRunner:
 		await browser.start()
 		await self._tab_by_id(browser, tab_id)
 		browser.agent_focus_target_id = None
-		await browser.get_or_create_cdp_session(tab_id, focus=True)
-		await browser.cdp_client.send.Target.activateTarget(params={"targetId": tab_id})
+		await self._tab_cdp_session(browser, tab_id)
 		return browser
 
 	async def _tab_by_id(self, browser: BrowserSession, tab_id: str) -> BrowserTab:
@@ -234,8 +244,14 @@ class BrowserUseRunner:
 		raise BrowserTabNotFound(tab_id)
 
 	async def _evaluate_tab(self, browser: BrowserSession, tab_id: str, expression: str) -> str:
-		await browser.get_or_create_cdp_session(tab_id, focus=True)
-		response = await browser.cdp_client.send.Runtime.evaluate(params={"expression": expression, "returnByValue": True, "awaitPromise": True})
+		cdp_session = await self._tab_cdp_session(browser, tab_id)
+		response = await self._send_to_tab(
+			"Runtime.evaluate",
+			cdp_session.cdp_client.send.Runtime.evaluate(
+				params={"expression": expression, "returnByValue": True, "awaitPromise": True},
+				session_id=cdp_session.session_id,
+			),
+		)
 		if isinstance(response, dict):
 			exception = response.get("exceptionDetails")
 			result = response.get("result")
@@ -249,6 +265,18 @@ class BrowserUseRunner:
 		if result is not None:
 			return str(getattr(result, "value", ""))
 		return ""
+
+	async def _tab_cdp_session(self, browser: BrowserSession, tab_id: str):
+		try:
+			return await browser.get_or_create_cdp_session(tab_id, focus=True)
+		except (RuntimeError, TimeoutError, ValueError) as exc:
+			raise BrowserTabUnavailable("browser tab is temporarily unavailable; reopen it and retry") from exc
+
+	async def _send_to_tab(self, command: str, operation):
+		try:
+			return await operation
+		except (RuntimeError, TimeoutError) as exc:
+			raise BrowserTabUnavailable(f"{command} failed because the browser tab is temporarily unavailable") from exc
 
 	def _selector_script(self, selector: str, action: str, text: str = "") -> str:
 		selector_json = json.dumps(selector)
@@ -265,18 +293,14 @@ class BrowserUseRunner:
 		current_tabs = await self._snapshot_tabs(browser)
 		if not any(tab.id == tab_id for tab in current_tabs):
 			raise BrowserTabNotFound(tab_id)
-		was_active = browser.agent_focus_target_id == tab_id
-		await browser.close_page(tab_id)
+		try:
+			await browser.close_page(tab_id)
+		except (RuntimeError, TimeoutError) as exc:
+			raise BrowserTabUnavailable("browser tab could not be closed; retry the operation") from exc
 		# Let the CDP detach event update SessionManager before returning the
 		# post-close snapshot.
 		await asyncio.sleep(0)
-		remaining = await self._snapshot_tabs(browser)
-		if was_active and remaining:
-			browser.agent_focus_target_id = None
-			await browser.get_or_create_cdp_session(remaining[0].id, focus=True)
-			await browser.cdp_client.send.Target.activateTarget(params={"targetId": remaining[0].id})
-			remaining = await self._snapshot_tabs(browser)
-		return remaining
+		return await self._snapshot_tabs(browser)
 
 	def has_session(self, session_id: str) -> bool:
 		return session_id in self._sessions

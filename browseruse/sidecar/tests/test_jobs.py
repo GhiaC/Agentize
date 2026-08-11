@@ -5,13 +5,16 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from fastapi import HTTPException
 
 from app.artifacts import BrowserArtifacts
 from app.config import Settings
 from app.jobs import JobManager
-from app.models import BrowserDownload, BrowserTab, JobResult, JobStatus, StartJobRequest
+from app.models import BrowserDownload, BrowserTab, BrowserTabActionRequest, JobResult, JobStatus, StartJobRequest
+from app.runner import BrowserTabUnavailable, BrowserUseRunner
 
 
 def settings() -> Settings:
@@ -110,6 +113,60 @@ class BlockingRunner:
 		self.started.set()
 		await asyncio.Event().wait()
 		return result()
+
+
+class TabCDPClient:
+	def __init__(self):
+		self.navigate = AsyncMock(return_value={})
+		self.evaluate = AsyncMock(return_value={"result": {"value": "evaluated"}})
+		self.send = SimpleNamespace(Page=SimpleNamespace(navigate=self.navigate), Runtime=SimpleNamespace(evaluate=self.evaluate))
+
+
+class TabBrowser:
+	def __init__(self):
+		self.cdp_client = TabCDPClient()
+		self.cdp_session = SimpleNamespace(cdp_client=self.cdp_client, session_id="cdp-session-1")
+		self.get_or_create_cdp_session = AsyncMock(return_value=self.cdp_session)
+		self.start = AsyncMock()
+		self.take_screenshot = AsyncMock(return_value=b"TAB-PNG")
+
+
+class BrowserUseRunnerTabTests(unittest.IsolatedAsyncioTestCase):
+	async def test_navigation_uses_the_tab_cdp_session(self):
+		runner = object.__new__(BrowserUseRunner)
+		browser = TabBrowser()
+		runner._owned_direct_tab = AsyncMock(return_value=browser)
+		runner._tab_by_id = AsyncMock(return_value=BrowserTab(id="tab-1", url="https://example.com"))
+		runner._snapshot_tabs = AsyncMock(return_value=[])
+		response = await runner.act_on_tab("session-1", "tab-1", BrowserTabActionRequest(action="navigate", url="https://example.com"))
+		self.assertEqual(response.result, "navigation started")
+		browser.cdp_client.navigate.assert_awaited_once_with(params={"url": "https://example.com"}, session_id="cdp-session-1")
+
+	async def test_page_evaluation_uses_the_tab_cdp_session(self):
+		runner = object.__new__(BrowserUseRunner)
+		browser = TabBrowser()
+		self.assertEqual(await runner._evaluate_tab(browser, "tab-1", "'ok'"), "evaluated")
+		browser.cdp_client.evaluate.assert_awaited_once_with(
+			params={"expression": "'ok'", "returnByValue": True, "awaitPromise": True},
+			session_id="cdp-session-1",
+		)
+
+	async def test_tab_screenshot_is_limited_to_the_visible_viewport(self):
+		runner = object.__new__(BrowserUseRunner)
+		browser = TabBrowser()
+		runner._sessions = {"session-1": SimpleNamespace(browser=browser)}
+		runner._snapshot_tabs = AsyncMock(return_value=[BrowserTab(id="tab-1", url="https://example.com")])
+		self.assertEqual(await runner.tab_screenshot("session-1", "tab-1"), b"TAB-PNG")
+		browser.take_screenshot.assert_awaited_once_with(full_page=False, format="png")
+
+	async def test_unavailable_tab_is_reported_as_service_unavailable(self):
+		runner = TabRunner()
+		runner.act_on_tab = AsyncMock(side_effect=BrowserTabUnavailable("browser tab is temporarily unavailable"))
+		manager = JobManager(settings(), runner)
+		with self.assertRaises(HTTPException) as caught:
+			await manager.act_on_tab("session-1", "tab-1", BrowserTabActionRequest(action="wait", amount=1))
+		self.assertEqual(caught.exception.status_code, 503)
+		await manager.shutdown()
 
 
 class JobManagerTests(unittest.IsolatedAsyncioTestCase):
