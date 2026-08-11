@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import ipaddress
+import json
 import mimetypes
 import os
 import shutil
@@ -16,7 +17,7 @@ from browser_use import Agent, BrowserProfile, BrowserSession
 
 from .artifacts import BrowserArtifacts
 from .config import Settings
-from .models import BrowserDownload, BrowserTab, BrowserUpload, JobResult, StartJobRequest
+from .models import BrowserDownload, BrowserTab, BrowserTabActionRequest, BrowserTabActionResponse, BrowserTabElement, BrowserTabInspectionResponse, BrowserUpload, JobResult, StartJobRequest
 
 
 MAX_DOWNLOAD_BYTES = 25 << 20
@@ -141,12 +142,119 @@ class BrowserUseRunner:
 		await browser.get_or_create_cdp_session(tab_id, focus=True)
 		await browser.cdp_client.send.Target.activateTarget(params={"targetId": tab_id})
 		await asyncio.sleep(0.1)
-		data = await browser.take_screenshot(full_page=False, format="png")
+		data = await browser.take_screenshot(full_page=True, format="png")
 		if not data:
 			raise FileNotFoundError("browser tab screenshot is empty")
 		if len(data) > MAX_TAB_SCREENSHOT_BYTES:
 			raise ValueError(f"browser tab screenshot exceeds {MAX_TAB_SCREENSHOT_BYTES} byte limit")
 		return data
+
+	async def inspect_tab(self, session_id: str, tab_id: str) -> BrowserTabInspectionResponse:
+		browser = await self._owned_direct_tab(session_id, tab_id)
+		payload = await self._evaluate_tab(browser, tab_id, """
+(() => {
+  const cap = (value, limit) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit);
+  const selectorFor = (element) => {
+    if (element.id) return '#' + CSS.escape(element.id);
+    const parts = [];
+    for (let node = element; node && node.nodeType === 1 && parts.length < 5; node = node.parentElement) {
+      let part = node.tagName.toLowerCase();
+      if (node.getAttribute('name')) part += '[name="' + CSS.escape(node.getAttribute('name')) + '"]';
+      else { let index = 1; for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) if (sibling.tagName === node.tagName) index++; part += ':nth-of-type(' + index + ')'; }
+      parts.unshift(part);
+      if (node.id) break;
+    }
+    return parts.join(' > ');
+  };
+  const elements = Array.from(document.querySelectorAll('a,button,input:not([type="password"]),textarea,select,[role="button"]'))
+    .filter((element) => { const style = getComputedStyle(element); return !element.disabled && style.display !== 'none' && style.visibility !== 'hidden'; })
+    .slice(0, 100)
+    .map((element) => ({selector: selectorFor(element), role: element.getAttribute('role') || element.tagName.toLowerCase(), text: cap(element.innerText || element.value || '', 500), label: cap(element.getAttribute('aria-label') || element.getAttribute('placeholder') || '', 500)}));
+  return JSON.stringify({text: cap(document.body ? document.body.innerText : '', 32000), elements});
+})()
+""")
+		try:
+			parsed = json.loads(payload or "{}")
+		except json.JSONDecodeError as exc:
+			raise ValueError("browser inspection returned invalid page data") from exc
+		tab = await self._tab_by_id(browser, tab_id)
+		return BrowserTabInspectionResponse(tab=tab, text=str(parsed.get("text", "")), elements=[BrowserTabElement.model_validate(item) for item in parsed.get("elements", [])])
+
+	async def act_on_tab(self, session_id: str, tab_id: str, request: BrowserTabActionRequest) -> BrowserTabActionResponse:
+		browser = await self._owned_direct_tab(session_id, tab_id)
+		if request.action == "navigate":
+			self._validate_direct_url(request.url)
+			await browser.get_or_create_cdp_session(tab_id, focus=True)
+			await browser.cdp_client.send.Page.navigate(params={"url": request.url})
+			await asyncio.sleep(0.35)
+			result = "navigation started"
+		elif request.action == "wait":
+			if not 1 <= request.amount <= 30:
+				raise ValueError("wait duration must be between 1 and 30 seconds")
+			await asyncio.sleep(request.amount)
+			result = f"waited {request.amount}s"
+		elif request.action == "click":
+			if not request.selector:
+				raise ValueError("selector is required")
+			result = await self._evaluate_tab(browser, tab_id, self._selector_script(request.selector, "click"))
+		elif request.action == "type":
+			if not request.selector or not request.text:
+				raise ValueError("selector and text are required")
+			result = await self._evaluate_tab(browser, tab_id, self._selector_script(request.selector, "type", request.text))
+		elif request.action == "press":
+			if not request.key:
+				raise ValueError("key is required")
+			result = await self._evaluate_tab(browser, tab_id, "(() => { const key = " + json.dumps(request.key) + "; const target = document.activeElement || document.body; target.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles:true})); target.dispatchEvent(new KeyboardEvent('keyup', {key, bubbles:true})); return 'pressed ' + key; })()")
+		elif request.action == "scroll":
+			if request.amount == 0:
+				raise ValueError("scroll amount must not be zero")
+			result = await self._evaluate_tab(browser, tab_id, "window.scrollBy({top:" + str(request.amount) + ", behavior:'instant'}); 'scrolled'")
+		else:
+			raise ValueError("unsupported browser tab action")
+		await asyncio.sleep(0.15)
+		tab = await self._tab_by_id(browser, tab_id)
+		return BrowserTabActionResponse(tab=tab, result=_truncate(str(result), 4_000), tabs=await self._snapshot_tabs(browser))
+
+	async def _owned_direct_tab(self, session_id: str, tab_id: str) -> BrowserSession:
+		persistent = self._sessions.get(session_id)
+		if persistent is None:
+			raise BrowserTabNotFound(tab_id)
+		browser = persistent.browser
+		await browser.start()
+		await self._tab_by_id(browser, tab_id)
+		browser.agent_focus_target_id = None
+		await browser.get_or_create_cdp_session(tab_id, focus=True)
+		await browser.cdp_client.send.Target.activateTarget(params={"targetId": tab_id})
+		return browser
+
+	async def _tab_by_id(self, browser: BrowserSession, tab_id: str) -> BrowserTab:
+		for tab in await self._snapshot_tabs(browser):
+			if tab.id == tab_id:
+				return tab
+		raise BrowserTabNotFound(tab_id)
+
+	async def _evaluate_tab(self, browser: BrowserSession, tab_id: str, expression: str) -> str:
+		await browser.get_or_create_cdp_session(tab_id, focus=True)
+		response = await browser.cdp_client.send.Runtime.evaluate(params={"expression": expression, "returnByValue": True, "awaitPromise": True})
+		if isinstance(response, dict):
+			exception = response.get("exceptionDetails")
+			result = response.get("result")
+		else:
+			exception = getattr(response, "exception_details", None) or getattr(response, "exceptionDetails", None)
+			result = getattr(response, "result", None)
+		if exception:
+			raise ValueError("page interaction failed")
+		if isinstance(result, dict):
+			return str(result.get("value", ""))
+		if result is not None:
+			return str(getattr(result, "value", ""))
+		return ""
+
+	def _selector_script(self, selector: str, action: str, text: str = "") -> str:
+		selector_json = json.dumps(selector)
+		if action == "click":
+			return "(() => { const el = document.querySelector(" + selector_json + "); if (!el) throw new Error('element not found'); el.scrollIntoView({block:'center', inline:'center'}); el.click(); return 'clicked'; })()"
+		return "(() => { const el = document.querySelector(" + selector_json + "); if (!el) throw new Error('element not found'); if (String(el.type || '').toLowerCase() === 'password') throw new Error('password fields are not supported'); el.focus(); el.value = " + json.dumps(text) + "; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); return 'typed'; })()"
 
 	async def close_tab(self, session_id: str, tab_id: str) -> list[BrowserTab]:
 		persistent = self._sessions.get(session_id)

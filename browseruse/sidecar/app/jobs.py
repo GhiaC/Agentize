@@ -172,6 +172,30 @@ class JobManager:
 			except ValueError as exc:
 				raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
 
+	async def inspect_tab(self, session_id: str, tab_id: str):
+		inspector = getattr(self.runner, "inspect_tab", None)
+		if inspector is None:
+			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tab inspection")
+		lock = await self._session_lock(session_id)
+		async with lock:
+			try:
+				return await inspector(session_id, tab_id)
+			except KeyError:
+				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab not found") from None
+
+	async def act_on_tab(self, session_id: str, tab_id: str, request):
+		actor = getattr(self.runner, "act_on_tab", None)
+		if actor is None:
+			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tab actions")
+		lock = await self._session_lock(session_id)
+		async with lock:
+			try:
+				return await actor(session_id, tab_id, request)
+			except KeyError:
+				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab not found") from None
+			except ValueError as exc:
+				raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
 	async def close_tab(self, session_id: str, tab_id: str) -> list[BrowserTab]:
 		closer = getattr(self.runner, "close_tab", None)
 		if closer is None:

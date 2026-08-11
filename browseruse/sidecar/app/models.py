@@ -75,6 +75,47 @@ class OpenBrowserTabRequest(BaseModel):
 		return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
 
 
+class BrowserTabElement(BaseModel):
+	"""A safe, visible control exposed to the conversation-owned browser."""
+
+	selector: str = Field(min_length=1, max_length=2_000)
+	role: str = Field(default="", max_length=80)
+	text: str = Field(default="", max_length=500)
+	label: str = Field(default="", max_length=500)
+
+
+class BrowserTabInspectionResponse(BaseModel):
+	tab: BrowserTab
+	text: str = Field(default="", max_length=32_000)
+	elements: list[BrowserTabElement] = Field(default_factory=list, max_length=100)
+
+
+class BrowserTabActionRequest(BaseModel):
+	"""One explicit, bounded interaction with a persistent browser tab."""
+
+	model_config = ConfigDict(extra="forbid")
+	action: str = Field(min_length=1, max_length=20)
+	url: str = Field(default="", max_length=2_000)
+	selector: str = Field(default="", max_length=2_000)
+	text: str = Field(default="", max_length=16_384)
+	key: str = Field(default="", max_length=64)
+	amount: int = Field(default=0, ge=-10_000, le=10_000)
+
+	@field_validator("action")
+	@classmethod
+	def supported_action(cls, value: str) -> str:
+		value = value.strip().lower()
+		if value not in {"navigate", "click", "type", "press", "scroll", "wait"}:
+			raise ValueError("unsupported browser tab action")
+		return value
+
+
+class BrowserTabActionResponse(BaseModel):
+	tab: BrowserTab
+	result: str = Field(default="", max_length=4_000)
+	tabs: list[BrowserTab] = Field(default_factory=list)
+
+
 class StartJobRequest(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
