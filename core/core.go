@@ -51,7 +51,7 @@ type CoreHandlerConfig struct {
 	MaxUserFilesInPrompt int
 
 	// MaxLLMIterations bounds the Core's LLM tool loop per message. Zero falls
-	// back to the default of 10.
+	// back to the default of 30.
 	MaxLLMIterations int
 
 	// AppPolicy is optional deployment-specific guidance injected as a static
@@ -72,7 +72,7 @@ type CoreHandlerConfig struct {
 const (
 	defaultMaxSystemPromptSize  = 120000
 	defaultMaxUserFilesInPrompt = 50
-	defaultMaxLLMIterations     = 10
+	defaultMaxLLMIterations     = 30
 )
 
 // DefaultCoreHandlerConfig returns default configuration.

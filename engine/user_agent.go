@@ -39,6 +39,12 @@ type LLMConfig struct {
 	Model      string
 	HTTPClient *http.Client // Optional: custom HTTP client (e.g., for proxy support)
 
+	// MaxLLMIterations bounds the regular Engine's LLM/tool loop for one
+	// message. Zero or a negative value uses the default. A larger bound is
+	// useful for browser and asynchronous data workflows that may need several
+	// tool/result rounds, especially when a wait tool is used between polls.
+	MaxLLMIterations int
+
 	// Tool result truncation settings
 	MaxToolResultLength int    // Max chars before truncating (default: 250)
 	CollectResultModel  string // LLM model for collect_result tool (default: same as Model)
@@ -56,6 +62,16 @@ type LLMConfig struct {
 	SchedulerDisableLogs bool
 	// SummaryModel overrides the scheduler summarization model (from config/env) when non-empty
 	SummaryModel string
+}
+
+const defaultMaxLLMIterations = 30
+
+// maxLLMIterations returns the configured regular-engine loop bound.
+func (c LLMConfig) maxLLMIterations() int {
+	if c.MaxLLMIterations > 0 {
+		return c.MaxLLMIterations
+	}
+	return defaultMaxLLMIterations
 }
 
 // ToolExecutor executes a tool call and returns the result
@@ -1369,7 +1385,7 @@ func (e *Engine) processChatRequest(
 	ctx context.Context,
 	sessionID string,
 ) (string, int, error) {
-	const maxIterations = 10
+	maxIterations := e.llmConfig.maxLLMIterations()
 	totalTokenUsage := 0
 
 	// Load session once at the start
