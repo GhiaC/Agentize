@@ -52,6 +52,16 @@ type DebugService interface {
 	Debug(ctx context.Context, jobLimit, loadLimit int) (*DebugSnapshot, error)
 }
 
+// AdminDebugService is an optional extension for operator actions and live
+// session inspection from the protected Agentize debugger.
+type AdminDebugService interface {
+	DebugService
+	JobLogs(ctx context.Context, jobID string, limit int) (*JobLogs, error)
+	AdminCancel(ctx context.Context, jobID string) (*Job, error)
+	KillSession(ctx context.Context, sessionID string) (*DebugSession, error)
+	AdminCloseTab(ctx context.Context, sessionID, tabID string) ([]BrowserTab, error)
+}
+
 // StartJobRequest describes one autonomous browser task.
 type StartJobRequest struct {
 	Task           string   `json:"task"`
@@ -171,11 +181,39 @@ type DebugJob struct {
 	Loads     []BrowserLoad `json:"loads,omitempty"`
 }
 
+// JobLog is one persisted debug line for a browser job.
+type JobLog struct {
+	ID        int       `json:"id"`
+	Level     string    `json:"level"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// JobLogs is the bounded log history for one browser job.
+type JobLogs struct {
+	JobID string   `json:"job_id"`
+	Logs  []JobLog `json:"logs"`
+}
+
+// DebugSession is the operator view of one Agentize session's browser state.
+type DebugSession struct {
+	SessionID    string       `json:"session_id"`
+	Persistent   bool         `json:"persistent"`
+	TabCount     int          `json:"tab_count"`
+	Tabs         []BrowserTab `json:"tabs,omitempty"`
+	ActiveJobs   int          `json:"active_jobs"`
+	TotalJobs    int          `json:"total_jobs"`
+	LastActivity *time.Time   `json:"last_activity,omitempty"`
+}
+
 // DebugSnapshot is the protected operational view returned by DebugService.
 type DebugSnapshot struct {
-	TotalJobs         int        `json:"total_jobs"`
-	RunningJobs       int        `json:"running_jobs"`
-	MaxJobs           int        `json:"max_jobs"`
-	MaxConcurrentJobs int        `json:"max_concurrent_jobs"`
-	Jobs              []DebugJob `json:"jobs"`
+	TotalJobs         int            `json:"total_jobs"`
+	RunningJobs       int            `json:"running_jobs"`
+	MaxJobs           int            `json:"max_jobs"`
+	MaxConcurrentJobs int            `json:"max_concurrent_jobs"`
+	LiveSessions      int            `json:"live_sessions"`
+	TotalTabs         int            `json:"total_tabs"`
+	Jobs              []DebugJob     `json:"jobs"`
+	Sessions          []DebugSession `json:"sessions,omitempty"`
 }

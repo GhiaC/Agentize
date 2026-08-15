@@ -103,7 +103,7 @@ func TestBrowserDebugRoutesRenderLoadsAndProxyScreenshot(t *testing.T) {
 		"Ready",
 		"inspect example.com",
 		"https://example.com/app.js",
-		"Open screenshot",
+		"Screenshot",
 	} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Errorf("browser debug page missing %q", want)

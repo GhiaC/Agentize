@@ -17,6 +17,17 @@ func TestRenderBrowserDebugShowsJobsLoadsAndScreenshot(t *testing.T) {
 		TotalJobs:         1,
 		MaxJobs:           1000,
 		MaxConcurrentJobs: 2,
+		LiveSessions:      1,
+		TotalTabs:         2,
+		Sessions: []browseruse.DebugSession{{
+			SessionID:  "session-1",
+			Persistent: true,
+			TabCount:   2,
+			Tabs: []browseruse.BrowserTab{
+				{ID: "tab-1", URL: "https://example.com", Title: "Example", Active: true},
+				{ID: "tab-2", URL: "https://example.org", Title: "Other"},
+			},
+		}},
 		Jobs: []browseruse.DebugJob{{
 			Job: browseruse.Job{
 				ID:                  "job-1",
@@ -59,15 +70,19 @@ func TestRenderBrowserDebugShowsJobsLoadsAndScreenshot(t *testing.T) {
 		"screenshot",
 		"job-1",
 		"session-1",
-		"Open screenshot",
+		"Screenshot",
 		"https://example.com/app.js",
 		"text/javascript",
 		"Network metadata only",
 		"Auto-refresh",
-		"Copy ID",
+		"Copy",
 		"Run outcome",
 		"Action trace",
 		"42 B transferred",
+		"Browser sessions",
+		"Example",
+		"Kill browser",
+		"Live sessions",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered browser page missing %q", want)
@@ -80,7 +95,7 @@ func TestRenderBrowserDebugShowsJobsLoadsAndScreenshot(t *testing.T) {
 
 func TestRenderBrowserDebugExplainsEmptyAndUnconfiguredStates(t *testing.T) {
 	empty := RenderBrowserDebugWithStatus(&browseruse.DebugSnapshot{}, true, nil)
-	for _, want := range []string{"browser_use", "Ready", "Only action", "sidecar restart"} {
+	for _, want := range []string{"browser_use", "Ready", "browser_use", "BROWSER_DEBUG.md"} {
 		if !strings.Contains(empty, want) {
 			t.Errorf("empty browser page missing %q", want)
 		}

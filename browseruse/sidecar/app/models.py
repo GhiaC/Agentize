@@ -203,12 +203,37 @@ class DebugJobResponse(JobResponse):
 	loads: list[BrowserLoad] = Field(default_factory=list)
 
 
+class BrowserJobLog(BaseModel):
+	id: int
+	level: str
+	message: str
+	created_at: datetime
+
+
+class BrowserJobLogsResponse(BaseModel):
+	job_id: str
+	logs: list[BrowserJobLog] = Field(default_factory=list)
+
+
+class DebugSessionResponse(BaseModel):
+	session_id: str
+	persistent: bool = False
+	tab_count: int = 0
+	tabs: list[BrowserTab] = Field(default_factory=list)
+	active_jobs: int = 0
+	total_jobs: int = 0
+	last_activity: datetime | None = None
+
+
 class BrowserDebugResponse(BaseModel):
 	total_jobs: int
 	running_jobs: int
 	max_jobs: int
 	max_concurrent_jobs: int
+	live_sessions: int = 0
+	total_tabs: int = 0
 	jobs: list[DebugJobResponse] = Field(default_factory=list)
+	sessions: list[DebugSessionResponse] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):

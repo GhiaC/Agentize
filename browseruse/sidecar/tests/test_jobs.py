@@ -30,6 +30,9 @@ def settings() -> Settings:
 		job_timeout_seconds=30,
 		job_ttl_seconds=60,
 		max_jobs=20,
+		db_max_jobs=100,
+		db_max_logs_per_job=100,
+		db_job_retention_seconds=3600,
 		headless=True,
 		chromium_sandbox=False,
 		block_ip_addresses=True,
@@ -103,6 +106,16 @@ class TabRunner(CompletingRunner):
 		if not any(tab.id == tab_id for tab in self.current):
 			raise KeyError(tab_id)
 		return b"TAB-PNG"
+
+	def list_sessions(self):
+		if self.tabs_session:
+			return [self.tabs_session]
+		return []
+
+	async def kill_session(self, session_id: str):
+		if self.tabs_session == session_id:
+			self.tabs_session = ""
+			self.current = []
 
 
 class BlockingRunner:
@@ -219,6 +232,24 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
 		self.assertEqual(snapshot.jobs[0].session_id, "session-1")
 		self.assertEqual(snapshot.jobs[0].load_count, 1)
 		self.assertTrue(snapshot.jobs[0].screenshot_available)
+		logs = await manager.job_logs(created.id, 20)
+		self.assertGreaterEqual(len(logs.logs), 2)
+		await manager.shutdown()
+
+	async def test_admin_cancel_and_kill_session(self):
+		runner = TabRunner()
+		blocking = BlockingRunner()
+		manager = JobManager(settings(), blocking)
+		created = await manager.create("session-1", StartJobRequest(task="hold"))
+		await asyncio.wait_for(blocking.started.wait(), timeout=1)
+		cancelled = await manager.admin_cancel(created.id)
+		self.assertEqual(cancelled.status, JobStatus.CANCELLED)
+		await manager.shutdown()
+
+		manager = JobManager(settings(), runner)
+		await manager.open_tab("session-1", "https://example.com")
+		killed = await manager.kill_session("session-1")
+		self.assertFalse(killed.persistent)
 		await manager.shutdown()
 
 	async def test_immediate_cancel_transitions_queued_job(self):

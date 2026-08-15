@@ -48,6 +48,7 @@ var (
 	_ TabService        = (*Client)(nil)
 	_ LiveTabService    = (*Client)(nil)
 	_ DebugService      = (*Client)(nil)
+	_ AdminDebugService = (*Client)(nil)
 )
 
 // APIError is returned for a non-2xx response from the sidecar.
@@ -318,7 +319,8 @@ func (c *Client) Debug(ctx context.Context, jobLimit, loadLimit int) (*DebugSnap
 		loadLimit = 250
 	}
 	path := "/v1/debug/jobs?limit=" + strconv.Itoa(jobLimit) +
-		"&load_limit=" + strconv.Itoa(loadLimit)
+		"&load_limit=" + strconv.Itoa(loadLimit) +
+		"&session_limit=50"
 	var snapshot DebugSnapshot
 	if err := c.do(ctx, http.MethodGet, path, "", nil, &snapshot); err != nil {
 		return nil, err
@@ -326,7 +328,99 @@ func (c *Client) Debug(ctx context.Context, jobLimit, loadLimit int) (*DebugSnap
 	return &snapshot, nil
 }
 
+// JobLogs returns persisted debug lines for one browser job.
+func (c *Client) JobLogs(ctx context.Context, jobID string, limit int) (*JobLogs, error) {
+	if limit < 1 {
+		limit = 200
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	path, err := debugJobPath(jobID)
+	if err != nil {
+		return nil, err
+	}
+	var logs JobLogs
+	if err := c.do(ctx, http.MethodGet, path+"/logs?limit="+strconv.Itoa(limit), "", nil, &logs); err != nil {
+		return nil, err
+	}
+	return &logs, nil
+}
+
+// AdminCancel cancels a browser job from the operator debugger.
+func (c *Client) AdminCancel(ctx context.Context, jobID string) (*Job, error) {
+	path, err := debugJobPath(jobID)
+	if err != nil {
+		return nil, err
+	}
+	var job Job
+	if err := c.do(ctx, http.MethodPost, path+"/cancel", "", nil, &job); err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+// KillSession kills the persistent Chromium profile for one Agentize session.
+func (c *Client) KillSession(ctx context.Context, sessionID string) (*DebugSession, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, errors.New("browser-use session ID is required")
+	}
+	var session DebugSession
+	if err := c.do(
+		ctx,
+		http.MethodPost,
+		"/v1/debug/sessions/"+url.PathEscape(sessionID)+"/kill",
+		"",
+		nil,
+		&session,
+	); err != nil {
+		return nil, err
+	}
+	return &session, nil
+}
+
+// AdminCloseTab closes one tab from the operator debugger.
+func (c *Client) AdminCloseTab(ctx context.Context, sessionID, tabID string) ([]BrowserTab, error) {
+	tabID, err := tabPath(tabID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, errors.New("browser-use session ID is required")
+	}
+	var response struct {
+		Tabs []BrowserTab `json:"tabs"`
+	}
+	if err := c.do(
+		ctx,
+		http.MethodPost,
+		"/v1/debug/sessions/"+url.PathEscape(sessionID)+"/tabs/"+url.PathEscape(tabID)+"/close",
+		"",
+		nil,
+		&response,
+	); err != nil {
+		return nil, err
+	}
+	return response.Tabs, nil
+}
+
 func jobPath(jobID string) (string, error) {
+	jobID, err := validateJobID(jobID)
+	if err != nil {
+		return "", err
+	}
+	return "/v1/jobs/" + jobID, nil
+}
+
+func debugJobPath(jobID string) (string, error) {
+	jobID, err := validateJobID(jobID)
+	if err != nil {
+		return "", err
+	}
+	return "/v1/debug/jobs/" + jobID, nil
+}
+
+func validateJobID(jobID string) (string, error) {
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" {
 		return "", errors.New("browser-use job ID is required")
@@ -339,7 +433,7 @@ func jobPath(jobID string) (string, error) {
 			return "", errors.New("browser-use job ID contains invalid characters")
 		}
 	}
-	return "/v1/jobs/" + jobID, nil
+	return jobID, nil
 }
 
 func tabPath(tabID string) (string, error) {

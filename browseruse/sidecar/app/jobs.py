@@ -12,14 +12,18 @@ from .config import Settings
 from .models import (
 	BrowserDebugResponse,
 	BrowserDownload,
+	BrowserJobLog,
+	BrowserJobLogsResponse,
 	BrowserTab,
 	DebugJobResponse,
+	DebugSessionResponse,
 	JobResponse,
 	JobResult,
 	JobStatus,
 	StartJobRequest,
 )
 from .runner import BrowserTabUnavailable
+from .store import BrowserStore
 
 
 class BrowserRunner(Protocol):
@@ -60,6 +64,28 @@ class JobManager:
 		self._jobs_lock = asyncio.Lock()
 		self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 		self._session_locks: dict[str, asyncio.Lock] = {}
+		self._store = BrowserStore(
+			settings.data_dir / "browser.db",
+			max_jobs=settings.db_max_jobs,
+			max_logs_per_job=settings.db_max_logs_per_job,
+			job_retention_seconds=settings.db_job_retention_seconds,
+		)
+
+	def _log(self, job: _Job, level: str, message: str) -> None:
+		self._store.append_log(job.id, level, message)
+
+	def _persist_job(self, job: _Job) -> None:
+		self._store.upsert_job(
+			job.id,
+			job.session_id,
+			job.request.task,
+			job.status,
+			created_at=job.created_at,
+			started_at=job.started_at,
+			completed_at=job.completed_at,
+			result=job.result,
+			error=job.error,
+		)
 
 	async def create(self, session_id: str, request: StartJobRequest) -> JobResponse:
 		async with self._jobs_lock:
@@ -72,6 +98,8 @@ class JobManager:
 			job = _Job(id=str(uuid4()), session_id=session_id, request=request)
 			self._jobs[job.id] = job
 			self._session_locks.setdefault(session_id, asyncio.Lock())
+			self._persist_job(job)
+			self._log(job, "info", f"job queued for session {session_id}")
 			job.task = asyncio.create_task(self._execute(job), name=f"browser-use:{job.id}")
 			return job.response()
 
@@ -216,7 +244,7 @@ class JobManager:
 			except BrowserTabUnavailable as exc:
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 
-	async def debug(self, job_limit: int, load_limit: int) -> BrowserDebugResponse:
+	async def debug(self, job_limit: int, load_limit: int, session_limit: int = 50) -> BrowserDebugResponse:
 		async with self._jobs_lock:
 			jobs = sorted(self._jobs.values(), key=lambda item: item.created_at, reverse=True)[:job_limit]
 			total_jobs = len(self._jobs)
@@ -236,13 +264,143 @@ class JobManager:
 					loads=loads,
 				)
 			)
+
+		sessions = await self._debug_sessions(session_limit)
+		live_sessions = sum(1 for item in sessions if item.persistent)
+		total_tabs = sum(item.tab_count for item in sessions if item.persistent)
 		return BrowserDebugResponse(
 			total_jobs=total_jobs,
 			running_jobs=running_jobs,
 			max_jobs=self.settings.max_jobs,
 			max_concurrent_jobs=self.settings.max_concurrent_jobs,
+			live_sessions=live_sessions,
+			total_tabs=total_tabs,
 			jobs=debug_jobs,
+			sessions=sessions,
 		)
+
+	async def debug_session(self, session_id: str) -> DebugSessionResponse:
+		sessions = await self._debug_sessions(1_000)
+		for session in sessions:
+			if session.session_id == session_id:
+				return session
+		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser session not found")
+
+	async def job_logs(self, job_id: str, limit: int) -> BrowserJobLogsResponse:
+		async with self._jobs_lock:
+			job = self._jobs.get(job_id)
+		if job is None:
+			# Allow logs for pruned in-memory jobs that remain in SQLite.
+			rows = self._store.get_job_logs(job_id, limit)
+			if not rows:
+				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser job not found")
+			return BrowserJobLogsResponse(
+				job_id=job_id,
+				logs=[
+					BrowserJobLog(id=row.id, level=row.level, message=row.message, created_at=row.created_at)
+					for row in rows
+				],
+			)
+		rows = self._store.get_job_logs(job_id, limit)
+		return BrowserJobLogsResponse(
+			job_id=job_id,
+			logs=[
+				BrowserJobLog(id=row.id, level=row.level, message=row.message, created_at=row.created_at)
+				for row in rows
+			],
+		)
+
+	async def admin_cancel(self, job_id: str) -> JobResponse:
+		async with self._jobs_lock:
+			job = self._jobs.get(job_id)
+		if job is None:
+			raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser job not found")
+		return await self.cancel(job.session_id, job_id)
+
+	async def kill_session(self, session_id: str) -> DebugSessionResponse:
+		killer = getattr(self.runner, "kill_session", None)
+		if killer is None:
+			raise HTTPException(
+				status_code=status.HTTP_501_NOT_IMPLEMENTED,
+				detail="browser runner does not support killing sessions",
+			)
+		lock = await self._session_lock(session_id)
+		async with lock:
+			await killer(session_id)
+		self._store.touch_session(session_id)
+		self._store.append_log("session:" + session_id, "warn", "operator killed persistent browser session")
+		return await self.debug_session(session_id)
+
+	async def admin_close_tab(self, session_id: str, tab_id: str) -> list[BrowserTab]:
+		tabs = await self.close_tab(session_id, tab_id)
+		self._store.append_log("session:" + session_id, "info", f"operator closed tab {tab_id}")
+		return tabs
+
+	async def _debug_sessions(self, limit: int) -> list[DebugSessionResponse]:
+		limit = max(1, min(limit, 1_000))
+		lister = getattr(self.runner, "list_sessions", None)
+		live_ids: set[str] = set()
+		live_tabs: dict[str, list[BrowserTab]] = {}
+		if lister is not None:
+			for session_id in lister():
+				live_ids.add(session_id)
+				tab_lister = getattr(self.runner, "tabs", None)
+				if tab_lister is None:
+					live_tabs[session_id] = []
+					continue
+				try:
+					live_tabs[session_id] = await tab_lister(session_id)
+				except Exception:
+					live_tabs[session_id] = []
+
+		async with self._jobs_lock:
+			active_by_session: dict[str, int] = {}
+			for job in self._jobs.values():
+				if not job.status.terminal:
+					active_by_session[job.session_id] = active_by_session.get(job.session_id, 0) + 1
+
+		seen: set[str] = set()
+		sessions: list[DebugSessionResponse] = []
+		for session_id in sorted(live_ids):
+			seen.add(session_id)
+			tabs = live_tabs.get(session_id, [])
+			sessions.append(
+				DebugSessionResponse(
+					session_id=session_id,
+					persistent=True,
+					tab_count=len(tabs),
+					tabs=tabs,
+					active_jobs=active_by_session.get(session_id, 0),
+					total_jobs=self._store.count_jobs_for_session(session_id),
+					last_activity=datetime.now(UTC),
+				)
+			)
+
+		for stats in self._store.list_session_stats(limit):
+			if stats.session_id in seen:
+				continue
+			seen.add(stats.session_id)
+			sessions.append(
+				DebugSessionResponse(
+					session_id=stats.session_id,
+					persistent=False,
+					tab_count=0,
+					tabs=[],
+					active_jobs=active_by_session.get(stats.session_id, 0),
+					total_jobs=stats.job_count,
+					last_activity=stats.last_activity,
+				)
+			)
+			if len(sessions) >= limit:
+				break
+
+		sessions.sort(
+			key=lambda item: (
+				0 if item.persistent else 1,
+				-(item.last_activity.timestamp() if item.last_activity else 0),
+			),
+		)
+		return sessions[:limit]
 
 	async def shutdown(self) -> None:
 		async with self._jobs_lock:
@@ -261,20 +419,27 @@ class JobManager:
 				session_lock = self._session_locks[job.session_id]
 				async with session_lock:
 					await self._transition(job, JobStatus.RUNNING)
+					self._log(job, "info", "job started")
 					job.result = await asyncio.wait_for(
 						self.runner.run(job.session_id, job.id, job.request),
 						timeout=self.settings.job_timeout_seconds,
 					)
 					await self._transition(job, JobStatus.SUCCEEDED)
+					self._log(job, "info", f"job succeeded in {job.result.steps} steps")
+					if job.result.action_names:
+						self._log(job, "info", "actions: " + ", ".join(job.result.action_names[:20]))
 		except asyncio.CancelledError:
 			await self._transition(job, JobStatus.CANCELLED)
+			self._log(job, "warn", "job cancelled")
 			raise
 		except TimeoutError:
 			job.error = f"browser job exceeded {self.settings.job_timeout_seconds} second timeout"
 			await self._transition(job, JobStatus.FAILED)
+			self._log(job, "error", job.error)
 		except Exception as exc:
 			job.error = _safe_error(exc)
 			await self._transition(job, JobStatus.FAILED)
+			self._log(job, "error", job.error)
 
 	async def _transition(self, job: _Job, new_status: JobStatus) -> None:
 		async with job.changed:
@@ -285,6 +450,7 @@ class JobManager:
 			if new_status.terminal:
 				job.completed_at = now
 			job.changed.notify_all()
+		self._persist_job(job)
 
 	async def _owned_job(self, session_id: str, job_id: str) -> _Job:
 		async with self._jobs_lock:

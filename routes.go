@@ -89,6 +89,12 @@ func (ag *Agentize) RegisterRoutes(router *gin.Engine) {
 	router.GET("/agentize/debug/tool-calls", p(ag.handleDebugToolCalls))
 	router.GET("/agentize/debug/tool-calls/:toolID", p(ag.handleDebugToolCallDetail))
 	router.GET("/agentize/debug/browser", p(ag.handleDebugBrowser))
+	router.GET("/agentize/debug/browser/api/live", p(ag.handleDebugBrowserLive))
+	router.GET("/agentize/debug/browser/sessions/:sessionID", p(ag.handleDebugBrowserSession))
+	router.GET("/agentize/debug/browser/jobs/:jobID", p(ag.handleDebugBrowserJob))
+	router.POST("/agentize/debug/browser/jobs/:jobID/cancel", p(ag.handleDebugBrowserCancelJob))
+	router.POST("/agentize/debug/browser/sessions/:sessionID/kill", p(ag.handleDebugBrowserKillSession))
+	router.POST("/agentize/debug/browser/sessions/:sessionID/tabs/:tabID/close", p(ag.handleDebugBrowserCloseTab))
 	router.GET("/agentize/debug/browser/:jobID/screenshot", p(ag.handleDebugBrowserScreenshot))
 	router.GET("/agentize/debug/routes", p(ag.handleDebugRoutes))
 	router.GET("/agentize/debug/routes/:traceID", p(ag.handleDebugRouteDetail))
@@ -734,21 +740,159 @@ func sanitizeContentDispositionName(name string) string {
 // handleDebugBrowser renders recent browser jobs and network-load metadata from
 // an optional DebugService extension on the configured browser-use service.
 func (ag *Agentize) handleDebugBrowser(c *gin.Context) {
-	var snapshot *browseruse.DebugSnapshot
-	var fetchErr error
-	if ag.engine.BrowserUse == nil {
-		fetchErr = errors.New("browser-use is not configured")
-	} else if service, ok := ag.engine.BrowserUse.(browseruse.DebugService); ok {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
-		defer cancel()
-		snapshot, fetchErr = service.Debug(ctx, 20, 50)
-	} else {
-		fetchErr = errors.New("configured browser-use service does not expose debug metadata")
-	}
-
+	snapshot, fetchErr := ag.browserDebugSnapshot(c, 20, 50)
 	html := pages.RenderBrowserDebugWithStatus(snapshot, ag.engine.BrowserUse != nil, fetchErr)
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, html)
+}
+
+func (ag *Agentize) browserDebugSnapshot(c *gin.Context, jobLimit, loadLimit int) (*browseruse.DebugSnapshot, error) {
+	if ag.engine.BrowserUse == nil {
+		return nil, errors.New("browser-use is not configured")
+	}
+	service, ok := ag.engine.BrowserUse.(browseruse.DebugService)
+	if !ok {
+		return nil, errors.New("configured browser-use service does not expose debug metadata")
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancel()
+	return service.Debug(ctx, jobLimit, loadLimit)
+}
+
+func (ag *Agentize) browserAdminService() (browseruse.AdminDebugService, error) {
+	if ag.engine.BrowserUse == nil {
+		return nil, errors.New("browser-use is not configured")
+	}
+	service, ok := ag.engine.BrowserUse.(browseruse.AdminDebugService)
+	if !ok {
+		return nil, errors.New("configured browser-use service does not expose browser admin actions")
+	}
+	return service, nil
+}
+
+// handleDebugBrowserLive returns JSON for live session/tab polling.
+func (ag *Agentize) handleDebugBrowserLive(c *gin.Context) {
+	snapshot, err := ag.browserDebugSnapshot(c, 1, 0)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"live_sessions": snapshot.LiveSessions,
+		"total_tabs":    snapshot.TotalTabs,
+		"sessions":      snapshot.Sessions,
+		"running_jobs":  snapshot.RunningJobs,
+	})
+}
+
+func (ag *Agentize) handleDebugBrowserSession(c *gin.Context) {
+	sessionID := c.Param("sessionID")
+	snapshot, fetchErr := ag.browserDebugSnapshot(c, 50, 20)
+	if fetchErr != nil {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, pages.RenderBrowserDebugWithStatus(nil, ag.engine.BrowserUse != nil, fetchErr))
+		return
+	}
+	var session *browseruse.DebugSession
+	for i := range snapshot.Sessions {
+		if snapshot.Sessions[i].SessionID == sessionID {
+			session = &snapshot.Sessions[i]
+			break
+		}
+	}
+	if session == nil {
+		c.String(http.StatusNotFound, "browser session not found")
+		return
+	}
+	var jobs []browseruse.DebugJob
+	for _, job := range snapshot.Jobs {
+		if job.SessionID == sessionID {
+			jobs = append(jobs, job)
+		}
+	}
+	html := pages.RenderBrowserSessionDetail(session, jobs)
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, html)
+}
+
+func (ag *Agentize) handleDebugBrowserJob(c *gin.Context) {
+	jobID := c.Param("jobID")
+	snapshot, fetchErr := ag.browserDebugSnapshot(c, 100, 50)
+	if fetchErr != nil {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, pages.RenderBrowserDebugWithStatus(nil, ag.engine.BrowserUse != nil, fetchErr))
+		return
+	}
+	var job *browseruse.DebugJob
+	for i := range snapshot.Jobs {
+		if snapshot.Jobs[i].ID == jobID {
+			job = &snapshot.Jobs[i]
+			break
+		}
+	}
+	if job == nil {
+		c.String(http.StatusNotFound, "browser job not found")
+		return
+	}
+	var logs *browseruse.JobLogs
+	var logsErr error
+	if service, err := ag.browserAdminService(); err == nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+		logs, logsErr = service.JobLogs(ctx, jobID, 200)
+		cancel()
+	}
+	html := pages.RenderBrowserJobDetail(job, logs, logsErr)
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, html)
+}
+
+func (ag *Agentize) handleDebugBrowserCancelJob(c *gin.Context) {
+	jobID := c.Param("jobID")
+	service, err := ag.browserAdminService()
+	if err != nil {
+		c.String(http.StatusBadGateway, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	if _, err := service.AdminCancel(ctx, jobID); err != nil {
+		c.String(http.StatusBadGateway, err.Error())
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/agentize/debug/browser/jobs/"+jobID)
+}
+
+func (ag *Agentize) handleDebugBrowserKillSession(c *gin.Context) {
+	sessionID := c.Param("sessionID")
+	service, err := ag.browserAdminService()
+	if err != nil {
+		c.String(http.StatusBadGateway, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	if _, err := service.KillSession(ctx, sessionID); err != nil {
+		c.String(http.StatusBadGateway, err.Error())
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/agentize/debug/browser")
+}
+
+func (ag *Agentize) handleDebugBrowserCloseTab(c *gin.Context) {
+	sessionID := c.Param("sessionID")
+	tabID := c.Param("tabID")
+	service, err := ag.browserAdminService()
+	if err != nil {
+		c.String(http.StatusBadGateway, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	if _, err := service.AdminCloseTab(ctx, sessionID, tabID); err != nil {
+		c.String(http.StatusBadGateway, err.Error())
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/agentize/debug/browser/sessions/"+sessionID)
 }
 
 // handleDebugBrowserScreenshot proxies an owner-scoped sidecar screenshot for

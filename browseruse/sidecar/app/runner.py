@@ -305,6 +305,18 @@ class BrowserUseRunner:
 	def has_session(self, session_id: str) -> bool:
 		return session_id in self._sessions
 
+	def list_sessions(self) -> list[str]:
+		return list(self._sessions.keys())
+
+	async def kill_session(self, session_id: str) -> None:
+		persistent = self._sessions.pop(session_id, None)
+		if persistent is None:
+			return
+		try:
+			await persistent.browser.kill()
+		except Exception:
+			pass
+
 	async def shutdown(self) -> None:
 		sessions = list(self._sessions.values())
 		self._sessions.clear()

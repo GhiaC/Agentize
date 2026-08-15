@@ -60,6 +60,9 @@ class Settings:
 	job_timeout_seconds: int
 	job_ttl_seconds: int
 	max_jobs: int
+	db_max_jobs: int
+	db_max_logs_per_job: int
+	db_job_retention_seconds: int
 	headless: bool
 	chromium_sandbox: bool
 	block_ip_addresses: bool
@@ -90,6 +93,9 @@ class Settings:
 			job_timeout_seconds=_integer("BROWSER_USE_JOB_TIMEOUT_SECONDS", 600, 30, 7200),
 			job_ttl_seconds=_integer("BROWSER_USE_JOB_TTL_SECONDS", 3600, 60, 86400),
 			max_jobs=_integer("BROWSER_USE_MAX_JOBS", 1000, 10, 10000),
+			db_max_jobs=_integer("BROWSER_USE_DB_MAX_JOBS", 5000, 100, 100000),
+			db_max_logs_per_job=_integer("BROWSER_USE_DB_MAX_LOGS_PER_JOB", 500, 50, 5000),
+			db_job_retention_seconds=_integer("BROWSER_USE_DB_JOB_RETENTION_SECONDS", 604800, 3600, 2592000),
 			headless=_boolean("BROWSER_USE_HEADLESS", True),
 			chromium_sandbox=_boolean("BROWSER_USE_CHROMIUM_SANDBOX", False),
 			block_ip_addresses=_boolean("BROWSER_USE_BLOCK_IP_ADDRESSES", True),
