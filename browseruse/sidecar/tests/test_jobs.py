@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
@@ -172,6 +172,22 @@ class BrowserUseRunnerTabTests(unittest.IsolatedAsyncioTestCase):
 		self.assertEqual(await runner.tab_screenshot("session-1", "tab-1"), b"TAB-PNG")
 		browser.take_screenshot.assert_awaited_once_with(full_page=False, format="png")
 
+	async def test_tab_screenshot_times_out_when_cdp_hangs(self):
+		runner = object.__new__(BrowserUseRunner)
+		browser = TabBrowser()
+
+		async def hang(**_kwargs):
+			await asyncio.Event().wait()
+			return b"PNG"
+
+		browser.take_screenshot = hang
+		runner._sessions = {"session-1": SimpleNamespace(browser=browser)}
+		runner._snapshot_tabs = AsyncMock(return_value=[BrowserTab(id="tab-1", url="https://example.com")])
+		runner._tab_cdp_session = AsyncMock(return_value=browser.cdp_session)
+		with patch("app.runner.TAB_CDP_TIMEOUT_SECONDS", 0.05):
+			with self.assertRaises(BrowserTabUnavailable):
+				await runner.tab_screenshot("session-1", "tab-1")
+
 	async def test_unavailable_tab_is_reported_as_service_unavailable(self):
 		runner = TabRunner()
 		runner.act_on_tab = AsyncMock(side_effect=BrowserTabUnavailable("browser tab is temporarily unavailable"))
@@ -234,6 +250,22 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
 		self.assertTrue(snapshot.jobs[0].screenshot_available)
 		logs = await manager.job_logs(created.id, 20)
 		self.assertGreaterEqual(len(logs.logs), 2)
+		await manager.shutdown()
+
+	async def test_debug_snapshot_does_not_block_on_hung_live_tabs(self):
+		class HangingTabsRunner(TabRunner):
+			async def tabs(self, session_id: str):
+				self.tabs_session = session_id
+				await asyncio.Event().wait()
+				return self.current
+
+		runner = HangingTabsRunner()
+		runner.tabs_session = "session-1"
+		manager = JobManager(settings(), runner)
+		started = asyncio.get_running_loop().time()
+		snapshot = await asyncio.wait_for(manager.debug(job_limit=10, load_limit=0, session_limit=50), timeout=3)
+		self.assertLess(asyncio.get_running_loop().time() - started, 2.9)
+		self.assertTrue(any(item.session_id == "session-1" for item in snapshot.sessions))
 		await manager.shutdown()
 
 	async def test_admin_cancel_and_kill_session(self):

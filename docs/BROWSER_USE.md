@@ -146,6 +146,22 @@ queued -> running -> succeeded
 queued/running    -> cancelled
 ```
 
+## Viewport quality
+
+The sidecar exposes named desktop capture sizes so clients do not send raw
+width/height:
+
+| Quality | Size |
+|---------|------|
+| `hd` | 1280×720 |
+| `full_hd` | 1920×1080 (default) |
+| `4k` | 3840×2160 |
+
+`GET`/`PUT /v1/session/viewport` with `{"quality":"hd"|"full_hd"|"4k"}` applies
+CDP `Emulation.setDeviceMetricsOverride` on live tabs. Open pages stay alive.
+The choice is persisted under the session data dir as `viewport.json`. Tab list
+responses include the current `viewport` object and options.
+
 If `run` returns before completion, its response includes the exact
 `next_action` status call. Completed results include a bounded final answer,
 visited URLs, step count, duration, action names, action summaries, errors, and
@@ -193,6 +209,8 @@ inside worker-agent sessions. See [FILE_MANAGER.md](FILE_MANAGER.md) for the
 attachment-sender integration.
 
 ## Browser debugger
+
+The browser debugger is documented in [BROWSER_DEBUG.md](BROWSER_DEBUG.md).
 
 When browser-use is configured, the protected Agentize debugger includes a
 **Browser** tab at:

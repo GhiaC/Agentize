@@ -8,7 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import Settings
 from .jobs import JobManager
-from .models import BrowserDebugResponse, BrowserDownloadsResponse, BrowserJobLogsResponse, BrowserTabActionRequest, BrowserTabActionResponse, BrowserTabInspectionResponse, BrowserTabsResponse, DebugSessionResponse, HealthResponse, JobResponse, OpenBrowserTabRequest, StartJobRequest
+from .models import BrowserDebugResponse, BrowserDownloadsResponse, BrowserJobLogsResponse, BrowserTabActionRequest, BrowserTabActionResponse, BrowserTabInspectionResponse, BrowserTabsResponse, DebugSessionResponse, HealthResponse, JobResponse, OpenBrowserTabRequest, SetViewportRequest, StartJobRequest, ViewportState
 from .runner import BrowserUseRunner
 
 
@@ -214,7 +214,7 @@ async def get_job_download(
 async def list_tabs(
 	session_id: str = Depends(require_session),
 ) -> BrowserTabsResponse:
-	return BrowserTabsResponse(tabs=await manager.tabs(session_id))
+	return BrowserTabsResponse(tabs=await manager.tabs(session_id), viewport=manager.viewport(session_id))
 
 
 @app.post(
@@ -226,7 +226,7 @@ async def open_tab(
 	request: OpenBrowserTabRequest,
 	session_id: str = Depends(require_session),
 ) -> BrowserTabsResponse:
-	return BrowserTabsResponse(tabs=await manager.open_tab(session_id, request.url))
+	return BrowserTabsResponse(tabs=await manager.open_tab(session_id, request.url), viewport=manager.viewport(session_id))
 
 
 @app.get(
@@ -280,4 +280,27 @@ async def close_tab(
 	tab_id: str,
 	session_id: str = Depends(require_session),
 ) -> BrowserTabsResponse:
-	return BrowserTabsResponse(tabs=await manager.close_tab(session_id, tab_id))
+	return BrowserTabsResponse(tabs=await manager.close_tab(session_id, tab_id), viewport=manager.viewport(session_id))
+
+
+@app.get(
+	"/v1/session/viewport",
+	response_model=ViewportState,
+	dependencies=[Depends(require_auth)],
+)
+async def get_session_viewport(
+	session_id: str = Depends(require_session),
+) -> ViewportState:
+	return manager.viewport(session_id)
+
+
+@app.put(
+	"/v1/session/viewport",
+	response_model=ViewportState,
+	dependencies=[Depends(require_auth)],
+)
+async def put_session_viewport(
+	request: SetViewportRequest,
+	session_id: str = Depends(require_session),
+) -> ViewportState:
+	return await manager.set_viewport(session_id, request.quality)

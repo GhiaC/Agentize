@@ -192,8 +192,22 @@ class BrowserDownloadsResponse(BaseModel):
 	files: list[BrowserDownload] = Field(default_factory=list)
 
 
+class ViewportState(BaseModel):
+	quality: str = Field(min_length=1, max_length=32)
+	width: int = Field(ge=800, le=3840)
+	height: int = Field(ge=600, le=2160)
+	label: str = Field(default="", max_length=32)
+	options: list[dict] = Field(default_factory=list)
+
+
+class SetViewportRequest(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+	quality: str = Field(min_length=1, max_length=32)
+
+
 class BrowserTabsResponse(BaseModel):
 	tabs: list[BrowserTab] = Field(default_factory=list)
+	viewport: ViewportState | None = None
 
 
 class DebugJobResponse(JobResponse):

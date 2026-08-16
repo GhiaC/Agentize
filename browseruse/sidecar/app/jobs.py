@@ -26,6 +26,9 @@ from .runner import BrowserTabUnavailable
 from .store import BrowserStore
 
 
+DEBUG_LIVE_TABS_BUDGET_SECONDS = 2.0
+
+
 class BrowserRunner(Protocol):
 	async def run(self, session_id: str, job_id: str, request: StartJobRequest) -> JobResult: ...
 
@@ -244,6 +247,25 @@ class JobManager:
 			except BrowserTabUnavailable as exc:
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 
+	def viewport(self, session_id: str):
+		reader = getattr(self.runner, "viewport_state", None)
+		if reader is None:
+			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support viewport quality")
+		return reader(session_id)
+
+	async def set_viewport(self, session_id: str, quality: str):
+		setter = getattr(self.runner, "set_viewport", None)
+		if setter is None:
+			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support viewport quality")
+		lock = await self._session_lock(session_id)
+		async with lock:
+			try:
+				return await setter(session_id, quality)
+			except ValueError as exc:
+				raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+			except BrowserTabUnavailable as exc:
+				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
+
 	async def debug(self, job_limit: int, load_limit: int, session_limit: int = 50) -> BrowserDebugResponse:
 		async with self._jobs_lock:
 			jobs = sorted(self._jobs.values(), key=lambda item: item.created_at, reverse=True)[:job_limit]
@@ -342,14 +364,22 @@ class JobManager:
 		live_ids: set[str] = set()
 		live_tabs: dict[str, list[BrowserTab]] = {}
 		if lister is not None:
+			# Live tab listing talks to Chromium. If CDP is wedged, the debug
+			# page must still return jobs instead of waiting until the HTTP
+			# client deadline.
+			deadline = asyncio.get_running_loop().time() + DEBUG_LIVE_TABS_BUDGET_SECONDS
 			for session_id in lister():
 				live_ids.add(session_id)
 				tab_lister = getattr(self.runner, "tabs", None)
 				if tab_lister is None:
 					live_tabs[session_id] = []
 					continue
+				remaining = deadline - asyncio.get_running_loop().time()
+				if remaining <= 0:
+					live_tabs[session_id] = []
+					continue
 				try:
-					live_tabs[session_id] = await tab_lister(session_id)
+					live_tabs[session_id] = await asyncio.wait_for(tab_lister(session_id), timeout=remaining)
 				except Exception:
 					live_tabs[session_id] = []
 

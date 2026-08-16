@@ -5,9 +5,11 @@ import base64
 import hashlib
 import ipaddress
 import json
+import logging
 import mimetypes
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,17 +19,24 @@ from browser_use import Agent, BrowserProfile, BrowserSession
 
 from .artifacts import BrowserArtifacts
 from .config import Settings
-from .models import BrowserDownload, BrowserTab, BrowserTabActionRequest, BrowserTabActionResponse, BrowserTabElement, BrowserTabInspectionResponse, BrowserUpload, JobResult, StartJobRequest
+from .models import BrowserDownload, BrowserTab, BrowserTabActionRequest, BrowserTabActionResponse, BrowserTabElement, BrowserTabInspectionResponse, BrowserUpload, JobResult, StartJobRequest, ViewportState
+from . import viewport as viewportmod
 
 
 MAX_DOWNLOAD_BYTES = 25 << 20
 MAX_TAB_SCREENSHOT_BYTES = 10 << 20
+# CDP calls on a heavy page (charts, canvas) can hang the websocket with no
+# useful progress. Bound them so one screenshot cannot freeze the sidecar.
+TAB_CDP_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass
 class _PersistentBrowser:
 	browser: BrowserSession
 	downloads_dir: Path
+	viewport_width: int = 1920
+	viewport_height: int = 1080
+	quality: str = viewportmod.DEFAULT_QUALITY
 
 
 class BrowserTabNotFound(KeyError):
@@ -73,14 +82,20 @@ class BrowserUseRunner:
 
 		async def capture_latest_screenshot(agent: Agent) -> None:
 			try:
-				state = await agent.browser_session.get_browser_state_summary()
+				state = await asyncio.wait_for(
+					agent.browser_session.get_browser_state_summary(),
+					timeout=TAB_CDP_TIMEOUT_SECONDS,
+				)
 				if not _is_web_page(state.url):
 					return
 				# Give the active page a short paint window. Without this, the first
 				# callback can capture browser-use's own blank startup tab instead of
 				# the page opened by the preceding browser action.
 				await asyncio.sleep(0.25)
-				data = await browser.take_screenshot(full_page=False, format="png")
+				data = await asyncio.wait_for(
+					browser.take_screenshot(full_page=False, format="png"),
+					timeout=TAB_CDP_TIMEOUT_SECONDS,
+				)
 				self.artifacts.save_screenshot(job_id, data)
 			except Exception:
 				# Screenshot capture is best-effort and must never fail the browser task.
@@ -148,8 +163,11 @@ class BrowserUseRunner:
 		# infinite scrolling, leaving the CDP WebSocket blocked until its timeout.
 		# The direct-tab tool only needs the currently visible page state.
 		try:
-			data = await browser.take_screenshot(full_page=False, format="png")
-		except (RuntimeError, TimeoutError) as exc:
+			data = await self._await_cdp(
+				browser.take_screenshot(full_page=False, format="png"),
+				"Page.captureScreenshot",
+			)
+		except BrowserTabUnavailable as exc:
 			raise BrowserTabUnavailable("browser tab screenshot timed out; reopen the tab and retry") from exc
 		if not data:
 			raise FileNotFoundError("browser tab screenshot is empty")
@@ -268,15 +286,25 @@ class BrowserUseRunner:
 
 	async def _tab_cdp_session(self, browser: BrowserSession, tab_id: str):
 		try:
-			return await browser.get_or_create_cdp_session(tab_id, focus=True)
-		except (RuntimeError, TimeoutError, ValueError) as exc:
+			cdp_session = await self._await_cdp(
+				browser.get_or_create_cdp_session(tab_id, focus=True),
+				"Target.attachToTarget",
+			)
+		except (BrowserTabUnavailable, ValueError) as exc:
 			raise BrowserTabUnavailable("browser tab is temporarily unavailable; reopen it and retry") from exc
+		await self._pin_tab_viewport(cdp_session, browser)
+		return cdp_session
+
+	async def _await_cdp(self, operation, command: str):
+		try:
+			return await asyncio.wait_for(operation, timeout=TAB_CDP_TIMEOUT_SECONDS)
+		except TimeoutError as exc:
+			raise BrowserTabUnavailable(f"{command} timed out; reopen the tab and retry") from exc
+		except RuntimeError as exc:
+			raise BrowserTabUnavailable(f"{command} failed because the browser tab is temporarily unavailable") from exc
 
 	async def _send_to_tab(self, command: str, operation):
-		try:
-			return await operation
-		except (RuntimeError, TimeoutError) as exc:
-			raise BrowserTabUnavailable(f"{command} failed because the browser tab is temporarily unavailable") from exc
+		return await self._await_cdp(operation, command)
 
 	def _selector_script(self, selector: str, action: str, text: str = "") -> str:
 		selector_json = json.dumps(selector)
@@ -294,8 +322,8 @@ class BrowserUseRunner:
 		if not any(tab.id == tab_id for tab in current_tabs):
 			raise BrowserTabNotFound(tab_id)
 		try:
-			await browser.close_page(tab_id)
-		except (RuntimeError, TimeoutError) as exc:
+			await self._await_cdp(browser.close_page(tab_id), "Target.closeTarget")
+		except BrowserTabUnavailable as exc:
 			raise BrowserTabUnavailable("browser tab could not be closed; retry the operation") from exc
 		# Let the CDP detach event update SessionManager before returning the
 		# post-close snapshot.
@@ -391,6 +419,81 @@ class BrowserUseRunner:
 	def _session_key(self, session_id: str) -> str:
 		return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
 
+	def _default_viewport(self) -> viewportmod.ViewportPreset:
+		return viewportmod.resolve_quality(viewportmod.DEFAULT_QUALITY)
+
+	def _viewport_preset(self, session_id: str) -> viewportmod.ViewportPreset:
+		persistent = self._sessions.get(session_id)
+		if persistent is not None and persistent.quality:
+			return viewportmod.resolve_quality(persistent.quality, self._default_viewport().quality)
+		return viewportmod.load_persisted(self.settings.data_dir, self._session_key(session_id), self._default_viewport())
+
+	def viewport_state(self, session_id: str) -> ViewportState:
+		preset = self._viewport_preset(session_id)
+		return ViewportState(
+			quality=preset.quality,
+			width=preset.width,
+			height=preset.height,
+			label=preset.label,
+			options=viewportmod.options(),
+		)
+
+	async def set_viewport(self, session_id: str, quality: str) -> ViewportState:
+		preset = viewportmod.parse_quality(quality)
+		started = time.perf_counter()
+		viewportmod.persist(self.settings.data_dir, self._session_key(session_id), preset)
+		persistent = self._sessions.get(session_id)
+		applied_tabs = 0
+		if persistent is not None:
+			persistent.quality = preset.quality
+			persistent.viewport_width = preset.width
+			persistent.viewport_height = preset.height
+			await persistent.browser.start()
+			tabs = await self._snapshot_tabs(persistent.browser)
+			for tab in tabs:
+				try:
+					await self._tab_cdp_session(persistent.browser, tab.id)
+					applied_tabs += 1
+				except BrowserTabUnavailable:
+					continue
+		logging.getLogger("browser-use.viewport").info(
+			"viewport applied session=%s quality=%s %sx%s tabs=%d live=%s duration_ms=%d",
+			session_id[:16],
+			preset.quality,
+			preset.width,
+			preset.height,
+			applied_tabs,
+			persistent is not None,
+			int((time.perf_counter() - started) * 1000),
+		)
+		return self.viewport_state(session_id)
+
+	def _pin_metrics(self, browser: BrowserSession | None) -> tuple[int, int]:
+		if browser is not None:
+			for persistent in self._sessions.values():
+				if persistent.browser is browser:
+					return persistent.viewport_width, persistent.viewport_height
+		default = self._default_viewport()
+		return default.width, default.height
+
+	async def _pin_tab_viewport(self, cdp_session, browser: BrowserSession | None = None) -> None:
+		width, height = self._pin_metrics(browser)
+		try:
+			await self._await_cdp(
+				cdp_session.cdp_client.send.Emulation.setDeviceMetricsOverride(
+					params={
+						"width": width,
+						"height": height,
+						"deviceScaleFactor": 1.0,
+						"mobile": False,
+					},
+					session_id=cdp_session.session_id,
+				),
+				"Emulation.setDeviceMetricsOverride",
+			)
+		except BrowserTabUnavailable as exc:
+			raise BrowserTabUnavailable("browser tab viewport could not be applied; retry") from exc
+
 	def _get_or_create_browser(
 		self,
 		session_id: str,
@@ -404,6 +507,7 @@ class BrowserUseRunner:
 			return persistent.browser
 
 		self._clear_stale_chromium_locks(profile_dir)
+		preset = self._viewport_preset(session_id)
 		profile = BrowserProfile(
 			executable_path=self.settings.executable_path,
 			headless=self.settings.headless,
@@ -413,6 +517,9 @@ class BrowserUseRunner:
 			prohibited_domains=list(self.settings.prohibited_domains) or None,
 			block_ip_addresses=self.settings.block_ip_addresses,
 			chromium_sandbox=self.settings.chromium_sandbox,
+			window_size={"width": preset.width, "height": preset.height},
+			viewport={"width": preset.width, "height": preset.height},
+			device_scale_factor=1.0,
 			# Keep the Chromium process and its tabs alive after Agent.run(). The
 			# same BrowserSession object is reused for later jobs in this session.
 			keep_alive=True,
@@ -426,7 +533,13 @@ class BrowserUseRunner:
 			record_har_mode="full",
 		)
 		browser = BrowserSession(browser_profile=profile)
-		self._sessions[session_id] = _PersistentBrowser(browser=browser, downloads_dir=downloads_dir)
+		self._sessions[session_id] = _PersistentBrowser(
+			browser=browser,
+			downloads_dir=downloads_dir,
+			viewport_width=preset.width,
+			viewport_height=preset.height,
+			quality=preset.quality,
+		)
 		return browser
 
 	def _browser_for_direct_tab(self, session_id: str) -> BrowserSession:
@@ -513,7 +626,7 @@ class BrowserUseRunner:
 				title=str(tab.title or ""),
 				active=str(tab.target_id) == focused_id,
 			)
-			for tab in await browser.get_tabs()
+			for tab in await self._await_cdp(browser.get_tabs(), "Target.getTargets")
 		]
 
 	def _clear_stale_chromium_locks(self, profile_dir: Path) -> None:
