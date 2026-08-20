@@ -673,6 +673,42 @@ func (ag *Agentize) CreateSession(userID string) (*model.Session, error) {
 	return ag.engine.CreateSession(userID)
 }
 
+func (ag *Agentize) CreateConversation(input engine.CreateConversationInput) (*model.Conversation, error) {
+	return ag.engine.CreateConversation(input)
+}
+
+func (ag *Agentize) GetConversation(userID, conversationID string) (*model.Conversation, error) {
+	return ag.engine.GetConversation(userID, conversationID)
+}
+
+func (ag *Agentize) ListConversations(userID string) ([]*model.Conversation, error) {
+	return ag.engine.ListConversations(userID)
+}
+
+func (ag *Agentize) RenameConversation(userID, conversationID, title string) error {
+	return ag.engine.RenameConversation(userID, conversationID, title)
+}
+
+func (ag *Agentize) SetConversationModel(userID, conversationID, modelName string) error {
+	return ag.engine.SetConversationModel(userID, conversationID, modelName)
+}
+
+func (ag *Agentize) SetConversationArchived(userID, conversationID string, archived bool) error {
+	return ag.engine.SetConversationArchived(userID, conversationID, archived)
+}
+
+func (ag *Agentize) DeleteConversation(userID, conversationID string) error {
+	return ag.engine.DeleteConversation(userID, conversationID)
+}
+
+func (ag *Agentize) CreateSubAgent(parentSessionID, title, modelName string) (*model.Session, error) {
+	return ag.engine.CreateSubAgent(parentSessionID, title, modelName)
+}
+
+func (ag *Agentize) ProcessConversation(ctx context.Context, userID, conversationID, message string) (string, int, error) {
+	return ag.engine.ProcessConversation(ctx, userID, conversationID, message)
+}
+
 // SetProgress sets the progress state for a session
 func (ag *Agentize) SetProgress(sessionID string, inProgress bool) error {
 	return ag.engine.SetProgress(sessionID, inProgress)

@@ -328,6 +328,8 @@ func (ch *CoreHandler) processWithTools(
 
 		for _, toolCall := range choice.Message.ToolCalls {
 			isAgentCall := strings.HasPrefix(toolCall.Function.Name, "call_agent_")
+			isConversationSend := toolCall.Function.Name == "send_conversation"
+			isDispatch := isAgentCall || isConversationSend
 
 			// Once the Core has dispatched this turn, a second call_agent_* would
 			// run another full worker agent (real LLM cost + latency) only for the
@@ -336,7 +338,7 @@ func (ch *CoreHandler) processWithTools(
 			// the DAG for visibility. Non-agent tools still run even after a
 			// dispatch: they may carry side effects the user wants (status updates,
 			// session changes, bans).
-			if isAgentCall && didDispatch {
+			if isDispatch && didDispatch {
 				result := ch.skipRedundantAgentCall(ctx, toolCall)
 				currentMessages = append(currentMessages, openai.ChatCompletionMessage{
 					Role:       openai.ChatMessageRoleTool,
@@ -362,7 +364,7 @@ func (ch *CoreHandler) processWithTools(
 			// re-enter Core's LLM, so no closed graph is formed. If deeper or
 			// longer reasoning is needed it must be done by the high-tier agent,
 			// not by Core looping back on itself.
-			if isAgentCall && !didDispatch {
+			if isDispatch && !didDispatch {
 				dispatched = result
 				didDispatch = true
 			}

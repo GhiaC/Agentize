@@ -34,6 +34,11 @@ The list of available agents, their capabilities, cost tiers, and tools is provi
 | `create_session` | Create new session for an agent and make it active |
 | `change_session` | Switch to a different existing session |
 | `list_sessions` | List all sessions for change_session |
+| `list_conversations` | List user conversations, last used first |
+| `create_conversation` | Create a top-level conversation `{user}-cNNNN` (no title slug) linked to its own session |
+| `select_conversation` | Set the active conversation |
+| `send_conversation` | Send a message into a conversation session; the reply is returned verbatim |
+| `rename_conversation` | Change only the conversation title |
 | `update_status` | Send real-time status update to user before long operations or with partial results |
 | `web_search` | Web search with citations (default). Input: `query` (string, required) |
 | `web_search_deepresearch` | Deep research via Tongyi model — use when user asks for "deep research" or "Tongyi". Input: `query` (string, required) |

@@ -749,6 +749,7 @@ func (e *Engine) processMessageLocked(
 		log.Log.Errorf("[Engine] ❌ Processing failed | SessionID: %s | Error: %v", sessionID, err)
 		return "", tokens, err
 	}
+	e.touchOwningConversation(session)
 
 	// Process any queued messages
 	for _, m := range e.sessionProgress.DrainQueue(sessionID) {
@@ -1398,18 +1399,22 @@ func (e *Engine) processChatRequest(
 	systemPrompts := e.GetSystemPrompts(session)
 	openaiTools := e.GetTools(session)
 
-	// Set model: a per-user runtime override (SetUserModel) wins over the engine
-	// default, enabling live per-user model switching without reconfiguring the
-	// engine. Empty override → engine model → hard default. session.Model is kept in
-	// sync with the effective model for display/logging/usage records.
-	modelName := e.llmConfig.Model
-	if ov := e.UserModelOverride(session.UserID); ov != "" {
-		modelName = ov
+	// Set model: conversation/session.Model is the authority when set. A per-user
+	// runtime override (SetUserModel) is only the fallback for legacy sessions
+	// that have no model of their own. Empty → engine model → hard default.
+	modelName := strings.TrimSpace(session.Model)
+	if modelName == "" {
+		if ov := e.UserModelOverride(session.UserID); ov != "" {
+			modelName = ov
+		}
+	}
+	if modelName == "" {
+		modelName = e.llmConfig.Model
 	}
 	if modelName == "" {
 		modelName = "openai/gpt-5-nano"
 	}
-	if session.Model != modelName {
+	if session.Model == "" {
 		session.Model = modelName
 	}
 

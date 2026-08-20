@@ -22,6 +22,7 @@ const (
 	SectionUserFiles            = "user_files"
 	SectionActiveSessions       = "active_sessions"
 	SectionSessionsList         = "sessions_list"
+	SectionConversations        = "conversations"
 )
 
 // sectionSpec is the un-budgeted description of one prompt section: its identity
@@ -84,6 +85,7 @@ func (ch *CoreHandler) assembleSections(userID string, coreSession *model.Sessio
 		return nil, fmt.Errorf("failed to get sessions prompt: %w", err)
 	}
 	specs = append(specs, sectionSpec{SectionSessionsList, "Sessions List", false, true, sessionsPrompt})
+	specs = append(specs, sectionSpec{SectionConversations, "Conversations", false, true, ch.buildConversationsPrompt(userID)})
 
 	limit := ch.config.maxSystemPromptSize()
 	used := 0

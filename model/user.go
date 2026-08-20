@@ -25,6 +25,10 @@ type User struct {
 	// This is persisted to database and loaded on startup
 	ActiveSessionIDs map[AgentType]string
 
+	// Active conversation for ChatBot Core tools (list/select/send).
+	// Distinct from ActiveSessionIDs which is keyed by agent type.
+	ActiveConversationID string
+
 	// Session sequence counters per agent type
 	// Key: AgentType (core, high, low), Value: last session sequence number
 	// Used to generate unique SessionIDs: {UserID}-{AgentType}-{SeqCounter}

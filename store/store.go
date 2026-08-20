@@ -86,6 +86,27 @@ type Store interface {
 	// returns pending requests across all users.
 	ListPendingReviews(userID string) ([]*model.ReviewRequest, error)
 
+	// --- Conversations (user-facing chat identity; linked to one main session) ---
+
+	// GetConversation returns the conversation or an error when it does not exist.
+	GetConversation(conversationID string) (*model.Conversation, error)
+	// PutConversation upserts a conversation keyed by ConversationID.
+	PutConversation(conversation *model.Conversation) error
+	// DeleteConversation removes the conversation row. It does not delete the
+	// linked session; callers that own the full graph should delete sessions first.
+	DeleteConversation(conversationID string) error
+	// ListConversations returns the user's conversations, newest UpdatedAt first.
+	ListConversations(userID string) ([]*model.Conversation, error)
+	// GetConversationBySession returns the conversation attached to sessionID,
+	// or (nil, nil) when none exists.
+	GetConversationBySession(sessionID string) (*model.Conversation, error)
+	// GetNextConversationSeq returns the next conversation sequence for a user.
+	GetNextConversationSeq(userID string) (int, error)
+	// TouchConversationBySession bumps UpdatedAt of the conversation linked to
+	// sessionID so last-used ordering stays accurate. It is a no-op when no
+	// conversation is attached.
+	TouchConversationBySession(sessionID string) error
+
 	// --- Persistent task schedules ---
 
 	// PutTaskSchedule upserts a schedule keyed by ScheduleID.

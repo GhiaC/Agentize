@@ -43,9 +43,12 @@ type DebugStore interface {
 	ListWorkflowRuns(userID string, limit int) ([]*model.WorkflowRun, error)
 
 	// DeleteUserData deletes all sessions, messages, tool calls, summarization logs,
-	// route traces, workflows, and opened files for a user. Resets user's
+	// route traces, workflows, conversations, and opened files for a user. Resets user's
 	// ActiveSessionIDs and SessionSeqs.
 	DeleteUserData(userID string) error
+
+	// ListAllConversations returns every conversation, newest UpdatedAt first.
+	ListAllConversations() ([]*model.Conversation, error)
 }
 
 // SchedulerConfig holds scheduler configuration for display in debug pages

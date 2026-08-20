@@ -32,6 +32,12 @@ const (
 	AgentTypeHigh AgentType = "high"
 	AgentTypeLow  AgentType = "low"
 	AgentTypeUser AgentType = "user"
+	// AgentTypeConversation is the main session attached to a Conversation row.
+	// Conversation identity lives on the conversations table, not in this ID.
+	AgentTypeConversation AgentType = "conv"
+	// AgentTypeSub is a short-lived worker session owned by a main conversation
+	// session. Sub-agents cannot create further sub-agents.
+	AgentTypeSub AgentType = "sub"
 	// AgentTypeWorkflow owns dedicated sessions used by deterministic Core
 	// workflow schedules. It is intentionally distinct from the singleton Core
 	// session type.
@@ -44,8 +50,12 @@ type Session struct {
 	// ==================== Identifiers ====================
 	UserID    string
 	SessionID string
-	AgentType AgentType // core, high, low, user
+	AgentType AgentType // core, high, low, conv, sub, user, workflow
 	Model     string    // LLM model name (e.g., "gpt-4o", "gpt-4o-mini")
+	// ParentSessionID is set only on sub-agent sessions and points at the
+	// conversation's main session. Empty means this session may create
+	// sub-agents (when it is a conversation main session).
+	ParentSessionID string
 
 	// ==================== Messages (flattened from ConversationState) ====================
 	// Msgs contains the active conversation messages

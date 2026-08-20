@@ -150,6 +150,7 @@ func TestStoreConformance(t *testing.T) {
 			run("VerifyDetectsOrphans", testVerifyDetectsOrphans)
 			run("MessageSeqRestore", testMessageSeqRestore)
 			run("DeletionAudit", testDeletionAudit)
+			run("Conversations", testConversations)
 			run("ConcurrentSessionWrites", testConcurrentSessionWrites)
 			run("ConcurrentDeleteAndPut", testConcurrentDeleteUserDataAndPut)
 		})

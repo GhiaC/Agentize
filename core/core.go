@@ -167,6 +167,11 @@ type CoreHandler struct {
 	// fileRecorder, when set, records files the user sends (e.g. images) as
 	// user files. Wire it to Agentize.RecordUserFile via SetFileRecorder.
 	fileRecorder FileRecorder
+
+	// conversationEngine runs Conversation create/list/send without routing
+	// through call_agent_low/high. Optional; conversation tools fail closed
+	// when unset.
+	conversationEngine *engine.Engine
 }
 
 // FileRecorder records an uploaded or generated file against a session. Its
@@ -184,6 +189,12 @@ type cachedSystemPrompt struct {
 // images) as user files. Optional; when unset, inbound files are not recorded.
 func (ch *CoreHandler) SetFileRecorder(recorder FileRecorder) {
 	ch.fileRecorder = recorder
+}
+
+// SetConversationEngine wires the Engine that owns Conversation rows and their
+// main sessions. ChatBot Core uses it to list/select/send as if messaging those chats.
+func (ch *CoreHandler) SetConversationEngine(eng *engine.Engine) {
+	ch.conversationEngine = eng
 }
 
 // NewCoreHandler creates a new CoreHandler with the given AgentManager.

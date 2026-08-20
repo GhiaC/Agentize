@@ -40,6 +40,7 @@ type MongoDBStore struct {
 	taskSchedulesCollection     *mongo.Collection
 	taskScheduleRunsCollection  *mongo.Collection
 	workflowRunsCollection      *mongo.Collection
+	conversationsCollection     *mongo.Collection
 
 	// UserNodes tracks visited nodes for each user (user-level, not session-level)
 	userNodes sync.Map
@@ -169,6 +170,7 @@ func NewMongoDBStore(config MongoDBStoreConfig) (*MongoDBStore, error) {
 		taskSchedulesCollection:     database.Collection("task_schedules"),
 		taskScheduleRunsCollection:  database.Collection("task_schedule_runs"),
 		workflowRunsCollection:      database.Collection("workflow_runs"),
+		conversationsCollection:     database.Collection("conversations"),
 		opTimeout:                   config.OpTimeout,
 	}
 
@@ -502,6 +504,23 @@ func (s *MongoDBStore) initIndexes(ctx context.Context) error {
 		return fmt.Errorf("failed to create workflow_runs status+updated_at index: %w", err)
 	}
 
+	_, err = s.conversationsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "user_id", Value: 1},
+			{Key: "updated_at", Value: -1},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create conversations user+updated_at index: %w", err)
+	}
+	_, err = s.conversationsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "session_id", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create conversations session_id unique index: %w", err)
+	}
+
 	return nil
 }
 
@@ -823,6 +842,10 @@ func (s *MongoDBStore) DeleteUserData(userID string) error {
 	}
 	if _, err := s.openedFilesCollection.DeleteMany(ctx, childFilter); err != nil {
 		return fmt.Errorf("failed to delete opened_files: %w", err)
+	}
+
+	if _, err := s.conversationsCollection.DeleteMany(ctx, userFilter); err != nil {
+		return fmt.Errorf("failed to delete conversations: %w", err)
 	}
 
 	// Delete sessions

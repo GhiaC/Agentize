@@ -534,6 +534,38 @@ func (s *DBStore) PutWorkflowRun(workflow *model.WorkflowRun) error {
 	return s.sqliteStore.PutWorkflowRun(workflow)
 }
 
+func (s *DBStore) GetConversation(conversationID string) (*model.Conversation, error) {
+	return s.sqliteStore.GetConversation(conversationID)
+}
+
+func (s *DBStore) PutConversation(conversation *model.Conversation) error {
+	return s.sqliteStore.PutConversation(conversation)
+}
+
+func (s *DBStore) DeleteConversation(conversationID string) error {
+	return s.sqliteStore.DeleteConversation(conversationID)
+}
+
+func (s *DBStore) ListConversations(userID string) ([]*model.Conversation, error) {
+	return s.sqliteStore.ListConversations(userID)
+}
+
+func (s *DBStore) ListAllConversations() ([]*model.Conversation, error) {
+	return s.sqliteStore.ListAllConversations()
+}
+
+func (s *DBStore) GetConversationBySession(sessionID string) (*model.Conversation, error) {
+	return s.sqliteStore.GetConversationBySession(sessionID)
+}
+
+func (s *DBStore) GetNextConversationSeq(userID string) (int, error) {
+	return s.sqliteStore.GetNextConversationSeq(userID)
+}
+
+func (s *DBStore) TouchConversationBySession(sessionID string) error {
+	return s.sqliteStore.TouchConversationBySession(sessionID)
+}
+
 // GetWorkflowRun returns a durable Core workflow by id.
 func (s *DBStore) GetWorkflowRun(workflowID string) (*model.WorkflowRun, error) {
 	return s.sqliteStore.GetWorkflowRun(workflowID)

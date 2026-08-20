@@ -74,6 +74,7 @@ func (ag *Agentize) RegisterRoutes(router *gin.Engine) {
 	router.GET("/agentize/debug/users", p(ag.handleDebugUsers))
 	router.GET("/agentize/debug/users/:userID", p(ag.handleDebugUserDetail))
 	router.POST("/agentize/debug/users/:userID/delete-data", p(ag.handleDebugUserDeleteData))
+	router.GET("/agentize/debug/conversations", p(ag.handleDebugConversations))
 	router.GET("/agentize/debug/sessions", p(ag.handleDebugSessions))
 	router.GET("/agentize/debug/sessions/:sessionID", p(ag.handleDebugSessionDetail))
 	router.GET("/agentize/debug/schedules", p(ag.handleDebugSchedules))
@@ -592,6 +593,22 @@ func (ag *Agentize) handleDebugUserDeleteData(c *gin.Context) {
 }
 
 // handleDebugSessions handles sessions list page requests
+func (ag *Agentize) handleDebugConversations(c *gin.Context) {
+	handler, err := ag.createDebugHandler()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	page := getPageParam(c)
+	html, err := pages.RenderConversations(handler, page)
+	if err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate conversations page: %v", err)})
+		return
+	}
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(200, html)
+}
+
 func (ag *Agentize) handleDebugSessions(c *gin.Context) {
 	handler, err := ag.createDebugHandler()
 	if err != nil {

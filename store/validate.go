@@ -71,6 +71,22 @@ func validateSession(s *model.Session) error {
 	return nil
 }
 
+func validateConversation(c *model.Conversation) error {
+	if c == nil {
+		return fmt.Errorf("%w: conversation cannot be nil", ErrValidation)
+	}
+	if c.ConversationID == "" {
+		return validationErr("conversation", "ConversationID")
+	}
+	if c.UserID == "" {
+		return validationErr("conversation", "UserID")
+	}
+	if c.SessionID == "" {
+		return validationErr("conversation", "SessionID")
+	}
+	return nil
+}
+
 func validateUser(u *model.User) error {
 	if u == nil {
 		return fmt.Errorf("%w: user cannot be nil", ErrValidation)

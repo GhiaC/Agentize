@@ -211,6 +211,46 @@ func (m *meteredStore) PutWorkflowRun(workflow *model.WorkflowRun) error {
 	return m.Store.PutWorkflowRun(workflow)
 }
 
+func (m *meteredStore) GetConversation(conversationID string) (*model.Conversation, error) {
+	defer m.observe("GetConversation", time.Now())
+	return m.Store.GetConversation(conversationID)
+}
+
+func (m *meteredStore) PutConversation(conversation *model.Conversation) error {
+	defer m.observe("PutConversation", time.Now())
+	return m.Store.PutConversation(conversation)
+}
+
+func (m *meteredStore) DeleteConversation(conversationID string) error {
+	defer m.observe("DeleteConversation", time.Now())
+	return m.Store.DeleteConversation(conversationID)
+}
+
+func (m *meteredStore) ListConversations(userID string) ([]*model.Conversation, error) {
+	defer m.observe("ListConversations", time.Now())
+	return m.Store.ListConversations(userID)
+}
+
+func (m *meteredStore) ListAllConversations() ([]*model.Conversation, error) {
+	defer m.observe("ListAllConversations", time.Now())
+	return m.Store.ListAllConversations()
+}
+
+func (m *meteredStore) GetConversationBySession(sessionID string) (*model.Conversation, error) {
+	defer m.observe("GetConversationBySession", time.Now())
+	return m.Store.GetConversationBySession(sessionID)
+}
+
+func (m *meteredStore) GetNextConversationSeq(userID string) (int, error) {
+	defer m.observe("GetNextConversationSeq", time.Now())
+	return m.Store.GetNextConversationSeq(userID)
+}
+
+func (m *meteredStore) TouchConversationBySession(sessionID string) error {
+	defer m.observe("TouchConversationBySession", time.Now())
+	return m.Store.TouchConversationBySession(sessionID)
+}
+
 // --- Debug reads + aggregates (debuger.DebugStore) ---
 
 func (m *meteredStore) GetAllSessions() (map[string][]*model.Session, error) {

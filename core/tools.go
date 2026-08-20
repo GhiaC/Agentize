@@ -22,6 +22,7 @@ func (ch *CoreHandler) getCoreToolsForLLM() []openai.Tool {
 
 	// Session management tools with dynamic agent names
 	tools = append(tools, ch.agents.BuildSessionManagementTools()...)
+	tools = append(tools, conversationToolDefs()...)
 
 	// Static tools
 	tools = append(tools,
@@ -392,6 +393,17 @@ func (ch *CoreHandler) runCoreToolImpl(
 	case "list_sessions":
 		return ch.listSessionsTool(userID)
 
+	case "list_conversations":
+		return ch.listConversationsTool(userID)
+	case "create_conversation":
+		return ch.createConversationTool(ctx, userID, args)
+	case "select_conversation":
+		return ch.selectConversationTool(ctx, userID, args)
+	case "send_conversation":
+		return ch.sendConversationTool(ctx, userID, args)
+	case "rename_conversation":
+		return ch.renameConversationTool(ctx, userID, args)
+
 	case "ban_user":
 		return ch.banUserTool(ctx, userID, args)
 
@@ -678,6 +690,11 @@ func (ch *CoreHandler) registerCoreTools() {
 	ch.coreTools.MustRegister("create_session", "ایجاد نشست", coreToolNoOp)
 	ch.coreTools.MustRegister("change_session", "تغییر نشست", coreToolNoOp)
 	ch.coreTools.MustRegister("list_sessions", "لیست نشست‌ها", coreToolNoOp)
+	ch.coreTools.MustRegister("list_conversations", "لیست گفتگوها", coreToolNoOp)
+	ch.coreTools.MustRegister("create_conversation", "ایجاد گفتگو", coreToolNoOp)
+	ch.coreTools.MustRegister("select_conversation", "انتخاب گفتگو", coreToolNoOp)
+	ch.coreTools.MustRegister("send_conversation", "ارسال به گفتگو", coreToolNoOp)
+	ch.coreTools.MustRegister("rename_conversation", "تغییر نام گفتگو", coreToolNoOp)
 	ch.coreTools.MustRegister("ban_user", "مسدود کاربر", coreToolNoOp)
 	ch.coreTools.MustRegister("sleep", "توقف موقت", coreToolNoOp)
 	ch.coreTools.MustRegister("web_search", "جستجوی وب", coreToolNoOp)

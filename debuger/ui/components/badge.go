@@ -86,10 +86,12 @@ type agentTypeStyle struct {
 }
 
 var agentTypeStyles = map[model.AgentType]agentTypeStyle{
-	model.AgentTypeCore: {label: "Core", badge: "primary", rowClass: "row-agent-core"},
-	model.AgentTypeHigh: {label: "High", badge: "success", rowClass: "row-agent-high"},
-	model.AgentTypeLow:  {label: "Low", badge: "info", rowClass: "row-agent-low"},
-	model.AgentTypeUser: {label: "User", badge: "warning", rowClass: "row-agent-user"},
+	model.AgentTypeCore:         {label: "Core", badge: "primary", rowClass: "row-agent-core"},
+	model.AgentTypeHigh:         {label: "High", badge: "success", rowClass: "row-agent-high"},
+	model.AgentTypeLow:          {label: "Low", badge: "info", rowClass: "row-agent-low"},
+	model.AgentTypeConversation: {label: "Conv", badge: "dark", rowClass: "row-agent-user"},
+	model.AgentTypeSub:          {label: "Sub", badge: "secondary", rowClass: "row-agent-low"},
+	model.AgentTypeUser:         {label: "User", badge: "warning", rowClass: "row-agent-user"},
 }
 
 // AgentTypeBadge generates a badge for agent types (string). Use AgentTypeBadgeFromModel for model.AgentType.

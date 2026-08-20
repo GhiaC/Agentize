@@ -462,6 +462,24 @@ var sqliteMigrations = []sqliteMigration{
 			`CREATE INDEX IF NOT EXISTS idx_workflow_runs_status_updated ON workflow_runs(status, updated_at DESC)`,
 		)
 	}},
+	{14, "conversations table", func(tx *sql.Tx) error {
+		return execAll(tx, `
+		CREATE TABLE IF NOT EXISTS conversations (
+			conversation_id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			conversation_seq INTEGER NOT NULL DEFAULT 0,
+			title TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			archived INTEGER NOT NULL DEFAULT 0,
+			data TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+			`CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_session_id ON conversations(session_id)`,
+		)
+	}},
 }
 
 // runMigrations applies every migration newer than the recorded schema version.
@@ -747,6 +765,9 @@ func (s *SQLiteStore) DeleteUserData(userID string) error {
 	}
 	if _, err := tx.Exec("DELETE FROM task_schedules WHERE user_id = ?", userID); err != nil {
 		return fmt.Errorf("failed to delete task_schedules: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM conversations WHERE user_id = ?", userID); err != nil {
+		return fmt.Errorf("failed to delete conversations: %w", err)
 	}
 	if _, err := tx.Exec("DELETE FROM sessions WHERE user_id = ?", userID); err != nil {
 		return fmt.Errorf("failed to delete sessions: %w", err)
