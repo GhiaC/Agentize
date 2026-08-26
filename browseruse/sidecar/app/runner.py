@@ -28,6 +28,8 @@ MAX_TAB_SCREENSHOT_BYTES = 10 << 20
 # CDP calls on a heavy page (charts, canvas) can hang the websocket with no
 # useful progress. Bound them so one screenshot cannot freeze the sidecar.
 TAB_CDP_TIMEOUT_SECONDS = 15.0
+# First Chromium launch is slower than a CDP ping; do not reuse the 15s tab bound.
+BROWSER_START_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass
@@ -45,6 +47,10 @@ class BrowserTabNotFound(KeyError):
 
 class BrowserTabUnavailable(RuntimeError):
 	"""Raised when Chromium has detached or stopped responding for a tab."""
+
+
+class BrowserDisconnected(BrowserTabUnavailable):
+	"""Raised when the Chromium process or CDP websocket is gone."""
 
 
 class BrowserUseRunner:
@@ -125,17 +131,22 @@ class BrowserUseRunner:
 		)
 
 	async def tabs(self, session_id: str) -> list[BrowserTab]:
-		persistent = self._sessions.get(session_id)
-		if persistent is None:
+		browser = await self._ensure_live_browser(session_id, create=False)
+		if browser is None:
 			return []
-		await persistent.browser.start()
-		return await self._snapshot_tabs(persistent.browser)
+		return await self._snapshot_tabs(browser)
 
 	async def open_tab(self, session_id: str, url: str) -> list[BrowserTab]:
 		self._validate_direct_url(url)
-		browser = self._browser_for_direct_tab(session_id)
-		await browser.start()
-		created = await browser.cdp_client.send.Target.createTarget(params={"url": url})
+		browser = await self._ensure_live_browser(session_id, create=True)
+		try:
+			created = await self._await_cdp(
+				browser.cdp_client.send.Target.createTarget(params={"url": url}),
+				"Target.createTarget",
+			)
+		except BrowserDisconnected as exc:
+			await self._recycle_session(session_id)
+			raise BrowserTabUnavailable("browser crashed; reopen the tab and retry") from exc
 		if isinstance(created, dict):
 			target_id = str(created.get("targetId", ""))
 		else:
@@ -143,30 +154,32 @@ class BrowserUseRunner:
 		if not target_id:
 			raise RuntimeError("Chromium did not return a target id for the new tab")
 		browser.agent_focus_target_id = None
-		await browser.get_or_create_cdp_session(target_id, focus=True)
+		try:
+			await self._tab_cdp_session(browser, target_id)
+		except BrowserDisconnected as exc:
+			await self._recycle_session(session_id)
+			raise BrowserTabUnavailable("browser crashed; reopen the tab and retry") from exc
 		await asyncio.sleep(0.25)
 		return await self._snapshot_tabs(browser)
 
 	async def tab_screenshot(self, session_id: str, tab_id: str) -> bytes:
-		persistent = self._sessions.get(session_id)
-		if persistent is None:
+		browser = await self._ensure_live_browser(session_id, create=False)
+		if browser is None:
 			raise BrowserTabNotFound(tab_id)
-		browser = persistent.browser
-		await browser.start()
 		current_tabs = await self._snapshot_tabs(browser)
 		if not any(tab.id == tab_id for tab in current_tabs):
 			raise BrowserTabNotFound(tab_id)
 		browser.agent_focus_target_id = None
-		await self._tab_cdp_session(browser, tab_id)
-		await asyncio.sleep(0.1)
-		# A full-page capture can be unbounded on applications with virtual or
-		# infinite scrolling, leaving the CDP WebSocket blocked until its timeout.
-		# The direct-tab tool only needs the currently visible page state.
 		try:
+			await self._tab_cdp_session(browser, tab_id)
+			await asyncio.sleep(0.1)
 			data = await self._await_cdp(
 				browser.take_screenshot(full_page=False, format="png"),
 				"Page.captureScreenshot",
 			)
+		except BrowserDisconnected as exc:
+			await self._recycle_session(session_id)
+			raise BrowserTabUnavailable("browser crashed; reopen the tab and retry") from exc
 		except BrowserTabUnavailable as exc:
 			raise BrowserTabUnavailable("browser tab screenshot timed out; reopen the tab and retry") from exc
 		if not data:
@@ -245,15 +258,51 @@ class BrowserUseRunner:
 		return BrowserTabActionResponse(tab=tab, result=_truncate(str(result), 4_000), tabs=await self._snapshot_tabs(browser))
 
 	async def _owned_direct_tab(self, session_id: str, tab_id: str) -> BrowserSession:
-		persistent = self._sessions.get(session_id)
-		if persistent is None:
+		browser = await self._ensure_live_browser(session_id, create=False)
+		if browser is None:
 			raise BrowserTabNotFound(tab_id)
-		browser = persistent.browser
-		await browser.start()
 		await self._tab_by_id(browser, tab_id)
 		browser.agent_focus_target_id = None
-		await self._tab_cdp_session(browser, tab_id)
+		try:
+			await self._tab_cdp_session(browser, tab_id)
+		except BrowserDisconnected:
+			await self._recycle_session(session_id)
+			raise
 		return browser
+
+	async def _recycle_session(self, session_id: str) -> None:
+		persistent = self._sessions.pop(session_id, None)
+		if persistent is None:
+			return
+		try:
+			await persistent.browser.kill()
+		except Exception:
+			pass
+
+	async def _start_new_browser(self, session_id: str) -> BrowserSession:
+		browser = self._browser_for_direct_tab(session_id)
+		try:
+			await self._await_cdp(browser.start(), "Browser.start", timeout=BROWSER_START_TIMEOUT_SECONDS)
+			return browser
+		except BaseException:
+			await self._recycle_session(session_id)
+			raise
+
+	async def _ensure_live_browser(self, session_id: str, *, create: bool) -> BrowserSession | None:
+		persistent = self._sessions.get(session_id)
+		if persistent is None:
+			if not create:
+				return None
+			return await self._start_new_browser(session_id)
+		try:
+			await self._await_cdp(persistent.browser.start(), "Browser.start", timeout=BROWSER_START_TIMEOUT_SECONDS)
+			await self._await_cdp(persistent.browser.get_tabs(), "Target.getTargets")
+			return persistent.browser
+		except BrowserTabUnavailable:
+			await self._recycle_session(session_id)
+			if not create:
+				return None
+			return await self._start_new_browser(session_id)
 
 	async def _tab_by_id(self, browser: BrowserSession, tab_id: str) -> BrowserTab:
 		for tab in await self._snapshot_tabs(browser):
@@ -290,18 +339,23 @@ class BrowserUseRunner:
 				browser.get_or_create_cdp_session(tab_id, focus=True),
 				"Target.attachToTarget",
 			)
+		except BrowserDisconnected:
+			raise
 		except (BrowserTabUnavailable, ValueError) as exc:
 			raise BrowserTabUnavailable("browser tab is temporarily unavailable; reopen it and retry") from exc
 		await self._pin_tab_viewport(cdp_session, browser)
 		return cdp_session
 
-	async def _await_cdp(self, operation, command: str):
+	async def _await_cdp(self, operation, command: str, timeout: float | None = None):
+		limit = TAB_CDP_TIMEOUT_SECONDS if timeout is None else timeout
 		try:
-			return await asyncio.wait_for(operation, timeout=TAB_CDP_TIMEOUT_SECONDS)
+			return await asyncio.wait_for(operation, timeout=limit)
 		except TimeoutError as exc:
 			raise BrowserTabUnavailable(f"{command} timed out; reopen the tab and retry") from exc
-		except RuntimeError as exc:
-			raise BrowserTabUnavailable(f"{command} failed because the browser tab is temporarily unavailable") from exc
+		except BrowserTabUnavailable:
+			raise
+		except Exception as exc:
+			raise BrowserDisconnected(f"{command} failed because Chromium disconnected") from exc
 
 	async def _send_to_tab(self, command: str, operation):
 		return await self._await_cdp(operation, command)
@@ -313,16 +367,17 @@ class BrowserUseRunner:
 		return "(() => { const el = document.querySelector(" + selector_json + "); if (!el) throw new Error('element not found'); if (String(el.type || '').toLowerCase() === 'password') throw new Error('password fields are not supported'); el.focus(); el.value = " + json.dumps(text) + "; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); return 'typed'; })()"
 
 	async def close_tab(self, session_id: str, tab_id: str) -> list[BrowserTab]:
-		persistent = self._sessions.get(session_id)
-		if persistent is None:
+		browser = await self._ensure_live_browser(session_id, create=False)
+		if browser is None:
 			raise BrowserTabNotFound(tab_id)
-		browser = persistent.browser
-		await browser.start()
 		current_tabs = await self._snapshot_tabs(browser)
 		if not any(tab.id == tab_id for tab in current_tabs):
 			raise BrowserTabNotFound(tab_id)
 		try:
 			await self._await_cdp(browser.close_page(tab_id), "Target.closeTarget")
+		except BrowserDisconnected as exc:
+			await self._recycle_session(session_id)
+			raise BrowserTabUnavailable("browser crashed; reopen the tab and retry") from exc
 		except BrowserTabUnavailable as exc:
 			raise BrowserTabUnavailable("browser tab could not be closed; retry the operation") from exc
 		# Let the CDP detach event update SessionManager before returning the
@@ -448,11 +503,13 @@ class BrowserUseRunner:
 			persistent.quality = preset.quality
 			persistent.viewport_width = preset.width
 			persistent.viewport_height = preset.height
-			await persistent.browser.start()
-			tabs = await self._snapshot_tabs(persistent.browser)
+			browser = await self._ensure_live_browser(session_id, create=False)
+			if browser is None:
+				return self.viewport_state(session_id)
+			tabs = await self._snapshot_tabs(browser)
 			for tab in tabs:
 				try:
-					await self._tab_cdp_session(persistent.browser, tab.id)
+					await self._tab_cdp_session(browser, tab.id)
 					applied_tabs += 1
 				except BrowserTabUnavailable:
 					continue
@@ -491,6 +548,8 @@ class BrowserUseRunner:
 				),
 				"Emulation.setDeviceMetricsOverride",
 			)
+		except BrowserDisconnected:
+			raise
 		except BrowserTabUnavailable as exc:
 			raise BrowserTabUnavailable("browser tab viewport could not be applied; retry") from exc
 
