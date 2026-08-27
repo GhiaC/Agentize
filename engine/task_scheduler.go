@@ -436,7 +436,9 @@ func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
 		log.Log.Errorf("[TaskScheduler] failed to mark schedule %s running: %v", scheduleID, err)
 		return
 	}
+	running := *schedule
 	scheduleLock.Unlock()
+	s.publishFinalMessage(ctx, &running)
 	if err := s.store.PutTaskScheduleRun(run); err != nil {
 		log.Log.Errorf("[TaskScheduler] failed to create run for %s: %v", scheduleID, err)
 	}
@@ -713,6 +715,9 @@ func (s *TaskScheduler) changeStatus(
 	if status == model.TaskScheduleActive {
 		schedule.NextRunAt = time.Now()
 	}
+	if status == model.TaskSchedulePaused && schedule.LastRunStatus == model.TaskRunRunning {
+		schedule.LastRunStatus = model.TaskRunCancelled
+	}
 	if err := s.store.PutTaskSchedule(schedule); err != nil {
 		scheduleLock.Unlock()
 		return nil, err
@@ -726,28 +731,44 @@ func (s *TaskScheduler) changeStatus(
 	return schedule, nil
 }
 
-// RunNow makes an active schedule immediately due.
+// RunNow makes an active schedule immediately due and persists running so the
+// host can show a compact "started" card before the worker is dispatched.
 func (s *TaskScheduler) RunNow(scheduleID, ownerUserID string) (*model.TaskSchedule, error) {
 	scheduleLock := &s.lifecycleMu
 	scheduleLock.Lock()
-	defer scheduleLock.Unlock()
 	schedule, err := s.Get(scheduleID, ownerUserID)
 	if err != nil {
+		scheduleLock.Unlock()
 		return nil, err
 	}
 	if schedule == nil {
+		scheduleLock.Unlock()
 		return nil, fmt.Errorf("schedule not found")
 	}
 	if schedule.Status != model.TaskScheduleActive {
+		scheduleLock.Unlock()
 		return nil, fmt.Errorf("schedule is not active")
 	}
+	s.mu.Lock()
+	_, busy := s.inFlight[schedule.ScheduleID]
+	s.mu.Unlock()
+	if busy || schedule.LastRunStatus == model.TaskRunRunning {
+		scheduleLock.Unlock()
+		return nil, fmt.Errorf("schedule is already running")
+	}
 	schedule.NextRunAt = time.Now()
+	schedule.LastRunStatus = model.TaskRunRunning
+	schedule.LastError = ""
 	schedule.UpdatedAt = time.Now()
 	if err := s.store.PutTaskSchedule(schedule); err != nil {
+		scheduleLock.Unlock()
 		return nil, err
 	}
+	snapshot := *schedule
+	scheduleLock.Unlock()
 	s.notify()
-	return schedule, nil
+	s.publishFinalMessage(context.Background(), &snapshot)
+	return &snapshot, nil
 }
 
 // Delete cancels in-flight work and removes the schedule plus history.

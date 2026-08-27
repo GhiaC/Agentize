@@ -49,7 +49,11 @@ func FormatTaskScheduleMessage(schedule *model.TaskSchedule) string {
 		last = strings.TrimSpace(schedule.LastError)
 	}
 	if last == "" {
-		last = "—"
+		if schedule.LastRunStatus == model.TaskRunRunning {
+			last = "Starting…"
+		} else {
+			last = "—"
+		}
 	}
 	last = truncateRunes(last, taskScheduleLastMessageLimit)
 	runs := fmt.Sprintf("%d/∞", schedule.RunCount)
@@ -80,7 +84,7 @@ func (s *TaskScheduler) publishFinalMessage(ctx context.Context, schedule *model
 		MessageID: messageID, UserID: schedule.UserID, SessionID: schedule.SourceSessionID,
 		Role: openai.ChatMessageRoleAssistant, Content: FormatTaskScheduleMessage(schedule),
 		AgentType: schedule.AgentType, ContentType: model.ContentTypeText,
-		CreatedAt: schedule.CreatedAt,
+		CreatedAt: time.Now(),
 	}
 	s.publishMessage(ctx, schedule, message, StatusCompleted, false)
 }

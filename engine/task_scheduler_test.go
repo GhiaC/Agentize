@@ -121,27 +121,33 @@ func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) 
 
 	seenFinal := false
 	seenSeparate := false
-	for i := 0; i < 3; i++ {
+	seenStart := false
+	drainUntil := time.Now().Add(2 * time.Second)
+	for time.Now().Before(drainUntil) && (!seenFinal || !seenSeparate) {
 		select {
 		case update := <-updates:
 			if update.ConversationID != conversation.ConversationID {
 				t.Fatalf("callback conversation = %q", update.ConversationID)
 			}
 			if update.Message.MessageID == schedule.StatusMessageID {
-				seenFinal = true
-				if update.Message.Content != "checking" && update.DeliveryID != "chat-message-42" {
-					t.Fatalf("final edit did not receive delivery id: %#v", update)
+				if strings.Contains(update.Message.Content, "Starting…") {
+					seenStart = true
+				}
+				if strings.Contains(update.Message.Content, "succeeded") {
+					seenFinal = true
+					if update.DeliveryID != "chat-message-42" {
+						t.Fatalf("final edit did not receive delivery id: %#v", update)
+					}
 				}
 			}
 			if update.SendAsNew && update.Message.Content == "tool attachment" {
 				seenSeparate = true
 			}
-		case <-time.After(time.Second):
-			t.Fatal("missing schedule message callback")
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	if !seenFinal || !seenSeparate {
-		t.Fatalf("callbacks: final=%v separate=%v", seenFinal, seenSeparate)
+	if !seenStart || !seenFinal || !seenSeparate {
+		t.Fatalf("callbacks: start=%v final=%v separate=%v", seenStart, seenFinal, seenSeparate)
 	}
 }
 
@@ -378,5 +384,79 @@ func TestTaskSchedulerCreatesDedicatedMemorySessionAndCompletesAtMaxRuns(t *test
 	dedicated, err = st.Get(schedule.SessionID)
 	if err != nil || len(dedicated.Msgs) != 1 || dedicated.Msgs[0].Content != "remembered" {
 		t.Fatalf("dedicated session memory was not persisted: %#v err=%v", dedicated, err)
+	}
+}
+
+func TestFormatTaskScheduleMessageShowsStartingWhileRunning(t *testing.T) {
+	got := FormatTaskScheduleMessage(&model.TaskSchedule{
+		Name: "4h review", Status: model.TaskScheduleActive,
+		LastRunStatus: model.TaskRunRunning, IntervalSeconds: 3600,
+	})
+	if !strings.Contains(got, "Status: active · running") || !strings.Contains(got, "Last: Starting…") {
+		t.Fatalf("running start card = %q", got)
+	}
+}
+
+func TestRunNowMarksRunningAndRejectsOverlap(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	eng := &Engine{Sessions: st, Functions: model.NewFunctionRegistry()}
+	conversation, err := eng.CreateConversation(CreateConversationInput{
+		UserID: "user-1", Title: "monitor",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	scheduler := NewTaskScheduler(st, func(ctx context.Context, schedule *model.TaskSchedule) (string, error) {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		return "done", nil
+	}, nil)
+	scheduler.Start(context.Background())
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		scheduler.Stop()
+	})
+
+	schedule, err := scheduler.Create(CreateTaskScheduleInput{
+		UserID: "user-1", SessionID: conversation.SessionID,
+		Name: "price check", Prompt: "check", Interval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := scheduler.RunNow(schedule.ScheduleID, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastRunStatus != model.TaskRunRunning {
+		t.Fatalf("run now status = %q, want running", got.LastRunStatus)
+	}
+	messages, err := st.GetMessagesBySession(conversation.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || !strings.Contains(messages[0].Content, "Status: active · running") || !strings.Contains(messages[0].Content, "Last: Starting…") {
+		t.Fatalf("start card = %#v", messages)
+	}
+	if _, err := scheduler.RunNow(schedule.ScheduleID, "user-1"); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("overlap run now err = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("executor did not start")
+	}
+	if _, err := scheduler.RunNow(schedule.ScheduleID, "user-1"); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("in-flight run now err = %v", err)
 	}
 }
