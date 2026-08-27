@@ -369,7 +369,7 @@ func (ch *CoreHandler) validateWorkflowTools(tasks []*model.WorkflowTask, schedu
 		if scheduled && (strings.HasPrefix(task.Tool, "call_agent_") ||
 			task.Tool == "create_session" || task.Tool == "change_session" ||
 			task.Tool == "send_conversation" || task.Tool == "create_conversation" ||
-			task.Tool == "select_conversation") {
+			task.Tool == "select_conversation" || task.Tool == "delete_conversation") {
 			return fmt.Errorf("scheduled workflow task %q cannot route to or change an agent", task.ID)
 		}
 		if !ch.coreTools.Has(task.Tool) {

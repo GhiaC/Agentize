@@ -1,6 +1,29 @@
 package model
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+	"time"
+)
+
+func TestConversationRunStateRoundTrip(t *testing.T) {
+	conv := NewConversation("alice", "alice-c0001", "alice-s0001", "plan", "gpt", 1)
+	conv.RunState = &ConversationRunState{
+		Phase: "tool_executing", Detail: "Price history", Active: true,
+		UserMessageID: "alice-s0001-m0003", UpdatedAt: time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC),
+	}
+	raw, err := json.Marshal(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Conversation
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RunState == nil || !got.RunState.Active || got.RunState.Phase != "tool_executing" || got.RunState.UserMessageID != "alice-s0001-m0003" {
+		t.Fatalf("run state = %#v", got.RunState)
+	}
+}
 
 func TestGenerateConversationID(t *testing.T) {
 	got := GenerateConversationID("alice", 1)

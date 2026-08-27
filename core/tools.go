@@ -278,19 +278,25 @@ func (ch *CoreHandler) executeCoreToolWithError(
 	return result, err
 }
 
-// skipRedundantAgentCall records — but does NOT execute — a call_agent_* tool
-// call the Core emitted after it had already dispatched earlier in the same
-// turn. Running it would spin up another full worker agent whose answer the Core
-// would immediately discard (it returns the first agent's answer verbatim), so
-// the Core skips it. The skip is logged and marked on the routing DAG; the
-// returned string is the synthetic tool result that keeps the message history
-// well-formed. See processWithTools for the dispatch-only rationale.
+// skipRedundantAgentCall records — but does NOT execute — a dispatch tool
+// (call_agent_* or send_conversation) the Core emitted after it had already
+// dispatched earlier in the same turn. Running it would spin up another full
+// worker whose answer the Core would immediately discard (it returns the first
+// reply verbatim), so the Core skips it. The skip is logged and marked on the
+// routing DAG; the returned string is the synthetic tool result that keeps the
+// message history well-formed. See processWithTools for the dispatch-only rationale.
 func (ch *CoreHandler) skipRedundantAgentCall(ctx context.Context, toolCall openai.ToolCall) string {
-	agentName := strings.TrimPrefix(toolCall.Function.Name, "call_agent_")
-	label := agentName
-	if agent, ok := ch.agents.Get(agentName); ok {
-		agentName = agent.Config.Name
-		label = agentDispatchLabel(agent)
+	name := toolCall.Function.Name
+	label := name
+	if strings.HasPrefix(name, "call_agent_") {
+		agentName := strings.TrimPrefix(name, "call_agent_")
+		label = agentName
+		if agent, ok := ch.agents.Get(agentName); ok {
+			name = agent.Config.Name
+			label = agentDispatchLabel(agent)
+		} else {
+			name = agentName
+		}
 	}
 
 	var message string
@@ -299,10 +305,13 @@ func (ch *CoreHandler) skipRedundantAgentCall(ctx context.Context, toolCall open
 		message, _ = args["message"].(string)
 	}
 
-	routeRecorderFrom(ctx).SkipDispatch(agentName, label, message)
-	log.Log.Infof("[CoreHandler] ⏭️  Skipping redundant agent call (already dispatched this turn) | Agent: %s", agentName)
+	routeRecorderFrom(ctx).SkipDispatch(name, label, message)
+	log.Log.Infof("[CoreHandler] ⏭️  Skipping redundant dispatch (already dispatched this turn) | Target: %s", name)
 
-	return fmt.Sprintf("Skipped: the Core already routed to another agent in this turn, so %s was not called.", agentName)
+	if toolCall.Function.Name == "send_conversation" {
+		return "Skipped: the Core already routed this turn, so send_conversation was not called."
+	}
+	return fmt.Sprintf("Skipped: the Core already routed to another agent in this turn, so %s was not called.", name)
 }
 
 // runCoreToolImpl runs the Core tool logic (switch on tool name).
@@ -401,6 +410,8 @@ func (ch *CoreHandler) runCoreToolImpl(
 
 	case "list_conversations":
 		return ch.listConversationsTool(userID)
+	case "get_conversation":
+		return ch.getConversationTool(ctx, userID, args)
 	case "create_conversation":
 		return ch.createConversationTool(ctx, userID, args)
 	case "select_conversation":
@@ -409,6 +420,12 @@ func (ch *CoreHandler) runCoreToolImpl(
 		return ch.sendConversationTool(ctx, userID, args)
 	case "rename_conversation":
 		return ch.renameConversationTool(ctx, userID, args)
+	case "set_conversation_model":
+		return ch.setConversationModelTool(ctx, userID, args)
+	case "archive_conversation":
+		return ch.archiveConversationTool(ctx, userID, args)
+	case "delete_conversation":
+		return ch.deleteConversationTool(ctx, userID, args)
 
 	case "ban_user":
 		return ch.banUserTool(ctx, userID, args)
@@ -697,10 +714,14 @@ func (ch *CoreHandler) registerCoreTools() {
 	ch.coreTools.MustRegister("change_session", "تغییر نشست", coreToolNoOp)
 	ch.coreTools.MustRegister("list_sessions", "لیست نشست‌ها", coreToolNoOp)
 	ch.coreTools.MustRegister("list_conversations", "لیست گفتگوها", coreToolNoOp)
+	ch.coreTools.MustRegister("get_conversation", "جزئیات گفتگو", coreToolNoOp)
 	ch.coreTools.MustRegister("create_conversation", "ایجاد گفتگو", coreToolNoOp)
 	ch.coreTools.MustRegister("select_conversation", "انتخاب گفتگو", coreToolNoOp)
 	ch.coreTools.MustRegister("send_conversation", "ارسال به گفتگو", coreToolNoOp)
 	ch.coreTools.MustRegister("rename_conversation", "تغییر نام گفتگو", coreToolNoOp)
+	ch.coreTools.MustRegister("set_conversation_model", "تغییر مدل گفتگو", coreToolNoOp)
+	ch.coreTools.MustRegister("archive_conversation", "آرشیو گفتگو", coreToolNoOp)
+	ch.coreTools.MustRegister("delete_conversation", "حذف گفتگو", coreToolNoOp)
 	ch.coreTools.MustRegister("ban_user", "مسدود کاربر", coreToolNoOp)
 	ch.coreTools.MustRegister("sleep", "توقف موقت", coreToolNoOp)
 	ch.coreTools.MustRegister("web_search", "جستجوی وب", coreToolNoOp)

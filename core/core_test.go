@@ -185,8 +185,10 @@ func TestGetCoreToolsForLLM_ContainsExpectedTools(t *testing.T) {
 	if !names["change_session"] {
 		t.Error("tools should include change_session")
 	}
-	if !names["list_conversations"] || !names["create_conversation"] || !names["send_conversation"] {
-		t.Error("tools should include conversation list/create/send")
+	if !names["list_conversations"] || !names["create_conversation"] || !names["send_conversation"] ||
+		!names["get_conversation"] || !names["set_conversation_model"] || !names["archive_conversation"] ||
+		!names["delete_conversation"] {
+		t.Error("tools should include conversation list/create/send/get/model/archive/delete")
 	}
 	if !names["ban_user"] && !names["update_status"] {
 		t.Error("tools should include at least one of ban_user or update_status")

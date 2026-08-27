@@ -11,6 +11,17 @@ import (
 // files and any sub-agent workers. IDs never contain a title slug.
 //
 // Format: {UserID}-c{Seq}  e.g. alice-c0001
+// ConversationRunState is the last visible turn for this conversation. Hosts
+// persist it on the conversation row so a closed page can reconnect and show
+// the right loading state without guessing from the transcript.
+type ConversationRunState struct {
+	Phase         string    `json:"phase,omitempty"`
+	Detail        string    `json:"detail,omitempty"`
+	Active        bool      `json:"active"`
+	UserMessageID string    `json:"user_message_id,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+}
+
 type Conversation struct {
 	ConversationID string
 	UserID         string
@@ -22,6 +33,7 @@ type Conversation struct {
 	Seq       int
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	RunState  *ConversationRunState `json:"run_state,omitempty"`
 }
 
 // GenerateConversationID builds a stable conversation id with no slug.
