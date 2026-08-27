@@ -416,6 +416,9 @@ func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
 		scheduleLock.Unlock()
 		return
 	}
+	if err := s.ensureDedicatedWorkerSession(schedule); err != nil {
+		log.Log.Warnf("[TaskScheduler] failed to isolate worker session for %s: %v", scheduleID, err)
+	}
 
 	now := time.Now()
 	run := &model.TaskScheduleRun{
@@ -451,7 +454,6 @@ func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
 	}
 	var output string
 	var execErr error
-	ctx = s.withScheduleStatus(ctx, schedule)
 	if executor == nil {
 		execErr = fmt.Errorf("workflow schedule execution is not configured")
 	} else {
@@ -643,6 +645,65 @@ func (s *TaskScheduler) Create(input CreateTaskScheduleInput) (*model.TaskSchedu
 	}
 	s.notify()
 	return schedule, nil
+}
+
+// ensureDedicatedWorkerSession moves a legacy schedule off the source chat so
+// ProcessScheduledMessage cannot inject the prompt into the visible timeline.
+// The host keeps one upserted widget on SourceSessionID.
+func (s *TaskScheduler) ensureDedicatedWorkerSession(schedule *model.TaskSchedule) error {
+	if s == nil || s.store == nil || schedule == nil {
+		return nil
+	}
+	source := strings.TrimSpace(schedule.SourceSessionID)
+	if source == "" {
+		source = strings.TrimSpace(schedule.SessionID)
+		schedule.SourceSessionID = source
+	}
+	if source == "" {
+		return nil
+	}
+	if worker := strings.TrimSpace(schedule.SessionID); worker != "" && worker != source {
+		if strings.TrimSpace(schedule.StatusMessageID) == "" {
+			schedule.StatusMessageID = taskScheduleStatusMessageID(source, schedule.ScheduleID)
+			return s.store.PutTaskSchedule(schedule)
+		}
+		return nil
+	}
+	sourceSession, err := s.store.Get(source)
+	if err != nil {
+		return err
+	}
+	if sourceSession == nil {
+		return fmt.Errorf("source session not found")
+	}
+	agentType := schedule.AgentType
+	if agentType == "" {
+		agentType = sourceSession.AgentType
+	}
+	sessionSeq, err := s.store.GetNextSessionSeq(schedule.UserID, agentType)
+	if err != nil {
+		return fmt.Errorf("allocate schedule session: %w", err)
+	}
+	dedicatedSession := model.NewSessionWithID(
+		schedule.UserID,
+		model.GenerateSessionID(schedule.UserID, agentType, sessionSeq),
+		agentType,
+	)
+	dedicatedSession.Title = "Schedule: " + schedule.Name
+	dedicatedSession.Tags = []string{"schedule", "schedule:" + schedule.ScheduleID}
+	if err := s.store.Put(dedicatedSession); err != nil {
+		return fmt.Errorf("create dedicated schedule session: %w", err)
+	}
+	schedule.SessionID = dedicatedSession.SessionID
+	if strings.TrimSpace(schedule.StatusMessageID) == "" {
+		schedule.StatusMessageID = taskScheduleStatusMessageID(source, schedule.ScheduleID)
+	}
+	schedule.UpdatedAt = time.Now()
+	if err := s.store.PutTaskSchedule(schedule); err != nil {
+		_ = s.store.Delete(dedicatedSession.SessionID)
+		return err
+	}
+	return nil
 }
 
 // List returns schedules scoped to one user; empty userID is the admin view.

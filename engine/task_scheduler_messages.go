@@ -2,8 +2,6 @@ package engine
 
 import (
 	"context"
-	"crypto/sha256"
-	"fmt"
 	"strings"
 	"time"
 
@@ -16,23 +14,8 @@ func taskScheduleStatusMessageID(sourceSessionID, scheduleID string) string {
 	return sourceSessionID + "-schedule-" + scheduleID
 }
 
-func (s *TaskScheduler) withScheduleStatus(ctx context.Context, schedule *model.TaskSchedule) context.Context {
-	s.mu.Lock()
-	fn := s.messageFunc
-	s.mu.Unlock()
-	if fn == nil || schedule == nil {
-		return ctx
-	}
-	return WithStatusFunc(ctx, func(status *StatusUpdate) {
-		if status == nil || status.Phase != StatusCustom || strings.TrimSpace(status.Detail) == "" {
-			return
-		}
-		s.publishToolMessage(ctx, schedule, status)
-	})
-}
-
 // FormatTaskScheduleMessage is the one-line collapsed summary stored as Content.
-// Full run details live on Message.Metadata so the chat stays a compact chip.
+// Full run details live on Message.Metadata so the chat stays a compact widget.
 func FormatTaskScheduleMessage(schedule *model.TaskSchedule) string {
 	if schedule == nil {
 		return ""
@@ -67,40 +50,6 @@ func (s *TaskScheduler) publishFinalMessage(ctx context.Context, schedule *model
 		CreatedAt: time.Now(),
 	}
 	s.publishMessage(ctx, schedule, message, StatusCompleted, false)
-}
-
-func (s *TaskScheduler) publishToolMessage(ctx context.Context, schedule *model.TaskSchedule, status *StatusUpdate) {
-	messageID := strings.TrimSpace(status.MessageID)
-	sendAsNew := status.SendAsNewMessage
-	createdAt := schedule.CreatedAt
-	prefixSourceSession := true
-	switch {
-	case status.SendAsNewMessage:
-		messageID = newTaskID("smsg")
-		createdAt = time.Now()
-	case messageID != "":
-		hash := sha256.Sum256([]byte(messageID))
-		messageID = fmt.Sprintf("status-%x", hash[:8])
-		createdAt = time.Now()
-	default:
-		// update_status without an explicit target is the schedule's progress
-		// message. It is deliberately overwritten by the compact final result.
-		messageID = strings.TrimSpace(schedule.StatusMessageID)
-		if messageID == "" {
-			messageID = taskScheduleStatusMessageID(schedule.SourceSessionID, schedule.ScheduleID)
-		}
-		prefixSourceSession = false
-	}
-	if prefixSourceSession {
-		messageID = schedule.SourceSessionID + "-" + messageID
-	}
-	message := &model.Message{
-		MessageID: messageID,
-		UserID:    schedule.UserID, SessionID: schedule.SourceSessionID,
-		Role: openai.ChatMessageRoleAssistant, Content: strings.TrimSpace(status.Detail),
-		AgentType: schedule.AgentType, ContentType: model.ContentTypeText, CreatedAt: createdAt,
-	}
-	s.publishMessage(ctx, schedule, message, status.Phase, sendAsNew)
 }
 
 func (s *TaskScheduler) publishMessage(

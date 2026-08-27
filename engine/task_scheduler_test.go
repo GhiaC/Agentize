@@ -86,16 +86,12 @@ func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 2 {
-		t.Fatalf("source chat messages = %d, want final + separate tool message; %#v", len(messages), messages)
+	if len(messages) != 1 {
+		t.Fatalf("source chat messages = %d, want the one schedule widget; %#v", len(messages), messages)
 	}
-	var final, tool *model.Message
-	for _, message := range messages {
-		if message.MessageID == schedule.StatusMessageID {
-			final = message
-		} else {
-			tool = message
-		}
+	final := messages[0]
+	if final.MessageID != schedule.StatusMessageID {
+		t.Fatalf("widget id = %q, want %q", final.MessageID, schedule.StatusMessageID)
 	}
 	if final == nil || !strings.Contains(final.Content, "price check") || !strings.Contains(final.Content, "succeeded") {
 		t.Fatalf("final schedule message = %#v", final)
@@ -114,9 +110,6 @@ func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) 
 	if !strings.Contains(last, "latest result") {
 		t.Fatalf("schedule meta last = %#v", body)
 	}
-	if tool == nil || tool.Content != "tool attachment" {
-		t.Fatalf("separate tool message = %#v", tool)
-	}
 	var current *model.TaskSchedule
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -134,34 +127,98 @@ func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) 
 	}
 
 	seenFinal := false
-	seenSeparate := false
 	seenStart := false
 	drainUntil := time.Now().Add(2 * time.Second)
-	for time.Now().Before(drainUntil) && (!seenFinal || !seenSeparate) {
+	for time.Now().Before(drainUntil) && (!seenFinal || !seenStart) {
 		select {
 		case update := <-updates:
 			if update.ConversationID != conversation.ConversationID {
 				t.Fatalf("callback conversation = %q", update.ConversationID)
 			}
-			if update.Message.MessageID == schedule.StatusMessageID {
-				if strings.Contains(update.Message.Content, "running") {
-					seenStart = true
-				}
-				if strings.Contains(update.Message.Content, "succeeded") {
-					seenFinal = true
-					if update.DeliveryID != "chat-message-42" {
-						t.Fatalf("final edit did not receive delivery id: %#v", update)
-					}
-				}
+			if update.Message.MessageID != schedule.StatusMessageID {
+				t.Fatalf("unexpected extra source-chat message: %#v", update.Message)
 			}
-			if update.SendAsNew && update.Message.Content == "tool attachment" {
-				seenSeparate = true
+			if strings.Contains(update.Message.Content, "running") {
+				seenStart = true
+			}
+			if strings.Contains(update.Message.Content, "succeeded") {
+				seenFinal = true
+				if update.DeliveryID != "chat-message-42" {
+					t.Fatalf("final edit did not receive delivery id: %#v", update)
+				}
 			}
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	if !seenStart || !seenFinal || !seenSeparate {
-		t.Fatalf("callbacks: start=%v final=%v separate=%v", seenStart, seenFinal, seenSeparate)
+	if !seenStart || !seenFinal {
+		t.Fatalf("callbacks: start=%v final=%v", seenStart, seenFinal)
+	}
+}
+
+func TestTaskSchedulerMovesLegacySharedSessionOffSourceChat(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	prompt := "this is the long scheduled prompt that must not appear in source chat"
+	scheduler := NewTaskScheduler(st, func(_ context.Context, schedule *model.TaskSchedule) (string, error) {
+		user := model.NewUserMessage("legacy-user", 1, schedule.UserID, schedule.SessionID, prompt, model.ContentTypeText)
+		if err := st.PutMessage(user); err != nil {
+			return "", err
+		}
+		assistant := &model.Message{
+			MessageID: "legacy-assistant", UserID: schedule.UserID, SessionID: schedule.SessionID,
+			Role: openai.ChatMessageRoleAssistant, Content: "worker reply", CreatedAt: time.Now(),
+		}
+		if err := st.PutMessage(assistant); err != nil {
+			return "", err
+		}
+		return "worker reply", nil
+	}, nil)
+	scheduler.Start(context.Background())
+	t.Cleanup(scheduler.Stop)
+
+	now := time.Now()
+	legacy := &model.TaskSchedule{
+		ScheduleID: "sch-legacy", UserID: "user-1",
+		SourceSessionID: "user-1-low-s0001", SessionID: "user-1-low-s0001",
+		AgentType: model.AgentTypeLow, Name: "1h", Prompt: prompt,
+		IntervalSeconds: 3600, Status: model.TaskScheduleActive,
+		NextRunAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.PutTaskSchedule(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduler.RunNow(legacy.ScheduleID, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var current *model.TaskSchedule
+	for time.Now().Before(deadline) {
+		var err error
+		current, err = scheduler.Get(legacy.ScheduleID, "user-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.RunCount == 1 && current.SessionID != current.SourceSessionID {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if current == nil || current.SessionID == current.SourceSessionID {
+		t.Fatalf("legacy schedule stayed on source chat: %#v", current)
+	}
+	source, err := st.GetMessagesBySession(current.SourceSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(source) != 1 || source[0].MessageID != current.StatusMessageID {
+		t.Fatalf("source chat = %#v", source)
+	}
+	worker, err := st.GetMessagesBySession(current.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(worker) != 2 {
+		t.Fatalf("worker transcript = %#v", worker)
 	}
 }
 

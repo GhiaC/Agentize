@@ -52,9 +52,6 @@ func NewScheduleMessageMeta(schedule *TaskSchedule) map[string]any {
 	if schedule.LastError != "" {
 		last = strings.TrimSpace(schedule.LastError)
 	}
-	if last == "" && schedule.LastRunStatus == TaskRunRunning {
-		last = "Starting…"
-	}
 	last = truncateMetaText(last, scheduleMetaTextLimit)
 	meta := map[string]any{
 		"kind":      MessageMetaKindSchedule,
