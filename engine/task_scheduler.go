@@ -438,6 +438,7 @@ func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
 	running := *schedule
 	scheduleLock.Unlock()
 	s.publishScheduleState(ctx, &running)
+	s.publishRunPrompt(ctx, &running, run.RunID)
 	if err := s.store.PutTaskScheduleRun(run); err != nil {
 		log.Log.Errorf("[TaskScheduler] failed to create run for %s: %v", scheduleID, err)
 	}

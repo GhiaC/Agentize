@@ -53,6 +53,30 @@ func (s *TaskScheduler) publishScheduleState(ctx context.Context, schedule *mode
 	}
 }
 
+func (s *TaskScheduler) publishRunPrompt(ctx context.Context, schedule *model.TaskSchedule, runID string) {
+	if s == nil || schedule == nil {
+		return
+	}
+	source := strings.TrimSpace(schedule.SourceSessionID)
+	prompt := strings.TrimSpace(schedule.Prompt)
+	if source == "" || prompt == "" {
+		return
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		runID = newTaskID("run")
+	}
+	user := &model.Message{
+		MessageID: scheduleRunMessageID(source, runID, "1-user"),
+		UserID:    schedule.UserID, SessionID: source,
+		Role: openai.ChatMessageRoleUser, Content: prompt,
+		AgentType: schedule.AgentType, ContentType: model.ContentTypeText,
+		CreatedAt: time.Now(),
+	}
+	sameSession := strings.TrimSpace(schedule.SessionID) == source
+	s.emitChatMessage(ctx, schedule, user, StatusReceived, true, !sameSession)
+}
+
 // publishRunTranscript writes this run's prompt and LLM result into the source
 // chat as ordinary user/assistant messages so every execution stays visible.
 func (s *TaskScheduler) publishRunTranscript(ctx context.Context, schedule *model.TaskSchedule, runID string) {
@@ -89,14 +113,8 @@ func (s *TaskScheduler) publishRunTranscript(ctx context.Context, schedule *mode
 		}
 	}
 
-	if persist {
-		if user != nil {
-			s.publishMessage(ctx, schedule, user, StatusCustom, true)
-		}
-		if assistant != nil {
-			s.publishMessage(ctx, schedule, assistant, StatusCompleted, true)
-		}
-	}
+	s.emitChatMessage(ctx, schedule, user, StatusCustom, true, persist)
+	s.emitChatMessage(ctx, schedule, assistant, StatusCompleted, true, persist)
 	s.publishScheduleState(ctx, schedule)
 }
 
@@ -182,12 +200,25 @@ func (s *TaskScheduler) publishMessage(
 	phase StatusPhase,
 	sendAsNew bool,
 ) {
+	s.emitChatMessage(ctx, schedule, message, phase, sendAsNew, true)
+}
+
+func (s *TaskScheduler) emitChatMessage(
+	ctx context.Context,
+	schedule *model.TaskSchedule,
+	message *model.Message,
+	phase StatusPhase,
+	sendAsNew bool,
+	persist bool,
+) {
 	if message == nil {
 		return
 	}
-	if err := s.store.PutMessage(message); err != nil {
-		log.Log.Warnf("[TaskScheduler] failed to persist chat message %s: %v", message.MessageID, err)
-		return
+	if persist {
+		if err := s.store.PutMessage(message); err != nil {
+			log.Log.Warnf("[TaskScheduler] failed to persist chat message %s: %v", message.MessageID, err)
+			return
+		}
 	}
 	s.mu.Lock()
 	fn := s.messageFunc
