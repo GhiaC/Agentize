@@ -47,11 +47,12 @@ type RegisteredAgent struct {
 // AgentManager is a dynamic registry of agents. It replaces the hardcoded
 // userAgentHigh / userAgentLow fields in the old CoreHandler.
 type AgentManager struct {
-	agents         map[string]*RegisteredAgent
-	sessionHandler *model.SessionHandler
-	toolApprovals  engine.ToolApprovalManager
-	fileStore      filestore.FileStore
-	mu             sync.RWMutex
+	agents           map[string]*RegisteredAgent
+	sessionHandler   *model.SessionHandler
+	toolApprovals    engine.ToolApprovalManager
+	scheduleMessages engine.TaskScheduleMessageFunc
+	fileStore        filestore.FileStore
+	mu               sync.RWMutex
 }
 
 // New creates an empty AgentManager. sessionHandler may be nil if session
@@ -95,6 +96,7 @@ func (am *AgentManager) Register(config AgentConfig, eng *engine.Engine) error {
 	// worker to its own session type so one persisted schedule is never executed
 	// once by every agent.
 	eng.SetTaskSchedulerAgentTypes(config.AgentType)
+	eng.SetTaskScheduleMessageFunc(am.scheduleMessages)
 	eng.SetToolApprovalManager(am.toolApprovals)
 
 	if am.sessionHandler != nil {
@@ -102,6 +104,19 @@ func (am *AgentManager) Register(config AgentConfig, eng *engine.Engine) error {
 	}
 
 	return nil
+}
+
+// SetTaskScheduleMessageFunc applies one durable chat-message sink to all
+// current and future worker-agent schedulers.
+func (am *AgentManager) SetTaskScheduleMessageFunc(fn engine.TaskScheduleMessageFunc) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	am.scheduleMessages = fn
+	for _, agent := range am.agents {
+		if agent.Engine != nil {
+			agent.Engine.SetTaskScheduleMessageFunc(fn)
+		}
+	}
 }
 
 // SetFileStore shares one byte store with all current and future worker agents.

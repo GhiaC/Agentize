@@ -328,7 +328,10 @@ func taskScheduleSummary(schedule *model.TaskSchedule) map[string]interface{} {
 	return map[string]interface{}{
 		"schedule_id": schedule.ScheduleID, "name": schedule.Name, "status": schedule.Status,
 		"kind": kind, "agent_type": schedule.AgentType, "session_id": schedule.SessionID,
-		"interval_seconds": schedule.IntervalSeconds, "next_run_at": schedule.NextRunAt,
+		"source_conversation_id": schedule.SourceConversationID,
+		"status_message_id":      schedule.StatusMessageID,
+		"status_delivery_id":     schedule.StatusDeliveryID,
+		"interval_seconds":       schedule.IntervalSeconds, "next_run_at": schedule.NextRunAt,
 		"max_runs": schedule.MaxRuns, "run_count": schedule.RunCount,
 		"last_run_status": schedule.LastRunStatus, "last_workflow_id": schedule.LastWorkflowID,
 		"last_conclusion":  truncateTaskScheduleText(schedule.LastConclusion, 1000),

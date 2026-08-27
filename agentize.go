@@ -457,6 +457,14 @@ func (ag *Agentize) GetTaskScheduler() *engine.TaskScheduler {
 	return ag.engine.GetTaskScheduler()
 }
 
+// SetTaskScheduleMessageFunc wires durable background schedule message upserts
+// to the host chat transport.
+func (ag *Agentize) SetTaskScheduleMessageFunc(fn engine.TaskScheduleMessageFunc) {
+	if scheduler := ag.GetTaskScheduler(); scheduler != nil {
+		scheduler.SetMessageFunc(fn)
+	}
+}
+
 // CreateTaskSchedule creates a recurring task through the public Go API.
 func (ag *Agentize) CreateTaskSchedule(input engine.CreateTaskScheduleInput) (*model.TaskSchedule, error) {
 	scheduler := ag.GetTaskScheduler()

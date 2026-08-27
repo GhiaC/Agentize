@@ -1384,8 +1384,16 @@ func (s *SQLiteStore) PutMessage(message *model.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.checkMessageQuota(message.SessionID, 1); err != nil {
-		return err
+	// Replacing a durable status/tool message is an edit, not a new message. It
+	// must remain possible when the session has reached its message quota.
+	var exists int
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM messages WHERE message_id = ?)`, message.MessageID).Scan(&exists); err != nil {
+		return fmt.Errorf("failed to check existing message: %w", err)
+	}
+	if exists == 0 {
+		if err := s.checkMessageQuota(message.SessionID, 1); err != nil {
+			return err
+		}
 	}
 
 	if _, err := s.execWrite(messageInsertSQL, messageInsertArgs(message)...); err != nil {

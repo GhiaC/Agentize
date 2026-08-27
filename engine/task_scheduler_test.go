@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +25,124 @@ func newTaskSchedulerTestStore(t *testing.T) *store.SQLiteStore {
 		t.Fatal(err)
 	}
 	return st
+}
+
+func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	eng := &Engine{Sessions: st, Functions: model.NewFunctionRegistry()}
+	conversation, err := eng.CreateConversation(CreateConversationInput{
+		UserID: "user-1", Title: "monitor",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updates := make(chan *TaskScheduleMessageUpdate, 8)
+	scheduler := NewTaskScheduler(st, func(ctx context.Context, schedule *model.TaskSchedule) (string, error) {
+		NotifyStatus(ctx, schedule.UserID, schedule.SessionID, StatusCustom, "checking")
+		NotifyStatus(ctx, schedule.UserID, schedule.SessionID, StatusCustom, "tool attachment", OptSendAsNewMessage())
+		return "latest result", nil
+	}, nil)
+	scheduler.SetMessageFunc(func(_ context.Context, update *TaskScheduleMessageUpdate) (string, error) {
+		updates <- update
+		if !update.SendAsNew {
+			return "chat-message-42", nil
+		}
+		return "", nil
+	})
+	scheduler.Start(context.Background())
+	t.Cleanup(scheduler.Stop)
+
+	schedule, err := scheduler.Create(CreateTaskScheduleInput{
+		UserID: "user-1", SessionID: conversation.SessionID,
+		Name: "price check", Prompt: "check", Interval: time.Hour, MaxRuns: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schedule.SourceConversationID != conversation.ConversationID {
+		t.Fatalf("source conversation = %q, want %q", schedule.SourceConversationID, conversation.ConversationID)
+	}
+	if schedule.StatusMessageID == "" {
+		t.Fatal("status message id was not persisted at creation")
+	}
+	if _, err := scheduler.RunNow(schedule.ScheduleID, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, getErr := scheduler.Get(schedule.ScheduleID, "user-1")
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if current.RunCount == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	messages, err := st.GetMessagesBySession(conversation.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("source chat messages = %d, want final + separate tool message; %#v", len(messages), messages)
+	}
+	var final, tool *model.Message
+	for _, message := range messages {
+		if message.MessageID == schedule.StatusMessageID {
+			final = message
+		} else {
+			tool = message
+		}
+	}
+	if final == nil || !strings.Contains(final.Content, "Status: active · succeeded") ||
+		!strings.Contains(final.Content, "Repeat: 1/2") || !strings.Contains(final.Content, "Last: latest result") {
+		t.Fatalf("final schedule message = %#v", final)
+	}
+	if tool == nil || tool.Content != "tool attachment" {
+		t.Fatalf("separate tool message = %#v", tool)
+	}
+	var current *model.TaskSchedule
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, err = scheduler.Get(schedule.ScheduleID, "user-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.StatusDeliveryID == "chat-message-42" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if current == nil || current.StatusDeliveryID != "chat-message-42" {
+		t.Fatalf("persisted delivery id = %#v", current)
+	}
+
+	seenFinal := false
+	seenSeparate := false
+	for i := 0; i < 3; i++ {
+		select {
+		case update := <-updates:
+			if update.ConversationID != conversation.ConversationID {
+				t.Fatalf("callback conversation = %q", update.ConversationID)
+			}
+			if update.Message.MessageID == schedule.StatusMessageID {
+				seenFinal = true
+				if update.Message.Content != "checking" && update.DeliveryID != "chat-message-42" {
+					t.Fatalf("final edit did not receive delivery id: %#v", update)
+				}
+			}
+			if update.SendAsNew && update.Message.Content == "tool attachment" {
+				seenSeparate = true
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing schedule message callback")
+		}
+	}
+	if !seenFinal || !seenSeparate {
+		t.Fatalf("callbacks: final=%v separate=%v", seenFinal, seenSeparate)
+	}
 }
 
 func TestTaskSchedulerRunConclusionAndLifecycle(t *testing.T) {

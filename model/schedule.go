@@ -30,19 +30,29 @@ const (
 // the raw output is also sent to that (usually cheaper) model and its compact
 // conclusion is persisted alongside the raw output.
 type TaskSchedule struct {
-	ScheduleID       string             `json:"schedule_id" bson:"schedule_id"`
-	UserID           string             `json:"user_id" bson:"user_id"`
-	SourceSessionID  string             `json:"source_session_id,omitempty" bson:"source_session_id,omitempty"`
-	SessionID        string             `json:"session_id" bson:"session_id"`
-	AgentType        AgentType          `json:"agent_type,omitempty" bson:"agent_type,omitempty"`
-	Name             string             `json:"name" bson:"name"`
-	Prompt           string             `json:"prompt" bson:"prompt"`
-	WorkflowTasks    []*WorkflowTask    `json:"workflow_tasks,omitempty" bson:"workflow_tasks,omitempty"`
-	IntervalSeconds  int64              `json:"interval_seconds" bson:"interval_seconds"`
-	MaxRuns          int64              `json:"max_runs,omitempty" bson:"max_runs,omitempty"`
-	ConclusionModel  string             `json:"conclusion_model,omitempty" bson:"conclusion_model,omitempty"`
-	ConclusionPrompt string             `json:"conclusion_prompt,omitempty" bson:"conclusion_prompt,omitempty"`
-	Status           TaskScheduleStatus `json:"status" bson:"status"`
+	ScheduleID      string `json:"schedule_id" bson:"schedule_id"`
+	UserID          string `json:"user_id" bson:"user_id"`
+	SourceSessionID string `json:"source_session_id,omitempty" bson:"source_session_id,omitempty"`
+	// SourceConversationID is the public chat identity when SourceSessionID is a
+	// Conversation main session. Core-owned schedules leave it empty.
+	SourceConversationID string             `json:"source_conversation_id,omitempty" bson:"source_conversation_id,omitempty"`
+	SessionID            string             `json:"session_id" bson:"session_id"`
+	AgentType            AgentType          `json:"agent_type,omitempty" bson:"agent_type,omitempty"`
+	Name                 string             `json:"name" bson:"name"`
+	Prompt               string             `json:"prompt" bson:"prompt"`
+	WorkflowTasks        []*WorkflowTask    `json:"workflow_tasks,omitempty" bson:"workflow_tasks,omitempty"`
+	IntervalSeconds      int64              `json:"interval_seconds" bson:"interval_seconds"`
+	MaxRuns              int64              `json:"max_runs,omitempty" bson:"max_runs,omitempty"`
+	ConclusionModel      string             `json:"conclusion_model,omitempty" bson:"conclusion_model,omitempty"`
+	ConclusionPrompt     string             `json:"conclusion_prompt,omitempty" bson:"conclusion_prompt,omitempty"`
+	Status               TaskScheduleStatus `json:"status" bson:"status"`
+	// StatusMessageID is the durable, host-visible message that is edited after
+	// every run. Tool messages use their own IDs and never replace this message.
+	StatusMessageID string `json:"status_message_id,omitempty" bson:"status_message_id,omitempty"`
+	// StatusDeliveryID is the transport-assigned id returned by the host after
+	// the first send (for example a Telegram/Bale message id). Later callbacks
+	// receive it so they can edit the exact remote message after a restart.
+	StatusDeliveryID string `json:"status_delivery_id,omitempty" bson:"status_delivery_id,omitempty"`
 
 	RunCount       int64         `json:"run_count" bson:"run_count"`
 	LastRunStatus  TaskRunStatus `json:"last_run_status,omitempty" bson:"last_run_status,omitempty"`

@@ -171,7 +171,8 @@ type CoreHandler struct {
 	// conversationEngine runs Conversation create/list/send without routing
 	// through call_agent_low/high. Optional; conversation tools fail closed
 	// when unset.
-	conversationEngine *engine.Engine
+	conversationEngine  *engine.Engine
+	scheduleMessageFunc engine.TaskScheduleMessageFunc
 }
 
 // FileRecorder records an uploaded or generated file against a session. Its
@@ -195,6 +196,22 @@ func (ch *CoreHandler) SetFileRecorder(recorder FileRecorder) {
 // main sessions. ChatBot Core uses it to list/select/send as if messaging those chats.
 func (ch *CoreHandler) SetConversationEngine(eng *engine.Engine) {
 	ch.conversationEngine = eng
+	if eng != nil {
+		eng.SetTaskScheduleMessageFunc(ch.scheduleMessageFunc)
+	}
+}
+
+// SetTaskScheduleMessageFunc wires background schedule messages to the host
+// chat transport. Core and first-class Conversation hosts can share one sink.
+func (ch *CoreHandler) SetTaskScheduleMessageFunc(fn engine.TaskScheduleMessageFunc) {
+	ch.scheduleMessageFunc = fn
+	if ch.taskScheduler != nil {
+		ch.taskScheduler.SetMessageFunc(fn)
+	}
+	ch.agents.SetTaskScheduleMessageFunc(fn)
+	if ch.conversationEngine != nil {
+		ch.conversationEngine.SetTaskScheduleMessageFunc(fn)
+	}
 }
 
 // NewCoreHandler creates a new CoreHandler with the given AgentManager.

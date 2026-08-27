@@ -169,8 +169,12 @@ func testQuotas(t *testing.T, st Store) {
 	if err := st.PutMessage(m3); !errors.Is(err, ErrQuotaExceeded) {
 		t.Errorf("PutMessage over quota: got %v, want ErrQuotaExceeded", err)
 	}
-	// Re-upserting an existing message id still counts against the limit
-	// conservatively, but updating files with the same ID does not (below).
+	// Editing an existing logical message remains allowed at the limit. Durable
+	// schedule status messages use this path on every recurrence.
+	existing := model.NewUserMessage(s.SessionID+"-m0001", 1, "user-1", s.SessionID, "edited", model.ContentTypeText)
+	if err := st.PutMessage(existing); err != nil {
+		t.Errorf("PutMessage update of existing message rejected: %v", err)
+	}
 
 	// File count quota.
 	uf1 := &model.UserFile{FileID: "uf-1", UserID: "user-1", SessionID: s.SessionID, Name: "a", Size: 10, StorageKey: "user-1/uf-1-a", CreatedAt: time.Now()}

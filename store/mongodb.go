@@ -1428,8 +1428,16 @@ func (s *MongoDBStore) PutMessage(message *model.Message) error {
 	ctx, cancel := s.opCtx()
 	defer cancel()
 
-	if err := s.checkMessageQuota(ctx, message.SessionID, 1); err != nil {
-		return err
+	// An upsert of an existing logical message is an edit and must not consume
+	// another quota slot (schedule status messages rely on this across runs).
+	existing, err := s.messagesCollection.CountDocuments(ctx, bson.M{"_id": message.MessageID}, options.Count().SetLimit(1))
+	if err != nil {
+		return fmt.Errorf("failed to check existing message: %w", err)
+	}
+	if existing == 0 {
+		if err := s.checkMessageQuota(ctx, message.SessionID, 1); err != nil {
+			return err
+		}
 	}
 
 	data, err := json.Marshal(message)

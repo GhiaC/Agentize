@@ -35,6 +35,24 @@ type ScheduledConclusion struct {
 // ScheduledConclusionFunc sends a task's output to an optional conclusion model.
 type ScheduledConclusionFunc func(ctx context.Context, schedule *model.TaskSchedule, output string) (ScheduledConclusion, error)
 
+// TaskScheduleMessageFunc receives durable chat-message upserts produced by a
+// background schedule. On the first status send it returns the transport's
+// assigned message id; later updates receive that id and edit the same message.
+// The returned id is ignored for tool messages marked SendAsNew.
+type TaskScheduleMessageFunc func(ctx context.Context, update *TaskScheduleMessageUpdate) (deliveryID string, err error)
+
+// TaskScheduleMessageUpdate is transport-neutral so the same scheduler works
+// for Core chatbots and first-class Conversations.
+type TaskScheduleMessageUpdate struct {
+	Message        *model.Message
+	Schedule       *model.TaskSchedule
+	ScheduleID     string
+	ConversationID string
+	DeliveryID     string
+	Phase          StatusPhase
+	SendAsNew      bool
+}
+
 // CreateTaskScheduleInput is shared by the LLM tool, admin page, and public API.
 type CreateTaskScheduleInput struct {
 	UserID string
@@ -64,6 +82,7 @@ type TaskScheduler struct {
 	// Core scheduler and does not invoke a planner LLM.
 	workflowExecutor ScheduledTaskExecutor
 	concluder        ScheduledConclusionFunc
+	messageFunc      TaskScheduleMessageFunc
 	pollEvery        time.Duration
 
 	mu       sync.Mutex
@@ -77,6 +96,17 @@ type TaskScheduler struct {
 	// Serializes short persisted lifecycle transitions. Task execution itself
 	// never holds this lock, so unrelated schedules can still run concurrently.
 	lifecycleMu sync.Mutex
+}
+
+// SetMessageFunc wires the host chat transport. The persisted MessageID is the
+// idempotency/edit key; hosts may keep a mapping from it to Telegram/Bale/etc.
+func (s *TaskScheduler) SetMessageFunc(fn TaskScheduleMessageFunc) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.messageFunc = fn
+	s.mu.Unlock()
 }
 
 // SetWorkflowExecutor enables deterministic workflow schedules. A scheduler
@@ -160,6 +190,15 @@ func (e *Engine) GetTaskScheduler() *TaskScheduler {
 	e.taskSchedulerMu.RLock()
 	defer e.taskSchedulerMu.RUnlock()
 	return e.taskScheduler
+}
+
+// SetTaskScheduleMessageFunc wires durable schedule chat-message upserts for
+// this Engine. It is safe to call before or after the worker starts.
+func (e *Engine) SetTaskScheduleMessageFunc(fn TaskScheduleMessageFunc) {
+	e.InitializeTaskScheduler()
+	if scheduler := e.GetTaskScheduler(); scheduler != nil {
+		scheduler.SetMessageFunc(fn)
+	}
 }
 
 // SetTaskSchedulerAgentTypes scopes this Engine's worker to schedules created
@@ -410,6 +449,7 @@ func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
 	}
 	var output string
 	var execErr error
+	ctx = s.withScheduleStatus(ctx, schedule)
 	if executor == nil {
 		execErr = fmt.Errorf("workflow schedule execution is not configured")
 	} else {
@@ -487,6 +527,7 @@ func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
 		log.Log.Errorf("[TaskScheduler] failed to update schedule %s: %v", scheduleID, err)
 	}
 	scheduleLock.Unlock()
+	s.publishFinalMessage(ctx, current)
 }
 
 // Create validates and persists a new active schedule.
@@ -583,6 +624,13 @@ func (s *TaskScheduler) Create(input CreateTaskScheduleInput) (*model.TaskSchedu
 		Status: model.TaskScheduleActive, NextRunAt: now.Add(input.Interval),
 		CreatedAt: now, UpdatedAt: now,
 	}
+	if conversation, convErr := s.store.GetConversationBySession(input.SessionID); convErr != nil {
+		_ = s.store.Delete(dedicatedSession.SessionID)
+		return nil, fmt.Errorf("resolve source conversation: %w", convErr)
+	} else if conversation != nil {
+		schedule.SourceConversationID = conversation.ConversationID
+	}
+	schedule.StatusMessageID = taskScheduleStatusMessageID(input.SessionID, scheduleID)
 	if err := schedule.Validate(); err != nil {
 		_ = s.store.Delete(dedicatedSession.SessionID)
 		return nil, err
@@ -674,6 +722,7 @@ func (s *TaskScheduler) changeStatus(
 		s.cancelRun(schedule.ScheduleID)
 	}
 	s.notify()
+	s.publishFinalMessage(context.Background(), schedule)
 	return schedule, nil
 }
 
