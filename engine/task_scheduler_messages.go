@@ -6,14 +6,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/ghiac/agentize/log"
 	"github.com/ghiac/agentize/model"
 	"github.com/sashabaranov/go-openai"
 )
-
-const taskScheduleLastMessageLimit = 600
 
 func taskScheduleStatusMessageID(sourceSessionID, scheduleID string) string {
 	return sourceSessionID + "-schedule-" + scheduleID
@@ -34,38 +31,20 @@ func (s *TaskScheduler) withScheduleStatus(ctx context.Context, schedule *model.
 	})
 }
 
-// FormatTaskScheduleMessage produces the compact durable status shown in chat.
-// Hosts may instead format the structured Schedule available from their own
-// store, but this default always contains lifecycle, recurrence, and last text.
+// FormatTaskScheduleMessage is the one-line collapsed summary stored as Content.
+// Full run details live on Message.Metadata so the chat stays a compact chip.
 func FormatTaskScheduleMessage(schedule *model.TaskSchedule) string {
 	if schedule == nil {
 		return ""
 	}
-	last := strings.TrimSpace(schedule.LastConclusion)
-	if last == "" {
-		last = strings.TrimSpace(schedule.LastOutput)
+	status := strings.TrimSpace(string(schedule.LastRunStatus))
+	if status == "" {
+		status = string(schedule.Status)
 	}
-	if schedule.LastError != "" {
-		last = strings.TrimSpace(schedule.LastError)
+	if status == "" {
+		status = "—"
 	}
-	if last == "" {
-		if schedule.LastRunStatus == model.TaskRunRunning {
-			last = "Starting…"
-		} else {
-			last = "—"
-		}
-	}
-	last = truncateRunes(last, taskScheduleLastMessageLimit)
-	runs := fmt.Sprintf("%d/∞", schedule.RunCount)
-	if schedule.MaxRuns > 0 {
-		runs = fmt.Sprintf("%d/%d", schedule.RunCount, schedule.MaxRuns)
-	}
-	status := string(schedule.Status)
-	if schedule.LastRunStatus != "" {
-		status += " · " + string(schedule.LastRunStatus)
-	}
-	return fmt.Sprintf("⏱️ %s\nStatus: %s\nRepeat: %s · every %s\nLast: %s",
-		schedule.Name, status, runs, schedule.Interval(), last)
+	return "⏱️ " + schedule.Name + " · " + status
 }
 
 func (s *TaskScheduler) publishFinalMessage(ctx context.Context, schedule *model.TaskSchedule) {
@@ -83,7 +62,8 @@ func (s *TaskScheduler) publishFinalMessage(ctx context.Context, schedule *model
 	message := &model.Message{
 		MessageID: messageID, UserID: schedule.UserID, SessionID: schedule.SourceSessionID,
 		Role: openai.ChatMessageRoleAssistant, Content: FormatTaskScheduleMessage(schedule),
-		AgentType: schedule.AgentType, ContentType: model.ContentTypeText,
+		AgentType: schedule.AgentType, ContentType: model.ContentTypeWidget,
+		Metadata:  model.NewScheduleMessageMeta(schedule),
 		CreatedAt: time.Now(),
 	}
 	s.publishMessage(ctx, schedule, message, StatusCompleted, false)
@@ -172,12 +152,4 @@ func (s *TaskScheduler) persistStatusDeliveryID(scheduleID, deliveryID string) {
 	if err := s.store.PutTaskSchedule(current); err != nil {
 		log.Log.Warnf("[TaskScheduler] failed to persist delivery id for %s: %v", scheduleID, err)
 	}
-}
-
-func truncateRunes(text string, limit int) string {
-	if limit <= 0 || utf8.RuneCountInString(text) <= limit {
-		return text
-	}
-	runes := []rune(text)
-	return strings.TrimSpace(string(runes[:limit])) + "…"
 }

@@ -10,10 +10,11 @@ import (
 type ContentType string
 
 const (
-	ContentTypeText  ContentType = "text"
-	ContentTypeAudio ContentType = "audio"
-	ContentTypeImage ContentType = "image"
-	ContentTypePDF   ContentType = "pdf"
+	ContentTypeText   ContentType = "text"
+	ContentTypeAudio  ContentType = "audio"
+	ContentTypeImage  ContentType = "image"
+	ContentTypePDF    ContentType = "pdf"
+	ContentTypeWidget ContentType = "widget"
 )
 
 // Message represents a stored message with LLM usage information
@@ -62,7 +63,11 @@ type Message struct {
 	// Nonsense detection
 	IsNonsense bool // Whether this message was detected as nonsense
 
-	// Metadata
+	// Metadata is the durable, host-visible payload for compact/widget
+	// messages (schedule, alert, chart, position, ...). Content stays a
+	// short summary; extra fields grow here without a column per widget.
+	Metadata map[string]any `json:"metadata,omitempty"`
+
 	CreatedAt time.Time
 }
 

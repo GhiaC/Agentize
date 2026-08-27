@@ -486,6 +486,9 @@ var sqliteMigrations = []sqliteMigration{
 		}
 		return execAll(tx, `CREATE INDEX IF NOT EXISTS idx_tool_calls_user_message_id ON tool_calls(user_message_id)`)
 	}},
+	{16, "messages.metadata", func(tx *sql.Tx) error {
+		return addColumns(tx, "messages", `metadata TEXT DEFAULT ''`)
+	}},
 }
 
 // runMigrations applies every migration newer than the recorded schema version.
@@ -1365,15 +1368,27 @@ func messageInsertArgs(message *model.Message) []interface{} {
 		message.FinishReason,
 		isNonsense,
 		message.CreatedAt.Unix(),
+		messageMetadataJSON(message),
 	}
+}
+
+func messageMetadataJSON(message *model.Message) string {
+	if message == nil || len(message.Metadata) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(message.Metadata)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 const messageInsertSQL = `INSERT OR REPLACE INTO messages (
 		message_id, seq_id, user_id, session_id, role, content, model,
 		agent_type, content_type,
 		prompt_tokens, completion_tokens, total_tokens,
-		request_model, max_tokens, temperature, has_tool_calls, finish_reason, is_nonsense, created_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		request_model, max_tokens, temperature, has_tool_calls, finish_reason, is_nonsense, created_at, metadata
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // PutMessage stores a message in the database
 func (s *SQLiteStore) PutMessage(message *model.Message) error {
@@ -1453,7 +1468,7 @@ func (s *SQLiteStore) PutMessages(messages []*model.Message) error {
 const messageSelectColumns = `message_id, seq_id, user_id, session_id, role, content, model,
 			agent_type, content_type,
 			prompt_tokens, completion_tokens, total_tokens,
-			request_model, max_tokens, temperature, has_tool_calls, finish_reason, is_nonsense, created_at`
+			request_model, max_tokens, temperature, has_tool_calls, finish_reason, is_nonsense, created_at, metadata`
 
 // scanMessages decodes message rows produced by a messageSelectColumns query.
 func scanMessages(rows *sql.Rows) ([]*model.Message, error) {
@@ -1464,6 +1479,7 @@ func scanMessages(rows *sql.Rows) ([]*model.Message, error) {
 		var hasToolCallsInt int
 		var isNonsenseInt int
 		var agentType, contentType string
+		var metadataJSON sql.NullString
 
 		err := rows.Scan(
 			&msg.MessageID,
@@ -1485,6 +1501,7 @@ func scanMessages(rows *sql.Rows) ([]*model.Message, error) {
 			&msg.FinishReason,
 			&isNonsenseInt,
 			&createdAt,
+			&metadataJSON,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
@@ -1495,6 +1512,12 @@ func scanMessages(rows *sql.Rows) ([]*model.Message, error) {
 		msg.HasToolCalls = hasToolCallsInt != 0
 		msg.IsNonsense = isNonsenseInt != 0
 		msg.CreatedAt = time.Unix(createdAt, 0)
+		if raw := strings.TrimSpace(metadataJSON.String); raw != "" {
+			var meta map[string]any
+			if err := json.Unmarshal([]byte(raw), &meta); err == nil {
+				msg.Metadata = meta
+			}
+		}
 		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {

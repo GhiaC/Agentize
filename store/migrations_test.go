@@ -116,6 +116,37 @@ func TestSQLiteStore_VerifyFindsOrphans(t *testing.T) {
 	}
 }
 
+func TestMessageMetadataRoundTrip(t *testing.T) {
+	st, err := NewSQLiteStore(filepath.Join(t.TempDir(), "meta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	s := model.NewSessionWithType("user-1", model.AgentTypeLow)
+	if err := st.Put(s); err != nil {
+		t.Fatal(err)
+	}
+	msg := model.NewUserMessage(s.SessionID+"-m0001", 1, "user-1", s.SessionID, "⏱️ 4h review · succeeded", model.ContentTypeWidget)
+	msg.Metadata = model.NewScheduleMessageMeta(&model.TaskSchedule{
+		ScheduleID: "sch-1", Name: "4h review", Status: model.TaskScheduleActive,
+		LastRunStatus: model.TaskRunSucceeded, LastConclusion: "held the range",
+	})
+	if err := st.PutMessage(msg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetMessagesBySession(s.SessionID)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("messages = %#v err=%v", got, err)
+	}
+	if model.MessageKind(got[0]) != model.MessageMetaKindSchedule {
+		t.Fatalf("kind = %q meta=%#v", model.MessageKind(got[0]), got[0].Metadata)
+	}
+	body, _ := got[0].Metadata["schedule"].(map[string]any)
+	if body == nil || body["last_conclusion"] != "held the range" {
+		t.Fatalf("schedule meta = %#v", got[0].Metadata)
+	}
+}
+
 func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o644)
 }

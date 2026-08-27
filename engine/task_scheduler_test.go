@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -96,9 +97,22 @@ func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) 
 			tool = message
 		}
 	}
-	if final == nil || !strings.Contains(final.Content, "Status: active · succeeded") ||
-		!strings.Contains(final.Content, "Repeat: 1/2") || !strings.Contains(final.Content, "Last: latest result") {
+	if final == nil || !strings.Contains(final.Content, "price check") || !strings.Contains(final.Content, "succeeded") {
 		t.Fatalf("final schedule message = %#v", final)
+	}
+	if model.MessageKind(final) != model.MessageMetaKindSchedule {
+		t.Fatalf("final metadata kind = %#v", final.Metadata)
+	}
+	body, _ := final.Metadata["schedule"].(map[string]any)
+	last := ""
+	if body != nil {
+		last = fmt.Sprint(body["last_conclusion"])
+		if last == "" || last == "<nil>" {
+			last = fmt.Sprint(body["last_output"])
+		}
+	}
+	if !strings.Contains(last, "latest result") {
+		t.Fatalf("schedule meta last = %#v", body)
 	}
 	if tool == nil || tool.Content != "tool attachment" {
 		t.Fatalf("separate tool message = %#v", tool)
@@ -130,7 +144,7 @@ func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) 
 				t.Fatalf("callback conversation = %q", update.ConversationID)
 			}
 			if update.Message.MessageID == schedule.StatusMessageID {
-				if strings.Contains(update.Message.Content, "Starting…") {
+				if strings.Contains(update.Message.Content, "running") {
 					seenStart = true
 				}
 				if strings.Contains(update.Message.Content, "succeeded") {
@@ -392,7 +406,7 @@ func TestFormatTaskScheduleMessageShowsStartingWhileRunning(t *testing.T) {
 		Name: "4h review", Status: model.TaskScheduleActive,
 		LastRunStatus: model.TaskRunRunning, IntervalSeconds: 3600,
 	})
-	if !strings.Contains(got, "Status: active · running") || !strings.Contains(got, "Last: Starting…") {
+	if !strings.Contains(got, "⏱️ 4h review") || !strings.Contains(got, "running") || strings.Contains(got, "\n") {
 		t.Fatalf("running start card = %q", got)
 	}
 }
@@ -445,8 +459,11 @@ func TestRunNowMarksRunningAndRejectsOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 1 || !strings.Contains(messages[0].Content, "Status: active · running") || !strings.Contains(messages[0].Content, "Last: Starting…") {
+	if len(messages) != 1 || !strings.Contains(messages[0].Content, "price check") || !strings.Contains(messages[0].Content, "running") {
 		t.Fatalf("start card = %#v", messages)
+	}
+	if model.MessageKind(messages[0]) != model.MessageMetaKindSchedule {
+		t.Fatalf("start metadata = %#v", messages[0].Metadata)
 	}
 	if _, err := scheduler.RunNow(schedule.ScheduleID, "user-1"); err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Fatalf("overlap run now err = %v", err)
