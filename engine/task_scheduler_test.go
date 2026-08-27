@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -28,7 +28,7 @@ func newTaskSchedulerTestStore(t *testing.T) *store.SQLiteStore {
 	return st
 }
 
-func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) {
+func TestTaskSchedulerPersistsEachRunAsChatTranscript(t *testing.T) {
 	st := newTaskSchedulerTestStore(t)
 	eng := &Engine{Sessions: st, Functions: model.NewFunctionRegistry()}
 	conversation, err := eng.CreateConversation(CreateConversationInput{
@@ -38,17 +38,16 @@ func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	updates := make(chan *TaskScheduleMessageUpdate, 8)
+	updates := make(chan *TaskScheduleMessageUpdate, 16)
+	var runOutput atomic.Value
+	runOutput.Store("latest result")
 	scheduler := NewTaskScheduler(st, func(ctx context.Context, schedule *model.TaskSchedule) (string, error) {
 		NotifyStatus(ctx, schedule.UserID, schedule.SessionID, StatusCustom, "checking")
 		NotifyStatus(ctx, schedule.UserID, schedule.SessionID, StatusCustom, "tool attachment", OptSendAsNewMessage())
-		return "latest result", nil
+		return runOutput.Load().(string), nil
 	}, nil)
 	scheduler.SetMessageFunc(func(_ context.Context, update *TaskScheduleMessageUpdate) (string, error) {
 		updates <- update
-		if !update.SendAsNew {
-			return "chat-message-42", nil
-		}
 		return "", nil
 	})
 	scheduler.Start(context.Background())
@@ -64,94 +63,130 @@ func TestTaskSchedulerPersistsAndUpsertsConversationStatusMessage(t *testing.T) 
 	if schedule.SourceConversationID != conversation.ConversationID {
 		t.Fatalf("source conversation = %q, want %q", schedule.SourceConversationID, conversation.ConversationID)
 	}
-	if schedule.StatusMessageID == "" {
-		t.Fatal("status message id was not persisted at creation")
-	}
 	if _, err := scheduler.RunNow(schedule.ScheduleID, "user-1"); err != nil {
 		t.Fatal(err)
 	}
 
+	waitScheduleRunCount(t, scheduler, schedule.ScheduleID, 1)
+	assertSourceRunTranscript(t, st, conversation.SessionID, [][2]string{
+		{"user", "check"},
+		{"assistant", "latest result"},
+	})
+
+	runOutput.Store("second result")
+	var runErr error
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		current, getErr := scheduler.Get(schedule.ScheduleID, "user-1")
-		if getErr != nil {
-			t.Fatal(getErr)
-		}
-		if current.RunCount == 1 {
+		_, runErr = scheduler.RunNow(schedule.ScheduleID, "user-1")
+		if runErr == nil {
 			break
+		}
+		if !strings.Contains(runErr.Error(), "already running") {
+			t.Fatal(runErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	messages, err := st.GetMessagesBySession(conversation.SessionID)
-	if err != nil {
-		t.Fatal(err)
+	if runErr != nil {
+		t.Fatal(runErr)
 	}
-	if len(messages) != 1 {
-		t.Fatalf("source chat messages = %d, want the one schedule widget; %#v", len(messages), messages)
-	}
-	final := messages[0]
-	if final.MessageID != schedule.StatusMessageID {
-		t.Fatalf("widget id = %q, want %q", final.MessageID, schedule.StatusMessageID)
-	}
-	if final == nil || !strings.Contains(final.Content, "price check") || !strings.Contains(final.Content, "succeeded") {
-		t.Fatalf("final schedule message = %#v", final)
-	}
-	if model.MessageKind(final) != model.MessageMetaKindSchedule {
-		t.Fatalf("final metadata kind = %#v", final.Metadata)
-	}
-	body, _ := final.Metadata["schedule"].(map[string]any)
-	last := ""
-	if body != nil {
-		last = fmt.Sprint(body["last_conclusion"])
-		if last == "" || last == "<nil>" {
-			last = fmt.Sprint(body["last_output"])
-		}
-	}
-	if !strings.Contains(last, "latest result") {
-		t.Fatalf("schedule meta last = %#v", body)
-	}
-	var current *model.TaskSchedule
-	deadline = time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		current, err = scheduler.Get(schedule.ScheduleID, "user-1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if current.StatusDeliveryID == "chat-message-42" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if current == nil || current.StatusDeliveryID != "chat-message-42" {
-		t.Fatalf("persisted delivery id = %#v", current)
-	}
+	waitScheduleRunCount(t, scheduler, schedule.ScheduleID, 2)
+	assertSourceRunTranscript(t, st, conversation.SessionID, [][2]string{
+		{"user", "check"},
+		{"assistant", "latest result"},
+		{"user", "check"},
+		{"assistant", "second result"},
+	})
 
-	seenFinal := false
-	seenStart := false
+	seenUser := 0
+	seenAssistant := 0
 	drainUntil := time.Now().Add(2 * time.Second)
-	for time.Now().Before(drainUntil) && (!seenFinal || !seenStart) {
+	for time.Now().Before(drainUntil) && (seenUser < 2 || seenAssistant < 2) {
 		select {
 		case update := <-updates:
 			if update.ConversationID != conversation.ConversationID {
 				t.Fatalf("callback conversation = %q", update.ConversationID)
 			}
-			if update.Message.MessageID != schedule.StatusMessageID {
-				t.Fatalf("unexpected extra source-chat message: %#v", update.Message)
+			if update.Message == nil {
+				continue
 			}
-			if strings.Contains(update.Message.Content, "running") {
-				seenStart = true
+			if update.Message.MessageID == schedule.StatusMessageID {
+				t.Fatalf("legacy widget id was republished: %#v", update.Message)
 			}
-			if strings.Contains(update.Message.Content, "succeeded") {
-				seenFinal = true
-				if update.DeliveryID != "chat-message-42" {
-					t.Fatalf("final edit did not receive delivery id: %#v", update)
-				}
+			if update.Message.Role == openai.ChatMessageRoleUser && update.Message.Content == "check" {
+				seenUser++
+			}
+			if update.Message.Role == openai.ChatMessageRoleAssistant {
+				seenAssistant++
+			}
+			if !update.SendAsNew {
+				t.Fatalf("run transcript must be published as a new message: %#v", update.Message)
 			}
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	if !seenStart || !seenFinal {
-		t.Fatalf("callbacks: start=%v final=%v", seenStart, seenFinal)
+	if seenUser < 2 || seenAssistant < 2 {
+		t.Fatalf("callbacks: user=%d assistant=%d", seenUser, seenAssistant)
+	}
+}
+
+func waitScheduleRunCount(t *testing.T, scheduler *TaskScheduler, scheduleID string, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, err := scheduler.Get(scheduleID, "user-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current != nil && current.RunCount == want && current.LastRunStatus != model.TaskRunRunning {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("schedule %s did not reach run count %d", scheduleID, want)
+}
+
+func assertSourceRunTranscript(t *testing.T, st *store.SQLiteStore, sessionID string, want [][2]string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	var messages []*model.Message
+	var err error
+	for time.Now().Before(deadline) {
+		messages, err = st.GetMessagesBySession(sessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(messages) == len(want) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(messages) != len(want) {
+		t.Fatalf("source chat messages = %d, want %d; %#v", len(messages), len(want), messages)
+	}
+	sort.SliceStable(messages, func(i, j int) bool {
+		if !messages[i].CreatedAt.Equal(messages[j].CreatedAt) {
+			return messages[i].CreatedAt.Before(messages[j].CreatedAt)
+		}
+		return messages[i].MessageID < messages[j].MessageID
+	})
+	seen := map[string]bool{}
+	for i, item := range messages {
+		if item == nil {
+			t.Fatalf("nil message at %d", i)
+		}
+		if seen[item.MessageID] {
+			t.Fatalf("duplicate message id %q", item.MessageID)
+		}
+		seen[item.MessageID] = true
+		if strings.Contains(item.MessageID, "-schedule-") {
+			t.Fatalf("legacy widget id leaked into transcript: %q", item.MessageID)
+		}
+		if item.Role != want[i][0] || !strings.Contains(item.Content, want[i][1]) {
+			t.Fatalf("message %d = %s %q, want %s containing %q", i, item.Role, item.Content, want[i][0], want[i][1])
+		}
+		if model.MessageKind(item) == model.MessageMetaKindSchedule {
+			t.Fatalf("run transcript must not use schedule widget metadata: %#v", item.Metadata)
+		}
 	}
 }
 
@@ -449,11 +484,8 @@ func TestRunNowMarksRunningAndRejectsOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 1 || !strings.Contains(messages[0].Content, "price check") || !strings.Contains(messages[0].Content, "running") {
-		t.Fatalf("start card = %#v", messages)
-	}
-	if model.MessageKind(messages[0]) != model.MessageMetaKindSchedule {
-		t.Fatalf("start metadata = %#v", messages[0].Metadata)
+	if len(messages) != 0 {
+		t.Fatalf("run now must not upsert a status widget; got %#v", messages)
 	}
 	if _, err := scheduler.RunNow(schedule.ScheduleID, "user-1"); err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Fatalf("overlap run now err = %v", err)

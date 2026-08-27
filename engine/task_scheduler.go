@@ -35,10 +35,9 @@ type ScheduledConclusion struct {
 // ScheduledConclusionFunc sends a task's output to an optional conclusion model.
 type ScheduledConclusionFunc func(ctx context.Context, schedule *model.TaskSchedule, output string) (ScheduledConclusion, error)
 
-// TaskScheduleMessageFunc receives durable chat-message upserts produced by a
-// background schedule. On the first status send it returns the transport's
-// assigned message id; later updates receive that id and edit the same message.
-// The returned id is ignored for tool messages marked SendAsNew.
+// TaskScheduleMessageFunc receives per-run chat transcripts and schedule-state
+// updates. Each run is published as new user/assistant messages (SendAsNew);
+// schedule-only frames may omit Message. The returned delivery id is ignored.
 type TaskScheduleMessageFunc func(ctx context.Context, update *TaskScheduleMessageUpdate) (deliveryID string, err error)
 
 // TaskScheduleMessageUpdate is transport-neutral so the same scheduler works
@@ -438,7 +437,7 @@ func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
 	}
 	running := *schedule
 	scheduleLock.Unlock()
-	s.publishFinalMessage(ctx, &running)
+	s.publishScheduleState(ctx, &running)
 	if err := s.store.PutTaskScheduleRun(run); err != nil {
 		log.Log.Errorf("[TaskScheduler] failed to create run for %s: %v", scheduleID, err)
 	}
@@ -528,7 +527,7 @@ func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
 		log.Log.Errorf("[TaskScheduler] failed to update schedule %s: %v", scheduleID, err)
 	}
 	scheduleLock.Unlock()
-	s.publishFinalMessage(ctx, current)
+	s.publishRunTranscript(ctx, current, run.RunID)
 }
 
 // Create validates and persists a new active schedule.
@@ -726,7 +725,7 @@ func (s *TaskScheduler) changeStatus(
 		s.cancelRun(schedule.ScheduleID)
 	}
 	s.notify()
-	s.publishFinalMessage(context.Background(), schedule)
+	s.publishScheduleState(context.Background(), schedule)
 	return schedule, nil
 }
 
@@ -766,7 +765,7 @@ func (s *TaskScheduler) RunNow(scheduleID, ownerUserID string) (*model.TaskSched
 	snapshot := *schedule
 	scheduleLock.Unlock()
 	s.notify()
-	s.publishFinalMessage(context.Background(), &snapshot)
+	s.publishScheduleState(context.Background(), &snapshot)
 	return &snapshot, nil
 }
 
