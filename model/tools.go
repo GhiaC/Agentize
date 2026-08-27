@@ -231,8 +231,13 @@ type ToolCall struct {
 	// ToolCallID is the unique identifier for this tool call (from OpenAI)
 	ToolCallID string
 
-	// MessageID identifies the message that triggered this tool call
+	// MessageID identifies the assistant message that issued this tool call.
 	MessageID string
+
+	// UserMessageID identifies the user message that started the turn this
+	// tool call belongs to. It is the stable join key for per-turn DAGs and
+	// the chat UI: tools never leak onto a later user message.
+	UserMessageID string
 
 	// SessionID identifies the session this tool call belongs to
 	SessionID string

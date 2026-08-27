@@ -2,6 +2,7 @@ package model
 
 import (
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -25,6 +26,8 @@ const (
 	RouteNodeEscalation RouteNodeType = "escalation"
 	// RouteNodeResponse is the terminal answer returned to the user.
 	RouteNodeResponse RouteNodeType = "response"
+	// RouteNodeApproval is a human (or policy) gate recorded before a tool ran.
+	RouteNodeApproval RouteNodeType = "approval"
 )
 
 // RouteNodeStatus is the outcome recorded on a node.
@@ -42,6 +45,8 @@ const (
 	// redundant call_agent_* the LLM emitted after the Core had already
 	// dispatched this turn (see RouteTraceBuilder.SkipDispatch).
 	RouteStatusSkipped RouteNodeStatus = "skipped"
+	// RouteStatusPending marks a node that is waiting (typically an approval).
+	RouteStatusPending RouteNodeStatus = "pending"
 )
 
 // RouteNode is a single vertex in a RouteTrace DAG.
@@ -75,8 +80,14 @@ type RouteEdge struct {
 // dashboard's Routes page.
 type RouteTrace struct {
 	TraceID   string `json:"trace_id"`
-	SessionID string `json:"session_id"` // the Core session that owns this trace
+	SessionID string `json:"session_id"` // the session that owns this trace
 	UserID    string `json:"user_id"`
+	// UserMessageID is the persisted user-message row that started this DAG.
+	// Empty on traces recorded before this field existed.
+	UserMessageID string `json:"user_message_id,omitempty"`
+	// Kind distinguishes Core routing DAGs from per-turn conversation DAGs.
+	// Empty and "core" are Core routing; "turn" is one user-message execution.
+	Kind string `json:"kind,omitempty"`
 
 	Message  string `json:"message"`  // the user message (truncated)
 	Response string `json:"response"` // the final response to the user (truncated)
@@ -185,6 +196,30 @@ func NewRouteTraceBuilder(session *Session, userMessage string) *RouteTraceBuild
 	return b
 }
 
+// SetUserMessageID records the durable user-message id that owns this DAG.
+func (b *RouteTraceBuilder) SetUserMessageID(id string) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.trace != nil {
+		b.trace.UserMessageID = strings.TrimSpace(id)
+	}
+}
+
+// SetKind labels the DAG as a Core route ("core") or a conversation turn ("turn").
+func (b *RouteTraceBuilder) SetKind(kind string) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.trace != nil {
+		b.trace.Kind = strings.TrimSpace(kind)
+	}
+}
+
 // addNodeLocked appends a node and returns its generated id. The caller must
 // hold b.mu (or be the constructor, before the builder is shared).
 func (b *RouteTraceBuilder) addNodeLocked(n RouteNode) string {
@@ -255,6 +290,32 @@ func (b *RouteTraceBuilder) Tool(nodeType RouteNodeType, toolName, label, detail
 		DurationMs: durationMs,
 	})
 	b.addEdgeLocked(parent, id, "")
+}
+
+// Approval records a human/policy gate for a tool under the current decision.
+// Status is pending while waiting, ok when approved, blocked when rejected.
+func (b *RouteTraceBuilder) Approval(toolName, label, detail string, status RouteNodeStatus, durationMs int64) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.finalized {
+		return
+	}
+	parent := b.currentDecID
+	if parent == "" {
+		parent = b.spineTailID
+	}
+	id := b.addNodeLocked(RouteNode{
+		Type:       RouteNodeApproval,
+		Label:      label,
+		Tool:       toolName,
+		Detail:     truncateRouteText(detail),
+		Status:     status,
+		DurationMs: durationMs,
+	})
+	b.addEdgeLocked(parent, id, "approval")
 }
 
 // Dispatch records a forward of the message to a worker agent under the current

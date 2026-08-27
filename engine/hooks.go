@@ -33,6 +33,8 @@ type StatusUpdate struct {
 	Phase     StatusPhase
 	Detail    string                 // human-readable detail: tool name, model name, etc.
 	Metadata  map[string]interface{} // extensible
+	// UserMessageID is the user-message row that owns this turn, when known.
+	UserMessageID string
 	// SendAsNewMessage: when true, the receiver should send a new message instead of editing the status message.
 	SendAsNewMessage bool
 	// MessageID: when set, the receiver should update this specific message (e.g. plan status) instead of the default status target.
@@ -70,10 +72,11 @@ func WithStatusFunc(ctx context.Context, fn StatusFunc) context.Context {
 func NotifyStatus(ctx context.Context, userID, sessionID string, phase StatusPhase, detail string, opts ...NotifyOption) {
 	if fn, ok := ctx.Value(statusCtxKey{}).(StatusFunc); ok && fn != nil {
 		su := &StatusUpdate{
-			UserID:    userID,
-			SessionID: sessionID,
-			Phase:     phase,
-			Detail:    detail,
+			UserID:        userID,
+			SessionID:     sessionID,
+			Phase:         phase,
+			Detail:        detail,
+			UserMessageID: UserMessageIDFrom(ctx),
 		}
 		for _, opt := range opts {
 			opt(su)

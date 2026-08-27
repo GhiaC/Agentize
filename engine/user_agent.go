@@ -134,6 +134,10 @@ type Engine struct {
 	// engine. Empty/absent → engine default model. See user_model.go.
 	userModelOverrides   map[string]string
 	userModelOverridesMu sync.RWMutex
+
+	// toolCatalogMode selects which schemas are sent on each LLM request.
+	// GetTools still returns the full catalog for registration and debug.
+	toolCatalogMode ToolCatalogMode
 }
 
 // SetToolApprovalManager enables approval gating for every tool call. Passing
@@ -798,6 +802,24 @@ func (e *Engine) processOneMessageBody(ctx context.Context, sessionID string, us
 		if err := e.Sessions.PutMessage(userMsg); err != nil {
 			log.Log.Warnf("[Engine] ⚠️  Failed to save user message | Error: %v", err)
 		}
+
+		rec := model.NewRouteTraceBuilder(session, userMessage)
+		rec.SetUserMessageID(userMsgID)
+		rec.SetKind("turn")
+		if err := e.Sessions.Put(session); err != nil {
+			log.Log.Warnf("[Engine] ⚠️  Failed to persist turn seq | SessionID: %s | Error: %v", sessionID, err)
+		}
+		ctx = WithUserMessageID(ctx, userMsgID)
+		ctx = withTurnRecorder(ctx, rec)
+		traceStart := time.Now()
+		defer func() { persistTurnTrace(e.Sessions, rec, time.Since(traceStart)) }()
+
+		response, tokens, err := e.processChatRequest(ctx, sessionID)
+		if err != nil {
+			rec.Fail(err.Error())
+			return "", tokens, err
+		}
+		return response, tokens, nil
 	}
 
 	return e.processChatRequest(ctx, sessionID)
@@ -1397,7 +1419,10 @@ func (e *Engine) processChatRequest(
 
 	// Get system prompts and tools (these don't change during the loop)
 	systemPrompts := e.GetSystemPrompts(session)
-	openaiTools := e.GetTools(session)
+	allTools := e.GetTools(session)
+	catalogMode := e.effectiveToolCatalogMode(len(allTools))
+	var discoveredTools []string
+	rec := turnRecorderFrom(ctx)
 
 	// Set model: conversation/session.Model is the authority when set. A per-user
 	// runtime override (SetUserModel) is only the fallback for legacy sessions
@@ -1446,6 +1471,8 @@ func (e *Engine) processChatRequest(
 		}
 		reqMessages = append(reqMessages, localMsgs...)
 		reqMessages = append(reqMessages, pendingImages...)
+
+		openaiTools := toolsForLLMRequest(allTools, catalogMode, discoveredTools)
 
 		log.Log.Infof("[Engine] LLM request | iteration=%d/%d | messages=%d | tools=%d",
 			i+1, maxIterations, len(reqMessages), len(openaiTools))
@@ -1509,11 +1536,23 @@ func (e *Engine) processChatRequest(
 		// Save LLM message to DB
 		request := openai.ChatCompletionRequest{Model: modelName, Messages: reqMessages, Tools: openaiTools}
 		messageID := e.saveMessage(session, request, resp, choice)
+		rec.Decision(
+			fmt.Sprintf("Decision %d", i+1),
+			modelName,
+			resp.Usage.TotalTokens,
+			llmDuration.Milliseconds(),
+			model.RouteStatusOK,
+			fmt.Sprintf("finish_reason=%s · tool_calls=%d", choice.FinishReason, len(choice.Message.ToolCalls)),
+		)
 
 		// Handle tool calls
 		if choice.FinishReason == openai.FinishReasonToolCalls {
 			if e.Executor == nil {
-				return "", totalTokenUsage, fmt.Errorf("tool calls received but no executor provided")
+				for _, toolCall := range choice.Message.ToolCalls {
+					if toolCall.Function.Name != searchToolsName {
+						return "", totalTokenUsage, fmt.Errorf("tool calls received but no executor provided")
+					}
+				}
 			}
 
 			// Add assistant message with tool calls to local messages
@@ -1524,7 +1563,17 @@ func (e *Engine) processChatRequest(
 
 			// Execute each tool and add results to local messages
 			for _, toolCall := range choice.Message.ToolCalls {
-				result, inject := e.executeTool(ctx, session, messageID, toolCall)
+				var result string
+				var inject *injectedImage
+				if toolCall.Function.Name == searchToolsName {
+					result, discoveredTools = e.executeSearchTools(allTools, toolCall.Function.Arguments, discoveredTools)
+					e.recordSearchToolsOnTurn(ctx, session, messageID, toolCall, result)
+				} else {
+					result, inject = e.executeTool(ctx, session, messageID, toolCall)
+					if toolCall.Function.Name != "" {
+						discoveredTools = appendUniqueTool(discoveredTools, toolCall.Function.Name)
+					}
+				}
 				localMsgs = append(localMsgs, openai.ChatCompletionMessage{
 					Role:       openai.ChatMessageRoleTool,
 					Content:    result,
@@ -1561,9 +1610,11 @@ func (e *Engine) processChatRequest(
 			log.Log.Warnf("[Engine] ⚠️  Failed to save session | SessionID: %s | Error: %v", sessionID, err)
 		}
 
+		rec.Response(textResponse, false, model.RouteStatusOK)
 		return textResponse, totalTokenUsage, nil
 	}
 
+	rec.Fail(fmt.Sprintf("max iterations (%d) reached without final response", maxIterations))
 	return "", totalTokenUsage, fmt.Errorf("max iterations (%d) reached without final response", maxIterations)
 }
 
@@ -1633,7 +1684,7 @@ func (e *Engine) executeTool(
 	persister := NewToolCallPersister(e.Sessions, "Engine")
 	toolID := ""
 	if persister != nil {
-		toolID = persister.Save(session, messageID, toolCall)
+		toolID = persister.SaveForTurn(session, messageID, UserMessageIDFrom(ctx), toolCall)
 	}
 
 	// Parse args
@@ -1677,7 +1728,10 @@ func (e *Engine) executeTool(
 	}
 	if e.ToolApprovalManager != nil {
 		NotifyStatus(ctx, session.UserID, sessionID, StatusToolApproval, toolDetail)
+		rec := turnRecorderFrom(ctx)
+		rec.Approval(toolCall.Function.Name, toolDetail, "waiting", model.RouteStatusPending, 0)
 	}
+	approvalStart := time.Now()
 	_, approvalErr := AwaitToolApproval(ctx, e.ToolApprovalManager, ToolApprovalRequest{
 		RefID:       approvalRefID,
 		UserID:      session.UserID,
@@ -1690,10 +1744,14 @@ func (e *Engine) executeTool(
 	if approvalErr != nil {
 		result := fmt.Sprintf("Tool %s was not executed: %v", toolCall.Function.Name, approvalErr)
 		NotifyStatus(ctx, session.UserID, sessionID, StatusToolRejected, toolDetail)
+		turnRecorderFrom(ctx).Approval(toolCall.Function.Name, toolDetail, approvalErr.Error(), model.RouteStatusBlocked, time.Since(approvalStart).Milliseconds())
 		if persister != nil {
 			persister.Update(toolID, result, approvalErr)
 		}
 		return result, nil
+	}
+	if e.ToolApprovalManager != nil {
+		turnRecorderFrom(ctx).Approval(toolCall.Function.Name, toolDetail, "approved", model.RouteStatusOK, time.Since(approvalStart).Milliseconds())
 	}
 
 	NotifyStatus(ctx, session.UserID, sessionID, StatusToolExecuting, toolDetail)
@@ -1738,6 +1796,12 @@ func (e *Engine) executeTool(
 	}
 
 	NotifyStatus(ctx, session.UserID, sessionID, StatusToolDone, toolDetail)
+	rec := turnRecorderFrom(ctx)
+	if err != nil {
+		rec.Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, toolCall.Function.Arguments, model.RouteStatusError, toolDuration.Milliseconds())
+	} else {
+		rec.Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, toolCall.Function.Arguments, model.RouteStatusOK, toolDuration.Milliseconds())
+	}
 
 	// Process result (truncate if needed). Pass the live session so an oversized
 	// result is stored on it and persisted by the caller's single Put(session);

@@ -67,6 +67,15 @@ func (p *ToolCallPersister) Save(
 	messageID string,
 	toolCall openai.ToolCall,
 ) string {
+	return p.SaveForTurn(session, messageID, "", toolCall)
+}
+
+// SaveForTurn persists a tool call owned by a specific user-message turn.
+func (p *ToolCallPersister) SaveForTurn(
+	session *model.Session,
+	messageID, userMessageID string,
+	toolCall openai.ToolCall,
+) string {
 	if p == nil || p.store == nil {
 		return ""
 	}
@@ -74,18 +83,19 @@ func (p *ToolCallPersister) Save(
 	now := time.Now()
 	toolID := session.GenerateToolID()
 	tc := &model.ToolCall{
-		ToolID:       toolID,
-		ToolCallID:   toolCall.ID,
-		MessageID:    messageID,
-		SessionID:    session.SessionID,
-		UserID:       session.UserID,
-		AgentType:    session.AgentType,
-		FunctionName: toolCall.Function.Name,
-		Arguments:    toolCall.Function.Arguments,
-		Response:     "",
-		Status:       model.ToolCallStatusPending,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ToolID:        toolID,
+		ToolCallID:    toolCall.ID,
+		MessageID:     messageID,
+		UserMessageID: userMessageID,
+		SessionID:     session.SessionID,
+		UserID:        session.UserID,
+		AgentType:     session.AgentType,
+		FunctionName:  toolCall.Function.Name,
+		Arguments:     toolCall.Function.Arguments,
+		Response:      "",
+		Status:        model.ToolCallStatusPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	if err := p.store.PutToolCall(tc); err != nil {
@@ -108,6 +118,17 @@ func (p *ToolCallPersister) SaveWithAgentType(
 	agentType model.AgentType,
 	displayLabel string,
 ) string {
+	return p.SaveWithAgentTypeForTurn(session, messageID, "", toolCall, agentType, displayLabel)
+}
+
+// SaveWithAgentTypeForTurn is SaveWithAgentType plus the owning user-message id.
+func (p *ToolCallPersister) SaveWithAgentTypeForTurn(
+	session *model.Session,
+	messageID, userMessageID string,
+	toolCall openai.ToolCall,
+	agentType model.AgentType,
+	displayLabel string,
+) string {
 	if p == nil || p.store == nil {
 		return ""
 	}
@@ -115,19 +136,20 @@ func (p *ToolCallPersister) SaveWithAgentType(
 	now := time.Now()
 	toolID := session.GenerateToolID()
 	tc := &model.ToolCall{
-		ToolID:       toolID,
-		ToolCallID:   toolCall.ID,
-		MessageID:    messageID,
-		SessionID:    session.SessionID,
-		UserID:       session.UserID,
-		AgentType:    agentType,
-		FunctionName: toolCall.Function.Name,
-		DisplayLabel: displayLabel,
-		Arguments:    toolCall.Function.Arguments,
-		Response:     "",
-		Status:       model.ToolCallStatusPending,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ToolID:        toolID,
+		ToolCallID:    toolCall.ID,
+		MessageID:     messageID,
+		UserMessageID: userMessageID,
+		SessionID:     session.SessionID,
+		UserID:        session.UserID,
+		AgentType:     agentType,
+		FunctionName:  toolCall.Function.Name,
+		DisplayLabel:  displayLabel,
+		Arguments:     toolCall.Function.Arguments,
+		Response:      "",
+		Status:        model.ToolCallStatusPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	if err := p.store.PutToolCall(tc); err != nil {

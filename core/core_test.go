@@ -566,9 +566,9 @@ func TestProcessMessage_MultipleAgentCalls_OnlyFirstDispatched(t *testing.T) {
 	}
 
 	// The routing DAG records alpha as a real dispatch and beta as a skipped one.
-	traces, err := st.GetRouteTracesByUser("user1")
+	traces, err := st.GetRouteTracesBySession("user1-core-s0001")
 	if err != nil {
-		t.Fatalf("GetRouteTracesByUser: %v", err)
+		t.Fatalf("GetRouteTracesBySession: %v", err)
 	}
 	if len(traces) != 1 {
 		t.Fatalf("got %d traces, want 1", len(traces))

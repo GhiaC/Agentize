@@ -496,6 +496,8 @@ func (ch *CoreHandler) processOneMessageCore(
 	userMsg := model.NewUserMessage(userMsgID, userSeqID, userID, coreSession.SessionID, userMessage, contentType)
 	userMsg.IsNonsense = isNonsense
 	ch.saveMessage(userMsg)
+	rec.SetUserMessageID(userMsgID)
+	ctx = engine.WithUserMessageID(ctx, userMsgID)
 	if err := ch.saveCoreSession(coreSession); err != nil {
 		rec.Fail(err.Error())
 		return "", fmt.Errorf("failed to save core session: %w", err)

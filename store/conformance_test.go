@@ -444,6 +444,7 @@ func testToolCalls(t *testing.T, st Store) {
 	mustPutSession(t, st, s)
 
 	tc := newToolCall(s, s.SessionID+"-t0001", "call_abc", "do_thing")
+	tc.UserMessageID = s.SessionID + "-m0001"
 	if err := st.PutToolCall(tc); err != nil {
 		t.Fatalf("PutToolCall: %v", err)
 	}
@@ -451,6 +452,9 @@ func testToolCalls(t *testing.T, st Store) {
 	byCallID, err := st.GetToolCallByID("call_abc")
 	if err != nil || byCallID == nil || byCallID.FunctionName != "do_thing" {
 		t.Fatalf("GetToolCallByID: got=%v err=%v", byCallID, err)
+	}
+	if byCallID.UserMessageID != s.SessionID+"-m0001" {
+		t.Errorf("UserMessageID = %q, want %q", byCallID.UserMessageID, s.SessionID+"-m0001")
 	}
 	byToolID, err := st.GetToolCallByToolID(s.SessionID + "-t0001")
 	if err != nil || byToolID == nil {

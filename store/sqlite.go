@@ -480,6 +480,12 @@ var sqliteMigrations = []sqliteMigration{
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_session_id ON conversations(session_id)`,
 		)
 	}},
+	{15, "tool_calls.user_message_id", func(tx *sql.Tx) error {
+		if err := addColumns(tx, "tool_calls", `user_message_id TEXT DEFAULT ''`); err != nil {
+			return err
+		}
+		return execAll(tx, `CREATE INDEX IF NOT EXISTS idx_tool_calls_user_message_id ON tool_calls(user_message_id)`)
+	}},
 }
 
 // runMigrations applies every migration newer than the recorded schema version.
@@ -2080,11 +2086,12 @@ func (s *SQLiteStore) PutToolCall(toolCall *model.ToolCall) error {
 	// Use INSERT OR REPLACE for upsert behavior
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO tool_calls (
-			tool_call_id, tool_id, message_id, session_id, user_id, agent_type, function_name, display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			tool_call_id, tool_id, message_id, user_message_id, session_id, user_id, agent_type, function_name, display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		toolCall.ToolCallID,
 		toolCall.ToolID,
 		toolCall.MessageID,
+		toolCall.UserMessageID,
 		toolCall.SessionID,
 		toolCall.UserID,
 		string(toolCall.AgentType),
@@ -2163,7 +2170,7 @@ func (s *SQLiteStore) GetToolCallsBySession(sessionID string) ([]*model.ToolCall
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(
-		`SELECT tool_call_id, tool_id, message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
+		`SELECT tool_call_id, tool_id, message_id, COALESCE(user_message_id,'') as user_message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
 		FROM tool_calls WHERE session_id = ? ORDER BY created_at DESC`,
 		sessionID,
 	)
@@ -2182,6 +2189,7 @@ func (s *SQLiteStore) GetToolCallsBySession(sessionID string) ([]*model.ToolCall
 			&tc.ToolCallID,
 			&tc.ToolID,
 			&tc.MessageID,
+			&tc.UserMessageID,
 			&tc.SessionID,
 			&tc.UserID,
 			&agentType,
@@ -2219,7 +2227,7 @@ func (s *SQLiteStore) GetAllToolCalls() ([]*model.ToolCall, error) {
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(
-		`SELECT tool_call_id, tool_id, message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
+		`SELECT tool_call_id, tool_id, message_id, COALESCE(user_message_id,'') as user_message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
 		FROM tool_calls ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -2237,6 +2245,7 @@ func (s *SQLiteStore) GetAllToolCalls() ([]*model.ToolCall, error) {
 			&tc.ToolCallID,
 			&tc.ToolID,
 			&tc.MessageID,
+			&tc.UserMessageID,
 			&tc.SessionID,
 			&tc.UserID,
 			&agentType,
@@ -2274,7 +2283,7 @@ func (s *SQLiteStore) GetToolCallByID(toolCallID string) (*model.ToolCall, error
 	defer s.mu.RUnlock()
 
 	row := s.db.QueryRow(
-		`SELECT tool_call_id, tool_id, message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
+		`SELECT tool_call_id, tool_id, message_id, COALESCE(user_message_id,'') as user_message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
 		FROM tool_calls WHERE tool_call_id = ?`,
 		toolCallID,
 	)
@@ -2287,6 +2296,7 @@ func (s *SQLiteStore) GetToolCallByID(toolCallID string) (*model.ToolCall, error
 		&tc.ToolCallID,
 		&tc.ToolID,
 		&tc.MessageID,
+		&tc.UserMessageID,
 		&tc.SessionID,
 		&tc.UserID,
 		&agentType,
@@ -2321,7 +2331,7 @@ func (s *SQLiteStore) GetToolCallByToolID(toolID string) (*model.ToolCall, error
 	defer s.mu.RUnlock()
 
 	row := s.db.QueryRow(
-		`SELECT tool_call_id, tool_id, message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
+		`SELECT tool_call_id, tool_id, message_id, COALESCE(user_message_id,'') as user_message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
 		FROM tool_calls WHERE tool_id = ?`,
 		toolID,
 	)
@@ -2334,6 +2344,7 @@ func (s *SQLiteStore) GetToolCallByToolID(toolID string) (*model.ToolCall, error
 		&tc.ToolCallID,
 		&tc.ToolID,
 		&tc.MessageID,
+		&tc.UserMessageID,
 		&tc.SessionID,
 		&tc.UserID,
 		&agentType,

@@ -185,7 +185,7 @@ func (ch *CoreHandler) executeCoreToolWithError(
 	var toolID string
 	if coreSession != nil {
 		displayLabel := ch.coreTools.GetDisplayName(toolCall.Function.Name)
-		toolID = persister.SaveWithAgentType(coreSession, messageID, toolCall, model.AgentTypeCore, displayLabel)
+		toolID = persister.SaveWithAgentTypeForTurn(coreSession, messageID, engine.UserMessageIDFrom(ctx), toolCall, model.AgentTypeCore, displayLabel)
 	}
 
 	toolDetail := ch.coreTools.GetDisplayName(toolCall.Function.Name)
@@ -214,7 +214,9 @@ func (ch *CoreHandler) executeCoreToolWithError(
 		}
 		if ch.toolApprovalManager != nil {
 			engine.NotifyStatus(ctx, userID, sessionID, engine.StatusToolApproval, toolDetail)
+			routeRecorderFrom(ctx).Approval(toolCall.Function.Name, toolDetail, "waiting", model.RouteStatusPending, 0)
 		}
+		approvalStart := time.Now()
 		_, approvalErr := engine.AwaitToolApproval(ctx, ch.toolApprovalManager, engine.ToolApprovalRequest{
 			RefID:       approvalRefID,
 			UserID:      userID,
@@ -228,8 +230,12 @@ func (ch *CoreHandler) executeCoreToolWithError(
 			result := fmt.Sprintf("Tool %s was not executed: %v", toolCall.Function.Name, approvalErr)
 			engine.NotifyStatus(ctx, userID, sessionID, engine.StatusToolRejected, toolDetail)
 			persister.Update(toolID, result, approvalErr)
+			routeRecorderFrom(ctx).Approval(toolCall.Function.Name, toolDetail, approvalErr.Error(), model.RouteStatusBlocked, time.Since(approvalStart).Milliseconds())
 			routeRecorderFrom(ctx).Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, "blocked: "+approvalErr.Error(), model.RouteStatusBlocked, 0)
 			return result, approvalErr
+		}
+		if ch.toolApprovalManager != nil {
+			routeRecorderFrom(ctx).Approval(toolCall.Function.Name, toolDetail, "approved", model.RouteStatusOK, time.Since(approvalStart).Milliseconds())
 		}
 	}
 

@@ -109,6 +109,8 @@ func TestRouteTraceBuilder_NilSafe(t *testing.T) {
 	// None of these should panic.
 	b.Decision("d", "m", 1, 1, RouteStatusOK, "x")
 	b.Tool(RouteNodeToolCall, "t", "T", "d", RouteStatusOK, 1)
+	b.Approval("t", "T", "waiting", RouteStatusPending, 0)
+	b.SetUserMessageID("msg-1")
 	b.Dispatch("a", "A", "d", RouteStatusOK, 1)
 	b.Escalate("a", "A", "d", RouteStatusOK, 1)
 	b.Response("r", false, RouteStatusOK)
@@ -128,5 +130,28 @@ func TestTruncateRouteText_RuneSafe(t *testing.T) {
 	// Result must remain valid UTF-8 (no rune split): count runes.
 	if r := []rune(got); len(r) != routeTraceMaxText+1 {
 		t.Errorf("truncated rune count = %d, want %d", len(r), routeTraceMaxText+1)
+	}
+}
+
+func TestRouteTraceBuilder_ApprovalAndUserMessageID(t *testing.T) {
+	s := NewSessionWithType("user-1", AgentTypeConversation)
+	b := NewRouteTraceBuilder(s, "price of BTC")
+	b.SetUserMessageID(s.SessionID + "-m0001")
+	b.Decision("Decision 1", "gpt-x", 20, 8, RouteStatusOK, "finish_reason=tool_calls")
+	b.Approval("get_price_history", "Price history", "approved", RouteStatusOK, 15)
+	b.Tool(RouteNodeToolCall, "get_price_history", "Price history", `{"symbol":"BTC"}`, RouteStatusOK, 40)
+	b.Response("BTC is 50k", false, RouteStatusOK)
+	tr := b.Build(80 * time.Millisecond)
+
+	if tr.UserMessageID != s.SessionID+"-m0001" {
+		t.Errorf("UserMessageID = %q", tr.UserMessageID)
+	}
+	approval := findNode(tr, RouteNodeApproval)
+	if approval == nil || approval.Status != RouteStatusOK || approval.Tool != "get_price_history" {
+		t.Fatalf("approval node = %+v", approval)
+	}
+	dec := findNode(tr, RouteNodeDecision)
+	if dec == nil || !hasEdge(tr, dec.ID, approval.ID) {
+		t.Errorf("expected decision->approval edge, edges=%+v", tr.Edges)
 	}
 }
