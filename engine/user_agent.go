@@ -17,6 +17,7 @@ import (
 	"github.com/ghiac/agentize/config"
 	"github.com/ghiac/agentize/filestore"
 	"github.com/ghiac/agentize/fsrepo"
+	"github.com/ghiac/agentize/llmutils"
 	"github.com/ghiac/agentize/log"
 	"github.com/ghiac/agentize/metrics"
 	"github.com/ghiac/agentize/model"
@@ -317,7 +318,7 @@ func (e *Engine) callLLM(ctx context.Context, model string, messages []openai.Ch
 		Messages: messages,
 		Tools:    tools,
 	}
-	resp, err := e.llmClient.CreateChatCompletion(ctx, request)
+	resp, err := e.callLLMWithNetworkRetry(ctx, request)
 	if err != nil {
 		LogLLMError("Engine", model, err)
 	} else if resp.Usage.TotalTokens > 0 {
@@ -329,6 +330,37 @@ func (e *Engine) callLLM(ctx context.Context, model string, messages []openai.Ch
 			model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens, cacheTokens)
 	}
 	return resp, err
+}
+
+// callLLMWithNetworkRetry retries only dropped connections, timeouts, and 5xx/429.
+// Backoff is 30s * retry count, up to 10 times. Payment and access errors fail immediately.
+func (e *Engine) callLLMWithNetworkRetry(ctx context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	if e.llmClient == nil {
+		return openai.ChatCompletionResponse{}, errors.New("LLM client is not configured")
+	}
+	var lastErr error
+	for attempt := 0; attempt <= llmutils.TurnNetworkRetryMax; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return openai.ChatCompletionResponse{}, err
+		}
+		resp, err := e.llmClient.CreateChatCompletion(ctx, request)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !llmutils.IsRetriableNetworkError(err) || attempt == llmutils.TurnNetworkRetryMax {
+			return openai.ChatCompletionResponse{}, err
+		}
+		retryCount := attempt + 1
+		wait := llmutils.NetworkRetryDelay(retryCount)
+		log.Log.Warnf("[Engine] ⚠️  LLM network error, retry %d/%d in %s | Model: %s | Error: %v", retryCount, llmutils.TurnNetworkRetryMax, wait, request.Model, err)
+		userID, _ := model.GetUserIDFromContext(ctx)
+		NotifyStatus(ctx, userID, "", StatusThinking, fmt.Sprintf("Retrying network error (%d/%d) in %s", retryCount, llmutils.TurnNetworkRetryMax, wait.Round(time.Second)))
+		if waitErr := llmutils.RetryNetworkError(ctx, retryCount); waitErr != nil {
+			return openai.ChatCompletionResponse{}, waitErr
+		}
+	}
+	return openai.ChatCompletionResponse{}, lastErr
 }
 
 // startScheduler starts the session scheduler
@@ -744,6 +776,8 @@ func (e *Engine) processMessageLocked(
 		}
 	}
 
+	e.persistSessionRunState(session, StatusThinking, "", true, UserMessageIDFrom(ctx))
+
 	// Process the message
 	metrics.MessageStart("agent")
 	procStart := time.Now()
@@ -751,8 +785,14 @@ func (e *Engine) processMessageLocked(
 	metrics.MessageDone("agent", metrics.Status(err), time.Since(procStart))
 	if err != nil {
 		log.Log.Errorf("[Engine] ❌ Processing failed | SessionID: %s | Error: %v", sessionID, err)
+		phase := StatusError
+		if errors.Is(err, context.Canceled) {
+			phase = StatusPhase("stopped")
+		}
+		e.persistSessionRunState(session, phase, err.Error(), false, UserMessageIDFrom(ctx))
 		return "", tokens, err
 	}
+	e.persistSessionRunState(session, StatusCompleted, "", false, UserMessageIDFrom(ctx))
 	e.touchOwningConversation(session)
 
 	// Process any queued messages
@@ -811,6 +851,7 @@ func (e *Engine) processOneMessageBody(ctx context.Context, sessionID string, us
 		}
 		ctx = WithUserMessageID(ctx, userMsgID)
 		ctx = withTurnRecorder(ctx, rec)
+		e.persistSessionRunState(session, StatusReceived, "", true, userMsgID)
 		traceStart := time.Now()
 		defer func() { persistTurnTrace(e.Sessions, rec, time.Since(traceStart)) }()
 

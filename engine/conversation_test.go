@@ -168,3 +168,34 @@ func TestDeleteConversation_RemovesSubAgents(t *testing.T) {
 		t.Fatal("sub-agent session still present")
 	}
 }
+
+func TestPersistSessionRunState_RoundTrip(t *testing.T) {
+	eng := newConversationTestEngine(t)
+	conv, err := eng.CreateConversation(CreateConversationInput{UserID: "alice", Title: "live"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	session, err := eng.Sessions.Get(conv.SessionID)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	eng.persistSessionRunState(session, StatusToolExecuting, "Price history", true, "alice-conv-s0001-m0003")
+	got, err := eng.GetConversation("alice", conv.ConversationID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.RunState == nil || !got.RunState.Active || got.RunState.Phase != string(StatusToolExecuting) || got.RunState.Detail != "Price history" {
+		t.Fatalf("run state = %#v", got.RunState)
+	}
+	if got.RunState.UserMessageID != "alice-conv-s0001-m0003" {
+		t.Fatalf("user message = %q", got.RunState.UserMessageID)
+	}
+	eng.persistSessionRunState(session, StatusError, "connection reset", false, "")
+	got, _ = eng.GetConversation("alice", conv.ConversationID)
+	if got.RunState == nil || got.RunState.Active || got.RunState.Phase != string(StatusError) {
+		t.Fatalf("error run state = %#v", got.RunState)
+	}
+	if got.RunState.UserMessageID != "alice-conv-s0001-m0003" {
+		t.Fatalf("user message must survive empty updates, got %q", got.RunState.UserMessageID)
+	}
+}

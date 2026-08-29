@@ -216,3 +216,37 @@ func (e *Engine) touchOwningConversation(session *model.Session) {
 		log.Log.Warnf("[Engine] ⚠️  Failed to touch conversation | SessionID: %s | Error: %v", sessionID, err)
 	}
 }
+
+// persistSessionRunState writes the last visible turn onto the owning
+// Conversation row. Conversation identity is the session the host reloads, so a
+// closed page can paint tool-calling / thinking without guessing from the
+// transcript. Failures are logged, never fatal to the in-flight turn.
+func (e *Engine) persistSessionRunState(session *model.Session, phase StatusPhase, detail string, active bool, userMessageID string) {
+	if e == nil || e.Sessions == nil || session == nil {
+		return
+	}
+	sessionID := strings.TrimSpace(session.SessionID)
+	if session.ParentSessionID != "" {
+		sessionID = strings.TrimSpace(session.ParentSessionID)
+	}
+	if sessionID == "" {
+		return
+	}
+	conv, err := e.Sessions.GetConversationBySession(sessionID)
+	if err != nil || conv == nil {
+		return
+	}
+	if userMessageID == "" && conv.RunState != nil {
+		userMessageID = conv.RunState.UserMessageID
+	}
+	conv.RunState = &model.ConversationRunState{
+		Phase:         string(phase),
+		Detail:        strings.TrimSpace(detail),
+		Active:        active,
+		UserMessageID: strings.TrimSpace(userMessageID),
+		UpdatedAt:     time.Now().UTC(),
+	}
+	if err := e.Sessions.PutConversation(conv); err != nil {
+		log.Log.Warnf("[Engine] ⚠️  Failed to persist conversation run state | ConversationID: %s | Error: %v", conv.ConversationID, err)
+	}
+}
