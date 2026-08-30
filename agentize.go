@@ -92,6 +92,17 @@ type Agentize struct {
 	rawFileLimiter *ipRateLimiter
 }
 
+// Extension adds an optional capability to an Agentize instance without making
+// the core package depend on that capability. Implementations should validate
+// their configuration before mutating the instance and keep application- or
+// transport-specific behavior behind their own adapters.
+//
+// Extension is intentionally small: independently versioned modules can depend
+// on Agentize and implement Attach without creating an import cycle.
+type Extension interface {
+	Attach(*Agentize) error
+}
+
 // Options allows configuring Agentize behavior
 type Options struct {
 	// SessionStore allows providing a custom session store
@@ -239,6 +250,37 @@ func NewWithOptions(path string, opts *Options) (*Agentize, error) {
 	}
 
 	return ag, nil
+}
+
+// Use attaches an independently packaged extension to this instance.
+func (ag *Agentize) Use(extension Extension) error {
+	if ag == nil || ag.engine == nil {
+		return fmt.Errorf("agentize is not initialized")
+	}
+	if extension == nil {
+		return fmt.Errorf("agentize extension is nil")
+	}
+	if err := extension.Attach(ag); err != nil {
+		return fmt.Errorf("attach agentize extension: %w", err)
+	}
+	return nil
+}
+
+// SetUsageCallback installs the callback used for metering and policy checks.
+// It is primarily exposed for extensions; applications normally call Use.
+func (ag *Agentize) SetUsageCallback(callback engine.Callback) {
+	if ag == nil || ag.engine == nil {
+		return
+	}
+	ag.engine.Callback = callback
+}
+
+// UsageCallback returns the currently installed metering callback.
+func (ag *Agentize) UsageCallback() engine.Callback {
+	if ag == nil || ag.engine == nil {
+		return nil
+	}
+	return ag.engine.Callback
 }
 
 // ============================================================================
