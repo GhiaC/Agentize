@@ -169,7 +169,21 @@ func GetStyles() string {
         .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
         #sidebar-toggle { display: none; }
 
-        .content-scroll { flex: 1; overflow-y: auto; padding: 24px; }
+        .content-scroll { flex: 1; overflow-y: auto; padding: 24px; position: relative; transition: opacity 0.14s ease; }
+        .content-scroll.is-loading { cursor: progress; }
+        .content-scroll.is-loading > * { opacity: 0.42; pointer-events: none; }
+        .content-scroll.is-loading::after {
+            content: ""; position: fixed; top: 50%; z-index: 5;
+            left: calc(var(--sidebar-w) + (100vw - var(--sidebar-w)) / 2);
+            width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
+            border: 3px solid var(--border); border-top-color: var(--accent);
+            animation: dashboard-content-spin 0.65s linear infinite;
+        }
+        @keyframes dashboard-content-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+            .content-scroll { transition: none; }
+            .content-scroll.is-loading::after { animation-duration: 1.4s; }
+        }
         .content-scroll .container { max-width: 1180px; padding-left: 0; padding-right: 0; }
         /* Old wrapper kept transparent: individual cards are the surfaces now. */
         .main-container { background: transparent; border-radius: 0; box-shadow: none; padding: 0; margin: 0; }
@@ -363,6 +377,7 @@ func GetStyles() string {
             .app.sidebar-open .sidebar-backdrop { display: block; }
             #sidebar-toggle { display: inline-flex; }
             .content-scroll { padding: 16px; }
+            .content-scroll.is-loading::after { left: 50%; }
         }
     `
 }

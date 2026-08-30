@@ -19,7 +19,7 @@ func NavbarAndBody(currentPage, content string) string {
 		`<div class="sidebar-backdrop" id="sidebar-backdrop"></div>` +
 		`<main class="main">` +
 		topbar(currentPage) +
-		`<div class="content-scroll">` + content + `</div>` +
+		`<div class="content-scroll" id="dashboard-content" aria-live="polite">` + content + `</div>` +
 		`</main></div>`
 }
 
