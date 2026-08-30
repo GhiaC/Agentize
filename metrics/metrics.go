@@ -463,6 +463,16 @@ var (
 		Help:    "Store operation latency by operation (store method name) and backend (sqlite|mongodb).",
 		Buckets: storeLatencyBuckets,
 	}, []string{"operation", "backend"})
+
+	storeQueriesInFlight = factory.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace, Subsystem: "store", Name: "queries_in_flight",
+		Help: "Store operations that have started but not returned, by operation and backend.",
+	}, []string{"operation", "backend"})
+
+	storeQueriesStarted = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "store", Name: "queries_started_total",
+		Help: "Store operations started, including operations that never returned.",
+	}, []string{"operation", "backend"})
 )
 
 // RecordStoreDeletion counts one destructive store operation (audit trail).
@@ -512,6 +522,30 @@ func StoreQuery(operation, backend string, dur time.Duration) {
 		backend = "unknown"
 	}
 	storeQueryDuration.WithLabelValues(operation, backend).Observe(dur.Seconds())
+}
+
+// StoreQueryStart records an operation before it enters the backend. Unlike a
+// latency histogram, this remains visible when the operation never returns.
+func StoreQueryStart(operation, backend string) {
+	operation, backend = normalizeStoreLabels(operation, backend)
+	storeQueriesStarted.WithLabelValues(operation, backend).Inc()
+	storeQueriesInFlight.WithLabelValues(operation, backend).Inc()
+}
+
+// StoreQueryDone removes one operation from the in-flight gauge.
+func StoreQueryDone(operation, backend string) {
+	operation, backend = normalizeStoreLabels(operation, backend)
+	storeQueriesInFlight.WithLabelValues(operation, backend).Dec()
+}
+
+func normalizeStoreLabels(operation, backend string) (string, string) {
+	if operation == "" {
+		operation = "unknown"
+	}
+	if backend == "" {
+		backend = "unknown"
+	}
+	return operation, backend
 }
 
 // ---------------------------------------------------------------------------

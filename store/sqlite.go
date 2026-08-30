@@ -604,10 +604,10 @@ func (s *SQLiteStore) Get(sessionID string) (*model.Session, error) {
 }
 
 // getMaxSeqIDForSession returns the maximum seq_id for a session.
-// Used to restore MessageSeq counter correctly from database.
+// Used to restore MessageSeq counter correctly from database. Callers already
+// hold s.mu.RLock; taking it again here can deadlock when a writer is queued,
+// because sync.RWMutex blocks new readers once a writer is waiting.
 func (s *SQLiteStore) getMaxSeqIDForSession(sessionID string) int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	var maxSeqID sql.NullInt64
 	err := s.db.QueryRow(
 		"SELECT MAX(seq_id) FROM messages WHERE session_id = ?",
@@ -619,10 +619,10 @@ func (s *SQLiteStore) getMaxSeqIDForSession(sessionID string) int {
 	return int(maxSeqID.Int64)
 }
 
-// getMaxToolSeqForSession returns the maximum tool sequence number for a session from tool_calls table.
+// getMaxToolSeqForSession returns the maximum tool sequence number for a
+// session from tool_calls. Callers already hold s.mu.RLock; see
+// getMaxSeqIDForSession for why this helper must not acquire it recursively.
 func (s *SQLiteStore) getMaxToolSeqForSession(sessionID string) int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	rows, err := s.db.Query("SELECT tool_id FROM tool_calls WHERE session_id = ?", sessionID)
 	if err != nil {
 		return 0

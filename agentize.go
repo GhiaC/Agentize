@@ -499,6 +499,16 @@ func (ag *Agentize) GetTaskScheduler() *engine.TaskScheduler {
 	return ag.engine.GetTaskScheduler()
 }
 
+// StopTaskScheduler cancels scheduled work and waits for its workers to exit.
+// Hosts that own process shutdown should call this before closing the session
+// store so scheduler goroutines cannot race a closing database.
+func (ag *Agentize) StopTaskScheduler() {
+	if ag == nil || ag.engine == nil {
+		return
+	}
+	ag.engine.StopTaskScheduler()
+}
+
 // SetTaskScheduleMessageFunc wires durable background schedule message upserts
 // to the host chat transport.
 func (ag *Agentize) SetTaskScheduleMessageFunc(fn engine.TaskScheduleMessageFunc) {
@@ -847,8 +857,6 @@ func (ag *Agentize) WaitForShutdown() {
 	log.Log.Infof("[Agentize] 📡 Received signal: %v, initiating graceful shutdown...", sig)
 
 	ag.StopScheduler()
-	if ag.engine != nil {
-		ag.engine.StopTaskScheduler()
-	}
+	ag.StopTaskScheduler()
 	log.Log.Infof("[Agentize] ✅ Graceful shutdown completed")
 }
