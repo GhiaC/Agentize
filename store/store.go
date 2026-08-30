@@ -11,13 +11,13 @@ import (
 )
 
 // Store is the single, complete persistence interface for Agentize. Every
-// backend — SQLite (SQLiteStore), MongoDB (MongoDBStore), and the cached wrapper
-// (DBStore) — implements ALL of it, enforced at compile time below.
+// backend — SQLite, MongoDB, PostgreSQL, and the cached wrapper (DBStore) —
+// implements ALL of it, enforced at compile time below.
 //
 // The behavior of each method is part of the contract: the backends MUST be
-// observationally identical so that switching between SQLite and MongoDB is
-// transparent. The conformance test suite (conformance_test.go) runs the same
-// assertions against every backend to guarantee this.
+// observationally identical so that switching between SQLite, MongoDB, and
+// PostgreSQL is transparent. The conformance test suite (conformance_test.go)
+// runs the same assertions against every backend to guarantee this.
 //
 // Contract that ALL backends guarantee:
 //   - Optional "get by id" lookups — GetUser, GetCoreSession, GetUserFile,
@@ -151,12 +151,13 @@ type Store interface {
 var (
 	_ Store = (*SQLiteStore)(nil)
 	_ Store = (*MongoDBStore)(nil)
+	_ Store = (*PostgreSQLStore)(nil)
 	_ Store = (*DBStore)(nil)
 )
 
 // Config selects and configures a storage backend for Open.
 type Config struct {
-	// Backend is "sqlite" (default) or "mongodb".
+	// Backend is "sqlite" (default), "mongodb", or "postgres".
 	Backend string
 	// SQLitePath is the SQLite database file path. Empty defaults to
 	// "./data/sessions.db"; use ":memory:" for an ephemeral in-memory store.
@@ -168,6 +169,17 @@ type Config struct {
 	// MongoOpTimeout overrides the per-operation timeout for the mongodb
 	// backend (default 12s).
 	MongoOpTimeout time.Duration
+	// PostgreSQL uses an isolated schema (default "agentize") and its own
+	// bounded pool on the host application's configured PostgreSQL server.
+	PostgresAddr           string
+	PostgresDatabase       string
+	PostgresUser           string
+	PostgresPassword       string
+	PostgresSSLMode        string
+	PostgresSchema         string
+	PostgresConnectTimeout time.Duration
+	PostgresMaxOpenConns   int
+	PostgresMaxIdleConns   int
 	// Quotas bounds per-user/per-session storage growth (zero values =
 	// unlimited). Enforced on every backend with ErrQuotaExceeded.
 	Quotas Quotas
@@ -207,8 +219,28 @@ func Open(cfg Config) (Store, error) {
 		}
 		s.SetQuotas(cfg.Quotas)
 		return s, nil
+	case "postgres", "postgresql":
+		if strings.TrimSpace(cfg.PostgresAddr) == "" || strings.TrimSpace(cfg.PostgresDatabase) == "" {
+			return nil, fmt.Errorf("store: PostgresAddr and PostgresDatabase are required for the postgres backend")
+		}
+		pcfg := DefaultPostgreSQLStoreConfig()
+		pcfg.Addr = cfg.PostgresAddr
+		pcfg.Database = cfg.PostgresDatabase
+		pcfg.User = cfg.PostgresUser
+		pcfg.Password = cfg.PostgresPassword
+		pcfg.SSLMode = cfg.PostgresSSLMode
+		pcfg.Schema = cfg.PostgresSchema
+		pcfg.ConnectTimeout = cfg.PostgresConnectTimeout
+		pcfg.MaxOpenConns = cfg.PostgresMaxOpenConns
+		pcfg.MaxIdleConns = cfg.PostgresMaxIdleConns
+		s, err := NewPostgreSQLStore(pcfg)
+		if err != nil {
+			return nil, err
+		}
+		s.SetQuotas(cfg.Quotas)
+		return s, nil
 	default:
-		return nil, fmt.Errorf("store: unknown backend %q (want \"sqlite\" or \"mongodb\")", cfg.Backend)
+		return nil, fmt.Errorf("store: unknown backend %q (want \"sqlite\", \"mongodb\", or \"postgres\")", cfg.Backend)
 	}
 }
 

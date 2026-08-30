@@ -1,0 +1,364 @@
+package store
+
+import (
+	"fmt"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/ghiac/agentize/model"
+)
+
+func TestRewritePostgreSQLQueryPlaceholders(t *testing.T) {
+	got := rewritePostgreSQLQuery(`SELECT data FROM sessions WHERE user_id = ? AND agent_type = ?`)
+	want := `SELECT data FROM sessions WHERE user_id = $1 AND agent_type = $2`
+	if got != want {
+		t.Fatalf("rewrite = %q, want %q", got, want)
+	}
+}
+
+func TestRewritePostgreSQLQueryUpsert(t *testing.T) {
+	got := rewritePostgreSQLQuery(`INSERT OR REPLACE INTO users (user_id, data, created_at, updated_at) VALUES (?, ?, ?, ?)`)
+	for _, fragment := range []string{
+		`INSERT INTO users`, `ON CONFLICT (user_id) DO UPDATE SET`, `data=EXCLUDED.data`, `VALUES ($1, $2::jsonb, $3, $4)`,
+	} {
+		if !strings.Contains(got, fragment) {
+			t.Fatalf("rewrite %q missing %q", got, fragment)
+		}
+	}
+}
+
+func TestRewritePostgreSQLQueryExistsAsInteger(t *testing.T) {
+	got := rewritePostgreSQLQuery(`SELECT EXISTS(SELECT 1 FROM messages WHERE message_id = ?)`)
+	if !strings.Contains(got, `SELECT CASE WHEN EXISTS(`) || !strings.Contains(got, `$1`) {
+		t.Fatalf("unexpected EXISTS rewrite: %q", got)
+	}
+	if strings.Contains(got, "?") {
+		t.Fatalf("placeholder survived EXISTS rewrite: %q", got)
+	}
+}
+
+func TestRewritePostgreSQLQueryMessageInsert(t *testing.T) {
+	got := rewritePostgreSQLQuery(messageInsertSQL)
+	for _, fragment := range []string{
+		`INSERT INTO messages`, `ON CONFLICT (message_id) DO UPDATE SET`, `VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+	} {
+		if !strings.Contains(got, fragment) {
+			t.Fatalf("message insert rewrite %q missing %q", got, fragment)
+		}
+	}
+}
+
+func TestRewritePostgreSQLQueryConversationInsert(t *testing.T) {
+	got := rewritePostgreSQLQuery(`INSERT OR REPLACE INTO conversations (
+			conversation_id, user_id, session_id, conversation_seq, title, model, archived, data, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	for _, fragment := range []string{
+		`ON CONFLICT (conversation_id)`, `$8::jsonb`, `data=EXCLUDED.data`,
+	} {
+		if !strings.Contains(got, fragment) {
+			t.Fatalf("conversation rewrite %q missing %q", got, fragment)
+		}
+	}
+}
+
+func TestRewritePostgreSQLQueryTaskScheduleOnConflict(t *testing.T) {
+	got := rewritePostgreSQLQuery(`INSERT INTO task_schedules
+			(schedule_id, user_id, session_id, status, next_run_at, data, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(schedule_id) DO UPDATE SET
+			user_id=excluded.user_id,
+			data=excluded.data,
+			updated_at=excluded.updated_at`)
+	if !strings.Contains(got, `$6::jsonb`) || !strings.Contains(got, `ON CONFLICT(schedule_id)`) {
+		t.Fatalf("task schedule rewrite = %q", got)
+	}
+}
+
+func TestRewritePostgreSQLQueryLeavesQuotedQuestionMarks(t *testing.T) {
+	got := rewritePostgreSQLQuery(`SELECT '?' FROM users WHERE user_id = ?`)
+	if got != `SELECT '?' FROM users WHERE user_id = $1` {
+		t.Fatalf("quoted placeholder rewrite = %q", got)
+	}
+}
+
+func TestPostgreSQLSchemaHasProductionIndexes(t *testing.T) {
+	for _, fragment := range []string{
+		`data JSONB NOT NULL`, `idx_messages_session_page`, `idx_tool_calls_session_created`,
+		`idx_conversations_user_updated`, `idx_sessions_user_core`, `idx_tool_calls_user_message_id ON tool_calls(user_message_id)`,
+	} {
+		if !strings.Contains(postgreSQLSchema, fragment) {
+			t.Fatalf("schema missing %q", fragment)
+		}
+	}
+	if postgreSQLMigrations[len(postgreSQLMigrations)-1].version != 1 {
+		t.Fatalf("unexpected latest PostgreSQL migration version")
+	}
+}
+
+func TestPostgreSQLRejectsUnsafeSchema(t *testing.T) {
+	cfg := DefaultPostgreSQLStoreConfig()
+	cfg.Schema = `agentize; DROP SCHEMA public`
+	if _, err := NewPostgreSQLStore(cfg); err == nil || !strings.Contains(err.Error(), "invalid PostgreSQL schema") {
+		t.Fatalf("expected schema validation error, got %v", err)
+	}
+}
+
+func TestPostgreSQLRejectsNegativeMaxIdleConns(t *testing.T) {
+	cfg := DefaultPostgreSQLStoreConfig()
+	cfg.MaxIdleConns = -1
+	if _, err := NewPostgreSQLStore(cfg); err == nil || !strings.Contains(err.Error(), "MaxIdleConns") {
+		t.Fatalf("expected MaxIdleConns error, got %v", err)
+	}
+}
+
+func TestOpenPostgreSQLRequiresAddrAndDatabase(t *testing.T) {
+	if _, err := Open(Config{Backend: "postgres", PostgresDatabase: "crypto"}); err == nil {
+		t.Fatal("expected missing PostgresAddr error")
+	}
+	if _, err := Open(Config{Backend: "postgres", PostgresAddr: "postgres.test:5432"}); err == nil {
+		t.Fatal("expected missing PostgresDatabase error")
+	}
+}
+
+func TestPostgreSQLDSNOmitsURLShapeAndEscapes(t *testing.T) {
+	cfg := DefaultPostgreSQLStoreConfig()
+	cfg.Addr = "db.example:5432"
+	cfg.Database = "crypto"
+	cfg.User = "app"
+	cfg.Password = `p/aw s's`
+	cfg.Schema = "agentize"
+	dsn := postgreSQLDSN(cfg)
+	if strings.Contains(dsn, "postgres://") || strings.Contains(dsn, "@db.example") {
+		t.Fatal("DSN still looks like a URL")
+	}
+	if !strings.Contains(dsn, "host=db.example") || !strings.Contains(dsn, "dbname=crypto") {
+		t.Fatal("DSN missing host/db")
+	}
+	if !strings.Contains(dsn, "options=-csearch_path=agentize") {
+		t.Fatal("DSN missing search_path option")
+	}
+}
+
+func TestPostgreSQLBackendInfoOmitsSecrets(t *testing.T) {
+	st := &PostgreSQLStore{addr: "postgres.test:5432", database: "crypto", schema: "agentize"}
+	info := st.BackendInfo()
+	if info.Type != "PostgreSQL" {
+		t.Fatalf("Type = %q", info.Type)
+	}
+	if !strings.Contains(info.Location, "postgres.test:5432/crypto") || !strings.Contains(info.Location, "schema: agentize") {
+		t.Fatalf("Location = %q", info.Location)
+	}
+	if strings.Contains(strings.ToLower(info.Location), "password") || strings.Contains(info.Location, "@") {
+		t.Fatalf("BackendInfo leaked credentials: %q", info.Location)
+	}
+}
+
+func openPostgreSQLTestStore(t *testing.T) *PostgreSQLStore {
+	t.Helper()
+	cfg, ok := sharedPostgreSQLConfig()
+	if !ok {
+		t.Skip("PostgreSQL unavailable (set AGENTIZE_POSTGRES_CONFIG_FILE or AGENTIZE_POSTGRES_ADDR)")
+	}
+	cfg.Schema = fmt.Sprintf("agentize_unit_%s_%d", postgresRunID, atomic.AddInt64(&postgresSchemaN, 1))
+	cfg.EphemeralSchema = true
+	st, err := NewPostgreSQLStore(cfg)
+	if err != nil {
+		t.Fatalf("NewPostgreSQLStore: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
+}
+
+func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
+	st := openPostgreSQLTestStore(t)
+	version, err := st.SchemaVersion()
+	if err != nil || version != 1 {
+		t.Fatalf("SchemaVersion = %d (%v), want 1", version, err)
+	}
+	if stats := st.PoolStats(); stats.MaxOpenConnections <= 0 {
+		t.Fatalf("PoolStats.MaxOpenConnections = %d", stats.MaxOpenConnections)
+	}
+
+	s := model.NewSessionWithType("pg-user-1", model.AgentTypeLow)
+	s.Title = "postgres-roundtrip"
+	if err := st.Put(s); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := st.Get(s.SessionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Title != "postgres-roundtrip" || got.UserID != "pg-user-1" {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+
+	msg := model.NewUserMessage(s.SessionID+"-m0001", 1, s.UserID, s.SessionID, "hello jsonb", model.ContentTypeWidget)
+	msg.Metadata = model.NewScheduleMessageMeta(&model.TaskSchedule{
+		ScheduleID: "sch-1", Name: "4h review", Status: model.TaskScheduleActive,
+		LastRunStatus: model.TaskRunSucceeded, LastConclusion: "held the range",
+	})
+	if err := st.PutMessage(msg); err != nil {
+		t.Fatalf("PutMessage: %v", err)
+	}
+	msgs, err := st.GetMessagesBySession(s.SessionID)
+	if err != nil || len(msgs) != 1 || msgs[0].Content != "hello jsonb" {
+		t.Fatalf("messages = %#v err=%v", msgs, err)
+	}
+	if model.MessageKind(msgs[0]) != model.MessageMetaKindSchedule {
+		t.Fatalf("message metadata kind = %q", model.MessageKind(msgs[0]))
+	}
+
+	conv := model.NewConversation(s.UserID, "pg-user-1-c0001", s.SessionID, "plan", "m1", 1)
+	if err := st.PutConversation(conv); err != nil {
+		t.Fatalf("PutConversation: %v", err)
+	}
+	gotConv, err := st.GetConversation("pg-user-1-c0001")
+	if err != nil || gotConv.Title != "plan" {
+		t.Fatalf("GetConversation: %v %+v", err, gotConv)
+	}
+
+	info := st.BackendInfo()
+	if info.Type != "PostgreSQL" || strings.Contains(info.Location, "password") {
+		t.Fatalf("BackendInfo = %+v", info)
+	}
+}
+
+func TestPostgreSQLStoreLiveCoreUniqueness(t *testing.T) {
+	st := openPostgreSQLTestStore(t)
+	first := model.NewSessionWithType("pg-core-user", model.AgentTypeCore)
+	second := model.NewSessionWithType("pg-core-user", model.AgentTypeCore)
+	if err := st.PutCoreSession(first); err != nil {
+		t.Fatalf("PutCoreSession first: %v", err)
+	}
+	if err := st.PutCoreSession(second); err != nil {
+		t.Fatalf("PutCoreSession second: %v", err)
+	}
+	got, err := st.GetCoreSession("pg-core-user")
+	if err != nil || got == nil || got.SessionID != second.SessionID {
+		t.Fatalf("GetCoreSession = %+v err=%v, want %s", got, err, second.SessionID)
+	}
+	list, err := st.List("pg-core-user")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	cores := 0
+	for _, session := range list {
+		if session.AgentType == model.AgentTypeCore {
+			cores++
+		}
+	}
+	if cores != 1 {
+		t.Fatalf("core sessions = %d, want 1", cores)
+	}
+}
+
+func TestPostgreSQLStoreLiveEphemeralIsolation(t *testing.T) {
+	a := openPostgreSQLTestStore(t)
+	b := openPostgreSQLTestStore(t)
+	if a.schema == b.schema {
+		t.Fatal("ephemeral stores shared a schema")
+	}
+	s := model.NewSessionWithType("pg-iso", model.AgentTypeLow)
+	if err := a.Put(s); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, err := b.Get(s.SessionID); err == nil {
+		t.Fatal("store B saw store A's session")
+	}
+}
+
+func TestPostgreSQLStoreLiveReopenIdempotent(t *testing.T) {
+	cfg, ok := sharedPostgreSQLConfig()
+	if !ok {
+		t.Skip("PostgreSQL unavailable (set AGENTIZE_POSTGRES_CONFIG_FILE or AGENTIZE_POSTGRES_ADDR)")
+	}
+	s := model.NewSessionWithType("pg-reopen", model.AgentTypeLow)
+	s.Title = "kept"
+
+	ephemeral := cfg
+	ephemeral.Schema = fmt.Sprintf("agentize_reopen_%s_%d", postgresRunID, atomic.AddInt64(&postgresSchemaN, 1))
+	ephemeral.EphemeralSchema = true
+	st, err := NewPostgreSQLStore(ephemeral)
+	if err != nil {
+		t.Fatalf("ephemeral open: %v", err)
+	}
+	if err := st.Put(s); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close ephemeral store: %v", err)
+	}
+	again, err := NewPostgreSQLStore(ephemeral)
+	if err != nil {
+		t.Fatalf("recreate after drop: %v", err)
+	}
+	t.Cleanup(func() { _ = again.Close() })
+	if _, err := again.Get(s.SessionID); err == nil {
+		t.Fatal("ephemeral drop did not remove session")
+	}
+
+	durable := cfg
+	durable.Schema = fmt.Sprintf("agentize_keep_%s_%d", postgresRunID, atomic.AddInt64(&postgresSchemaN, 1))
+	durable.EphemeralSchema = false
+	kept, err := NewPostgreSQLStore(durable)
+	if err != nil {
+		t.Fatalf("durable open: %v", err)
+	}
+	if err := kept.Put(s); err != nil {
+		_ = kept.Close()
+		t.Fatalf("Put durable: %v", err)
+	}
+	if err := kept.Close(); err != nil {
+		t.Fatalf("close durable: %v", err)
+	}
+	reopened, err := NewPostgreSQLStore(durable)
+	if err != nil {
+		t.Fatalf("reopen durable: %v", err)
+	}
+	t.Cleanup(func() {
+		reopened.ownedEphemeralSchema = true
+		_ = reopened.Close()
+	})
+	got, err := reopened.Get(s.SessionID)
+	if err != nil || got.Title != "kept" {
+		t.Fatalf("durable reopen lost session: %v %+v", err, got)
+	}
+	version, err := reopened.SchemaVersion()
+	if err != nil || version != 1 {
+		t.Fatalf("schema version after reopen = %d (%v)", version, err)
+	}
+}
+
+func TestPostgreSQLStoreLiveOpenFactory(t *testing.T) {
+	cfg, ok := sharedPostgreSQLConfig()
+	if !ok {
+		t.Skip("PostgreSQL unavailable (set AGENTIZE_POSTGRES_CONFIG_FILE or AGENTIZE_POSTGRES_ADDR)")
+	}
+	schema := fmt.Sprintf("agentize_open_%s_%d", postgresRunID, atomic.AddInt64(&postgresSchemaN, 1))
+	st, err := Open(Config{
+		Backend:                "postgres",
+		PostgresAddr:           cfg.Addr,
+		PostgresDatabase:       cfg.Database,
+		PostgresUser:           cfg.User,
+		PostgresPassword:       cfg.Password,
+		PostgresSSLMode:        cfg.SSLMode,
+		PostgresSchema:         schema,
+		PostgresConnectTimeout: 5 * time.Second,
+		PostgresMaxOpenConns:   4,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	pg, ok := st.(*PostgreSQLStore)
+	if !ok {
+		t.Fatalf("Open type %T, want *PostgreSQLStore", st)
+	}
+	pg.ownedEphemeralSchema = true
+	t.Cleanup(func() { _ = st.Close() })
+	info := st.BackendInfo()
+	if info.Type != "PostgreSQL" {
+		t.Fatalf("BackendInfo.Type = %q", info.Type)
+	}
+}

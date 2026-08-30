@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,7 +14,10 @@ import (
 	"time"
 
 	"github.com/ghiac/agentize/model"
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mongodb"
+	"github.com/testcontainers/testcontainers-go/wait"
+	"gopkg.in/yaml.v3"
 )
 
 // This file is the single source of truth for backend parity. Every test runs
@@ -33,10 +39,101 @@ type backendFactory struct {
 }
 
 var (
-	mongoOnce sync.Once
-	mongoURI  string
-	mongoDBN  int64
+	mongoOnce       sync.Once
+	mongoURI        string
+	mongoDBN        int64
+	postgresOnce    sync.Once
+	postgresCfg     PostgreSQLStoreConfig
+	postgresOK      bool
+	postgresSchemaN int64
+	postgresRunID   string
 )
+
+func newPostgresRunID() string {
+	var raw [12]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+func sharedPostgreSQLConfig() (PostgreSQLStoreConfig, bool) {
+	postgresOnce.Do(func() {
+		postgresRunID = newPostgresRunID()
+		if path := os.Getenv("AGENTIZE_POSTGRES_CONFIG_FILE"); path != "" {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return
+			}
+			var file struct {
+				Postgres struct {
+					Addr         string `yaml:"addr"`
+					Database     string `yaml:"database"`
+					User         string `yaml:"user"`
+					Password     string `yaml:"password"`
+					SSLMode      string `yaml:"ssl_mode"`
+					MaxOpenConns int    `yaml:"max_open_conns"`
+					DialTimeout  string `yaml:"dial_timeout"`
+				} `yaml:"postgres"`
+			}
+			if yaml.Unmarshal(raw, &file) != nil {
+				return
+			}
+			postgresCfg = DefaultPostgreSQLStoreConfig()
+			postgresCfg.Addr, postgresCfg.Database = file.Postgres.Addr, file.Postgres.Database
+			postgresCfg.User, postgresCfg.Password = file.Postgres.User, file.Postgres.Password
+			if password := os.Getenv("AGENTIZE_POSTGRES_PASSWORD"); password != "" {
+				postgresCfg.Password = password
+			}
+			postgresCfg.SSLMode, postgresCfg.MaxOpenConns = file.Postgres.SSLMode, file.Postgres.MaxOpenConns
+			if d, err := time.ParseDuration(file.Postgres.DialTimeout); err == nil {
+				postgresCfg.ConnectTimeout = d
+			}
+			postgresOK = postgresCfg.Addr != "" && postgresCfg.Database != ""
+			return
+		}
+		if addr := os.Getenv("AGENTIZE_POSTGRES_ADDR"); addr != "" {
+			postgresCfg = DefaultPostgreSQLStoreConfig()
+			postgresCfg.Addr = addr
+			postgresCfg.Database = os.Getenv("AGENTIZE_POSTGRES_DATABASE")
+			postgresCfg.User = os.Getenv("AGENTIZE_POSTGRES_USER")
+			postgresCfg.Password = os.Getenv("AGENTIZE_POSTGRES_PASSWORD")
+			postgresCfg.SSLMode = os.Getenv("AGENTIZE_POSTGRES_SSLMODE")
+			postgresOK = true
+			return
+		}
+		ctx := context.Background()
+		container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Image:        "postgres:17-alpine",
+				ExposedPorts: []string{"5432/tcp"},
+				Env: map[string]string{
+					"POSTGRES_DB": "agentize_test", "POSTGRES_USER": "agentize", "POSTGRES_PASSWORD": "agentize_test_password",
+				},
+				WaitingFor: wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+			},
+			Started: true,
+		})
+		if err != nil {
+			return
+		}
+		host, err := container.Host(ctx)
+		if err != nil {
+			return
+		}
+		port, err := container.MappedPort(ctx, "5432/tcp")
+		if err != nil {
+			return
+		}
+		postgresCfg = DefaultPostgreSQLStoreConfig()
+		postgresCfg.Addr = net.JoinHostPort(host, port.Port())
+		postgresCfg.Database = "agentize_test"
+		postgresCfg.User = "agentize"
+		postgresCfg.Password = "agentize_test_password"
+		postgresOK = true
+	})
+	return postgresCfg, postgresOK
+}
 
 // sharedMongoURI lazily starts ONE MongoDB container for the whole package run.
 // Returns "" when Docker (and MONGODB_URI) are unavailable so callers can skip.
@@ -107,6 +204,23 @@ func conformanceBackends(t *testing.T) []backendFactory {
 		})
 	} else {
 		t.Log("MongoDB backend skipped (Docker/MONGODB_URI unavailable); SQLite backends still run")
+	}
+	if cfg, ok := sharedPostgreSQLConfig(); ok {
+		backends = append(backends, backendFactory{
+			name: "postgresql",
+			newStore: func(t *testing.T) Store {
+				pcfg := cfg
+				pcfg.Schema = fmt.Sprintf("agentize_conf_%s_%d", postgresRunID, atomic.AddInt64(&postgresSchemaN, 1))
+				pcfg.EphemeralSchema = true
+				st, err := NewPostgreSQLStore(pcfg)
+				if err != nil {
+					t.Fatalf("postgresql: %v", err)
+				}
+				return st
+			},
+		})
+	} else {
+		t.Log("PostgreSQL backend skipped (Docker/AGENTIZE_POSTGRES_ADDR unavailable)")
 	}
 	return backends
 }

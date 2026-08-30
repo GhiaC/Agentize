@@ -2,16 +2,16 @@
 
 This package provides storage for Agentize. Every backend implements one
 unified interface, **`store.Store`**, and is guaranteed — at compile time and by
-a shared conformance test suite — to behave identically. Switching between SQLite
-and MongoDB is a configuration change, never a code change.
+a shared conformance test suite — to behave identically. Switching between SQLite,
+MongoDB, and PostgreSQL is a configuration change, never a code change.
 
 ## Unified interface & `store.Open`
 
 `store.Store` is the single, complete contract (sessions, core sessions, users,
 messages, opened files, user files, tool calls, summarization logs, route traces,
-visited nodes, lifecycle, and `BackendInfo`). `SQLiteStore`, `MongoDBStore`, and the
-cached `DBStore` all implement it; a compile-time assertion in `store.go` fails
-the build if any backend ever drifts.
+visited nodes, lifecycle, and `BackendInfo`). `SQLiteStore`, `MongoDBStore`,
+`PostgreSQLStore`, and the cached `DBStore` all implement it; a compile-time
+assertion in `store.go` fails the build if any backend ever drifts.
 
 The simplest way to construct a backend is the `store.Open` factory:
 
@@ -23,6 +23,12 @@ st, err := store.Open(store.Config{Backend: "sqlite", SQLitePath: "./data/sessio
 
 // MongoDB.
 st, err := store.Open(store.Config{Backend: "mongodb", MongoURI: "mongodb://localhost:27017"})
+
+// PostgreSQL. Agentize objects live in an isolated schema (default "agentize").
+st, err := store.Open(store.Config{
+    Backend: "postgres", PostgresAddr: "localhost:5432", PostgresDatabase: "app",
+    PostgresUser: "app", PostgresSchema: "agentize",
+})
 ```
 
 ### Behavioral contract (identical on every backend)
@@ -36,7 +42,9 @@ st, err := store.Open(store.Config{Backend: "mongodb", MongoURI: "mongodb://loca
 - Timestamps round-trip at one-second precision.
 
 Parity is enforced by `conformance_test.go`, which runs the same suite against
-SQLite (file + in-memory) and a real MongoDB via testcontainers.
+SQLite (file + in-memory), MongoDB, and PostgreSQL. MongoDB/PostgreSQL can use
+testcontainers or an external server (`MONGODB_URI`, `AGENTIZE_POSTGRES_ADDR` /
+`AGENTIZE_POSTGRES_CONFIG_FILE`).
 
 ## Available Stores
 
@@ -95,6 +103,24 @@ if err != nil {
     log.Fatal(err)
 }
 defer mongoStore.Close()
+```
+
+### PostgreSQLStore
+PostgreSQL-backed storage for production when the host already runs PostgreSQL.
+Agentize objects live in an isolated schema (default `agentize`) with JSONB
+documents, `ON CONFLICT` upserts, and covering indexes. Backup is delegated to
+`pg_dump`.
+
+```go
+import "github.com/ghiac/agentize/store"
+
+st, err := store.NewPostgreSQLStore(store.PostgreSQLStoreConfig{
+    Addr: "localhost:5432", Database: "app", User: "app", Schema: "agentize",
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer st.Close()
 ```
 
 ## Usage with Agentize
@@ -210,11 +236,12 @@ err := sqliteStore.Put(coreSession) // Same as PutCoreSession for Core sessions
 
 - **SQLiteStore**: Uses JSON serialization for Session objects. All timestamps are stored as Unix timestamps (integers). Perfect for single-server deployments or when you don't want to manage a separate database server.
 
-- **MongoDBStore**: Uses MongoDB's native BSON storage with JSON serialization for Session data. Provides better scalability, replication, and sharding capabilities. Ideal for production deployments with multiple servers.
+- **PostgreSQLStore**: JSONB documents, covering indexes, `ON CONFLICT` upserts, and a partial unique index for one Core session per user. Lives in an isolated schema so it can share a PostgreSQL server with a host application. `store.Open` requires addr and database; there is no silent fallback to SQLite/MongoDB.
 
-- **Core Session Uniqueness**: Both stores enforce that only one Core session exists per user. This is handled automatically through:
+- **Core Session Uniqueness**: Every store enforces that only one Core session exists per user. This is handled automatically through:
   - SQLite: Unique index with partial filter
   - MongoDB: Unique index with partial filter expression
+  - PostgreSQL: Unique partial index on `user_id WHERE agent_type='core'`
 
 - **UserNodes**: Visited nodes are still stored in-memory for performance (same for all store implementations)
 

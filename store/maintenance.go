@@ -151,4 +151,5 @@ var (
 	_ Maintainer = (*SQLiteStore)(nil)
 	_ Maintainer = (*DBStore)(nil)
 	_ Maintainer = (*MongoDBStore)(nil)
+	_ Maintainer = (*PostgreSQLStore)(nil)
 )
