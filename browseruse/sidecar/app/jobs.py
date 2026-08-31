@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -31,6 +33,15 @@ DEBUG_LIVE_TABS_BUDGET_SECONDS = 2.0
 
 class BrowserRunner(Protocol):
 	async def run(self, session_id: str, job_id: str, request: StartJobRequest) -> JobResult: ...
+
+
+TAB_LOCK_TIMEOUT_SECONDS = 2.0
+TAB_OP_TIMEOUT_SECONDS = 25.0
+LOGGER = logging.getLogger("browser-use.jobs")
+
+
+def _session_ref(session_id: str) -> str:
+	return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
 
 
 @dataclass
@@ -67,6 +78,7 @@ class JobManager:
 		self._jobs_lock = asyncio.Lock()
 		self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 		self._session_locks: dict[str, asyncio.Lock] = {}
+		self._active_job_ids: dict[str, str] = {}
 		self._store = BrowserStore(
 			settings.data_dir / "browser.db",
 			max_jobs=settings.db_max_jobs,
@@ -177,24 +189,19 @@ class JobManager:
 		lister = getattr(self.runner, "tabs", None)
 		if lister is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tabs")
-		lock = await self._session_lock(session_id)
-		async with lock:
-			return await lister(session_id)
+		return await self._with_tab_lock(session_id, lambda: lister(session_id), "tabs")
 
 	async def open_tab(self, session_id: str, url: str) -> list[BrowserTab]:
 		opener = getattr(self.runner, "open_tab", None)
 		if opener is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support opening tabs")
-		lock = await self._session_lock(session_id)
-		async with lock:
-			return await opener(session_id, url)
+		return await self._with_tab_lock(session_id, lambda: opener(session_id, url), "open_tab")
 
 	async def tab_screenshot(self, session_id: str, tab_id: str) -> bytes:
 		reader = getattr(self.runner, "tab_screenshot", None)
 		if reader is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tab screenshots")
-		lock = await self._session_lock(session_id)
-		async with lock:
+		async def capture() -> bytes:
 			try:
 				return await reader(session_id, tab_id)
 			except KeyError:
@@ -206,12 +213,13 @@ class JobManager:
 			except ValueError as exc:
 				raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
 
+		return await self._with_tab_lock(session_id, capture, "tab_screenshot")
+
 	async def inspect_tab(self, session_id: str, tab_id: str):
 		inspector = getattr(self.runner, "inspect_tab", None)
 		if inspector is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tab inspection")
-		lock = await self._session_lock(session_id)
-		async with lock:
+		async def inspect():
 			try:
 				return await inspector(session_id, tab_id)
 			except KeyError:
@@ -219,12 +227,13 @@ class JobManager:
 			except BrowserTabUnavailable as exc:
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 
+		return await self._with_tab_lock(session_id, inspect, "inspect_tab")
+
 	async def act_on_tab(self, session_id: str, tab_id: str, request):
 		actor = getattr(self.runner, "act_on_tab", None)
 		if actor is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tab actions")
-		lock = await self._session_lock(session_id)
-		async with lock:
+		async def act():
 			try:
 				return await actor(session_id, tab_id, request)
 			except KeyError:
@@ -234,18 +243,21 @@ class JobManager:
 			except ValueError as exc:
 				raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+		return await self._with_tab_lock(session_id, act, "act_on_tab")
+
 	async def close_tab(self, session_id: str, tab_id: str) -> list[BrowserTab]:
 		closer = getattr(self.runner, "close_tab", None)
 		if closer is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tabs")
-		lock = await self._session_lock(session_id)
-		async with lock:
+		async def close():
 			try:
 				return await closer(session_id, tab_id)
 			except KeyError:
 				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab not found") from None
 			except BrowserTabUnavailable as exc:
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
+
+		return await self._with_tab_lock(session_id, close, "close_tab")
 
 	def viewport(self, session_id: str):
 		reader = getattr(self.runner, "viewport_state", None)
@@ -257,14 +269,15 @@ class JobManager:
 		setter = getattr(self.runner, "set_viewport", None)
 		if setter is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support viewport quality")
-		lock = await self._session_lock(session_id)
-		async with lock:
+		async def apply():
 			try:
 				return await setter(session_id, quality)
 			except ValueError as exc:
 				raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 			except BrowserTabUnavailable as exc:
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
+
+		return await self._with_tab_lock(session_id, apply, "set_viewport")
 
 	async def debug(self, job_limit: int, load_limit: int, session_limit: int = 50) -> BrowserDebugResponse:
 		async with self._jobs_lock:
@@ -346,9 +359,7 @@ class JobManager:
 				status_code=status.HTTP_501_NOT_IMPLEMENTED,
 				detail="browser runner does not support killing sessions",
 			)
-		lock = await self._session_lock(session_id)
-		async with lock:
-			await killer(session_id)
+		await self._with_tab_lock(session_id, lambda: killer(session_id), "kill_session")
 		self._store.touch_session(session_id)
 		self._store.append_log("session:" + session_id, "warn", "operator killed persistent browser session")
 		return await self.debug_session(session_id)
@@ -447,7 +458,9 @@ class JobManager:
 		try:
 			async with self._semaphore:
 				session_lock = self._session_locks[job.session_id]
-				async with session_lock:
+				await session_lock.acquire()
+				self._active_job_ids[job.session_id] = job.id
+				try:
 					await self._transition(job, JobStatus.RUNNING)
 					self._log(job, "info", "job started")
 					job.result = await asyncio.wait_for(
@@ -458,6 +471,9 @@ class JobManager:
 					self._log(job, "info", f"job succeeded in {job.result.steps} steps")
 					if job.result.action_names:
 						self._log(job, "info", "actions: " + ", ".join(job.result.action_names[:20]))
+				finally:
+					self._active_job_ids.pop(job.session_id, None)
+					session_lock.release()
 		except asyncio.CancelledError:
 			await self._transition(job, JobStatus.CANCELLED)
 			self._log(job, "warn", "job cancelled")
@@ -495,6 +511,30 @@ class JobManager:
 	async def _session_lock(self, session_id: str) -> asyncio.Lock:
 		async with self._jobs_lock:
 			return self._session_locks.setdefault(session_id, asyncio.Lock())
+
+	async def _with_tab_lock(self, session_id: str, operation, operation_name: str = "tab_operation"):
+		lock = await self._session_lock(session_id)
+		try:
+			await asyncio.wait_for(lock.acquire(), timeout=TAB_LOCK_TIMEOUT_SECONDS)
+		except TimeoutError as exc:
+			job_id = self._active_job_ids.get(session_id, "")
+			LOGGER.warning("tab_lock_busy operation=%s session=%s active_job=%s", operation_name, _session_ref(session_id), job_id or "none")
+			detail = f"browser session busy: autonomous job {job_id} running" if job_id else "browser session busy"
+			raise HTTPException(
+				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+				detail=detail,
+				headers={"X-Browser-Session-Busy": "1"},
+			) from exc
+		try:
+			return await asyncio.wait_for(operation(), timeout=TAB_OP_TIMEOUT_SECONDS)
+		except TimeoutError as exc:
+			LOGGER.warning("tab_operation_timeout operation=%s session=%s", operation_name, _session_ref(session_id))
+			raise HTTPException(
+				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+				detail="browser tab operation timed out; retry",
+			) from exc
+		finally:
+			lock.release()
 
 	def _response(self, job: _Job) -> JobResponse:
 		response = job.response()

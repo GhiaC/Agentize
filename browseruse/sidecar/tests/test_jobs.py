@@ -268,6 +268,47 @@ class BrowserUseRunnerTabTests(unittest.IsolatedAsyncioTestCase):
 
 
 class JobManagerTests(unittest.IsolatedAsyncioTestCase):
+	async def test_running_job_makes_tab_actions_fail_fast_but_job_screenshot_remains_available(self):
+		class BlockingTabRunner(TabRunner):
+			def __init__(self):
+				super().__init__()
+				self.started = asyncio.Event()
+
+			async def run(self, _session_id: str, _job_id: str, _request: StartJobRequest) -> JobResult:
+				self.started.set()
+				await asyncio.Event().wait()
+				return result()
+
+		runner = BlockingTabRunner()
+		manager = JobManager(settings(), runner)
+		created = await manager.create("session-1", StartJobRequest(task="hold browser session"))
+		await asyncio.wait_for(runner.started.wait(), timeout=1)
+		self.assertEqual(await manager.screenshot("session-1", created.id), b"PNG")
+		started = asyncio.get_running_loop().time()
+		with patch("app.jobs.TAB_LOCK_TIMEOUT_SECONDS", 0.05):
+			with self.assertRaises(HTTPException) as caught:
+				await manager.open_tab("session-1", "https://openai.com")
+		self.assertEqual(caught.exception.status_code, 503)
+		self.assertEqual(caught.exception.headers.get("X-Browser-Session-Busy"), "1")
+		self.assertIn(created.id, str(caught.exception.detail))
+		self.assertLess(asyncio.get_running_loop().time() - started, 0.5)
+		await manager.cancel("session-1", created.id)
+		await manager.shutdown()
+
+	async def test_hung_tab_operation_has_a_bounded_timeout(self):
+		class HangingOpenRunner(TabRunner):
+			async def open_tab(self, _session_id: str, _url: str):
+				await asyncio.Event().wait()
+				return []
+
+		manager = JobManager(settings(), HangingOpenRunner())
+		with patch("app.jobs.TAB_OP_TIMEOUT_SECONDS", 0.05):
+			with self.assertRaises(HTTPException) as caught:
+				await manager.open_tab("session-1", "https://openai.com")
+		self.assertEqual(caught.exception.status_code, 503)
+		self.assertIn("timed out", str(caught.exception.detail))
+		await manager.shutdown()
+
 	async def test_wait_follows_running_job_until_terminal(self):
 		manager = JobManager(settings(), CompletingRunner())
 		created = await manager.create("session-1", StartJobRequest(task="test"))
