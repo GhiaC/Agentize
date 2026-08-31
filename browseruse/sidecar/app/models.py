@@ -105,7 +105,7 @@ class BrowserTabActionRequest(BaseModel):
 	@classmethod
 	def supported_action(cls, value: str) -> str:
 		value = value.strip().lower()
-		if value not in {"navigate", "click", "type", "press", "scroll", "wait"}:
+		if value not in {"navigate", "click", "type", "press", "scroll", "wait", "back", "forward"}:
 			raise ValueError("unsupported browser tab action")
 		return value
 
@@ -114,6 +114,14 @@ class BrowserTabActionResponse(BaseModel):
 	tab: BrowserTab
 	result: str = Field(default="", max_length=4_000)
 	tabs: list[BrowserTab] = Field(default_factory=list)
+	navigation_urls: list[str] = Field(default_factory=list, max_length=200)
+	navigation_index: int = -1
+
+
+class BrowserTabHistoryResponse(BaseModel):
+	tab: BrowserTab
+	navigation_urls: list[str] = Field(default_factory=list, max_length=200)
+	navigation_index: int = -1
 
 
 class StartJobRequest(BaseModel):
@@ -207,6 +215,8 @@ class SetViewportRequest(BaseModel):
 
 class BrowserTabsResponse(BaseModel):
 	tabs: list[BrowserTab] = Field(default_factory=list)
+	session_busy: bool = False
+	active_job_id: str = ""
 	viewport: ViewportState | None = None
 
 

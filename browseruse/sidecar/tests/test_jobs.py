@@ -61,6 +61,8 @@ def settings() -> Settings:
 		chromium_sandbox=False,
 		block_ip_addresses=True,
 		default_use_vision=False,
+		viewport_width=1920,
+		viewport_height=1080,
 		allowed_domains=(),
 		prohibited_domains=(),
 		proxy_url=None,
@@ -156,7 +158,13 @@ class TabCDPClient:
 	def __init__(self):
 		self.navigate = AsyncMock(return_value={})
 		self.evaluate = AsyncMock(return_value={"result": {"value": "evaluated"}})
-		self.send = SimpleNamespace(Page=SimpleNamespace(navigate=self.navigate), Runtime=SimpleNamespace(evaluate=self.evaluate))
+		self.get_navigation_history = AsyncMock(
+			return_value={"entries": [{"id": 1, "url": "https://example.com"}], "currentIndex": 0}
+		)
+		self.send = SimpleNamespace(
+			Page=SimpleNamespace(navigate=self.navigate, getNavigationHistory=self.get_navigation_history),
+			Runtime=SimpleNamespace(evaluate=self.evaluate),
+		)
 
 
 class TabBrowser:
@@ -172,7 +180,12 @@ class BrowserUseRunnerTabTests(unittest.IsolatedAsyncioTestCase):
 	async def test_navigation_uses_the_tab_cdp_session(self):
 		runner = object.__new__(BrowserUseRunner)
 		browser = TabBrowser()
-		runner.settings = SimpleNamespace(prohibited_domains=(), allowed_domains=(), block_ip_addresses=False)
+		runner.settings = SimpleNamespace(
+			prohibited_domains=(),
+			allowed_domains=(),
+			block_ip_addresses=False,
+			data_dir=Path(self.enterContext(TemporaryDirectory())),
+		)
 		runner._owned_direct_tab = AsyncMock(return_value=browser)
 		runner._tab_cdp_session = AsyncMock(return_value=browser.cdp_session)
 		runner._tab_by_id = AsyncMock(return_value=BrowserTab(id="tab-1", url="https://example.com"))
@@ -360,6 +373,37 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
 		self.assertTrue(snapshot.jobs[0].screenshot_available)
 		logs = await manager.job_logs(created.id, 20)
 		self.assertGreaterEqual(len(logs.logs), 2)
+		await manager.shutdown()
+
+	async def test_debug_snapshot_includes_persisted_tabs_when_chromium_is_gone(self):
+		class PersistedOnlyRunner(CompletingRunner):
+			def list_sessions(self):
+				return []
+
+			def list_persisted_tab_sessions(self):
+				return {
+					"user:owner-1": [BrowserTab(id="tab-1", url="https://example.com", title="Example", active=True)],
+				}
+
+		manager = JobManager(settings(), PersistedOnlyRunner())
+		snapshot = await manager.debug(job_limit=10, load_limit=0, session_limit=50)
+		self.assertEqual(snapshot.live_sessions, 0)
+		self.assertEqual(snapshot.total_tabs, 1)
+		session = next(item for item in snapshot.sessions if item.session_id == "user:owner-1")
+		self.assertFalse(session.persistent)
+		self.assertEqual(session.tabs[0].url, "https://example.com")
+		await manager.shutdown()
+
+	async def test_debug_snapshot_includes_tabs_opened_by_host_client(self):
+		runner = TabRunner()
+		manager = JobManager(settings(), runner)
+		await manager.open_tab("user:owner-1", "https://example.com")
+		snapshot = await manager.debug(job_limit=10, load_limit=0, session_limit=50)
+		self.assertEqual(snapshot.live_sessions, 1)
+		self.assertEqual(snapshot.total_tabs, 1)
+		session = next(item for item in snapshot.sessions if item.session_id == "user:owner-1")
+		self.assertTrue(session.persistent)
+		self.assertEqual(session.tabs[0].url, "https://example.com")
 		await manager.shutdown()
 
 	async def test_debug_snapshot_does_not_block_on_hung_live_tabs(self):

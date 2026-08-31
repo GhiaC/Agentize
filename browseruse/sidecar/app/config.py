@@ -67,6 +67,8 @@ class Settings:
 	chromium_sandbox: bool
 	block_ip_addresses: bool
 	default_use_vision: bool
+	viewport_width: int
+	viewport_height: int
 	allowed_domains: tuple[str, ...]
 	prohibited_domains: tuple[str, ...]
 	proxy_url: str | None
@@ -100,6 +102,8 @@ class Settings:
 			chromium_sandbox=_boolean("BROWSER_USE_CHROMIUM_SANDBOX", False),
 			block_ip_addresses=_boolean("BROWSER_USE_BLOCK_IP_ADDRESSES", True),
 			default_use_vision=_boolean("BROWSER_USE_DEFAULT_USE_VISION", True),
+			viewport_width=_integer("BROWSER_USE_VIEWPORT_WIDTH", 1920, 800, 3840),
+			viewport_height=_integer("BROWSER_USE_VIEWPORT_HEIGHT", 1080, 600, 2160),
 			allowed_domains=_csv("BROWSER_USE_ALLOWED_DOMAINS"),
 			prohibited_domains=_csv("BROWSER_USE_PROHIBITED_DOMAINS"),
 			proxy_url=_proxy_url(),

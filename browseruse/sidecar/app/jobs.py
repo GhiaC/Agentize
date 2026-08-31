@@ -195,7 +195,10 @@ class JobManager:
 		opener = getattr(self.runner, "open_tab", None)
 		if opener is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support opening tabs")
-		return await self._with_tab_lock(session_id, lambda: opener(session_id, url), "open_tab")
+		tabs = await self._with_tab_lock(session_id, lambda: opener(session_id, url), "open_tab")
+		self._store.touch_session(session_id)
+		LOGGER.info("tab opened session=%s tabs=%d", _session_ref(session_id), len(tabs))
+		return tabs
 
 	async def tab_screenshot(self, session_id: str, tab_id: str) -> bytes:
 		reader = getattr(self.runner, "tab_screenshot", None)
@@ -228,6 +231,21 @@ class JobManager:
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 
 		return await self._with_tab_lock(session_id, inspect, "inspect_tab")
+
+	async def tab_history(self, session_id: str, tab_id: str):
+		reader = getattr(self.runner, "tab_history", None)
+		if reader is None:
+			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tab history")
+
+		async def read():
+			try:
+				return await reader(session_id, tab_id)
+			except KeyError:
+				raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="browser tab not found") from None
+			except BrowserTabUnavailable as exc:
+				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
+
+		return await self._with_tab_lock(session_id, read, "tab_history")
 
 	async def act_on_tab(self, session_id: str, tab_id: str, request):
 		actor = getattr(self.runner, "act_on_tab", None)
@@ -302,7 +320,7 @@ class JobManager:
 
 		sessions = await self._debug_sessions(session_limit)
 		live_sessions = sum(1 for item in sessions if item.persistent)
-		total_tabs = sum(item.tab_count for item in sessions if item.persistent)
+		total_tabs = sum(item.tab_count for item in sessions)
 		return BrowserDebugResponse(
 			total_jobs=total_jobs,
 			running_jobs=running_jobs,
@@ -387,12 +405,20 @@ class JobManager:
 					continue
 				remaining = deadline - asyncio.get_running_loop().time()
 				if remaining <= 0:
-					live_tabs[session_id] = []
+					LOGGER.warning("debug live tabs budget exhausted session=%s", _session_ref(session_id))
+					reader = getattr(self.runner, "persisted_tabs", None)
+					live_tabs[session_id] = list(reader(session_id) or []) if reader is not None else []
 					continue
 				try:
 					live_tabs[session_id] = await asyncio.wait_for(tab_lister(session_id), timeout=remaining)
-				except Exception:
-					live_tabs[session_id] = []
+				except Exception as exc:
+					LOGGER.warning(
+						"debug live tabs failed session=%s err=%s",
+						_session_ref(session_id),
+						type(exc).__name__,
+					)
+					reader = getattr(self.runner, "persisted_tabs", None)
+					live_tabs[session_id] = list(reader(session_id) or []) if reader is not None else []
 
 		async with self._jobs_lock:
 			active_by_session: dict[str, int] = {}
@@ -416,6 +442,24 @@ class JobManager:
 					last_activity=datetime.now(UTC),
 				)
 			)
+
+		persisted = getattr(self.runner, "list_persisted_tab_sessions", None)
+		if persisted is not None:
+			for session_id, tabs in persisted().items():
+				if session_id in seen:
+					continue
+				seen.add(session_id)
+				sessions.append(
+					DebugSessionResponse(
+						session_id=session_id,
+						persistent=False,
+						tab_count=len(tabs),
+						tabs=tabs,
+						active_jobs=active_by_session.get(session_id, 0),
+						total_jobs=self._store.count_jobs_for_session(session_id),
+						last_activity=datetime.now(UTC),
+					)
+				)
 
 		for stats in self._store.list_session_stats(limit):
 			if stats.session_id in seen:

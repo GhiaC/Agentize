@@ -5,6 +5,11 @@ unified interface, **`store.Store`**, and is guaranteed — at compile time and 
 a shared conformance test suite — to behave identically. Switching between SQLite,
 MongoDB, and PostgreSQL is a configuration change, never a code change.
 
+**PostgreSQL is the production store.** New durable fields ship on
+`PostgreSQLStore` first and must have a live PostgreSQL test. SQLite is the
+isolated-test / library-default backend. MongoDB is secondary. When a host
+selects `Backend: "postgres"`, Open fails closed; it does not fall back.
+
 ## Unified interface & `store.Open`
 
 `store.Store` is the single, complete contract (sessions, core sessions, users,
@@ -18,17 +23,17 @@ The simplest way to construct a backend is the `store.Open` factory:
 ```go
 import "github.com/ghiac/agentize/store"
 
-// SQLite (default). Empty path => ./data/sessions.db; ":memory:" => ephemeral.
-st, err := store.Open(store.Config{Backend: "sqlite", SQLitePath: "./data/sessions.db"})
-
-// MongoDB.
-st, err := store.Open(store.Config{Backend: "mongodb", MongoURI: "mongodb://localhost:27017"})
-
-// PostgreSQL. Agentize objects live in an isolated schema (default "agentize").
+// PostgreSQL — production. Agentize objects live in an isolated schema (default "agentize").
 st, err := store.Open(store.Config{
     Backend: "postgres", PostgresAddr: "localhost:5432", PostgresDatabase: "app",
     PostgresUser: "app", PostgresSchema: "agentize",
 })
+
+// SQLite — isolated unit tests. Empty path => ./data/sessions.db; ":memory:" => ephemeral.
+st, err := store.Open(store.Config{Backend: "sqlite", SQLitePath: ":memory:"})
+
+// MongoDB — secondary backend, kept for parity.
+st, err := store.Open(store.Config{Backend: "mongodb", MongoURI: "mongodb://localhost:27017"})
 ```
 
 ### Behavioral contract (identical on every backend)
@@ -48,9 +53,10 @@ testcontainers or an external server (`MONGODB_URI`, `AGENTIZE_POSTGRES_ADDR` /
 
 ## Available Stores
 
-### DBStore (Default)
+### DBStore (SQLite test / library default)
 SQLite-backed storage with an in-memory read cache for sessions and users. It
-**persists** to a SQLite file and is the default returned by `agentize`.
+**persists** to a SQLite file and is what `agentize.New` uses when the host
+does not pass a store. Production hosts should pass `PostgreSQLStore` instead.
 
 ```go
 import "github.com/ghiac/agentize/store"
@@ -59,7 +65,8 @@ dbStore, err := store.NewDBStore() // ./data/sessions.db
 ```
 
 ### SQLiteStore
-SQLite-based storage that persists data to a file. Suitable for production use when you don't have MongoDB available.
+SQLite-based storage that persists data to a file. Use it for isolated tests
+and local library defaults, not for production hosts.
 
 ```go
 import "github.com/ghiac/agentize/store"
@@ -80,7 +87,8 @@ defer sqliteStore.Close()
 ```
 
 ### MongoDBStore
-MongoDB-based storage for production use. Provides better scalability and performance for large-scale deployments.
+MongoDB-based storage kept for parity with older hosts. New durable fields
+must land on PostgreSQL first; MongoDB is secondary.
 
 ```go
 import "github.com/ghiac/agentize/store"
@@ -105,11 +113,12 @@ if err != nil {
 defer mongoStore.Close()
 ```
 
-### PostgreSQLStore
-PostgreSQL-backed storage for production when the host already runs PostgreSQL.
+### PostgreSQLStore (production)
+PostgreSQL-backed storage. This is the backend production hosts must use.
 Agentize objects live in an isolated schema (default `agentize`) with JSONB
 documents, `ON CONFLICT` upserts, and covering indexes. Backup is delegated to
-`pg_dump`.
+`pg_dump`. New schema goes here first; add SQLite/MongoDB parity after the
+PostgreSQL path and its test are green.
 
 ```go
 import "github.com/ghiac/agentize/store"
@@ -234,7 +243,7 @@ err := sqliteStore.Put(coreSession) // Same as PutCoreSession for Core sessions
 
 ## Notes
 
-- **SQLiteStore**: Uses JSON serialization for Session objects. All timestamps are stored as Unix timestamps (integers). Perfect for single-server deployments or when you don't want to manage a separate database server.
+- **SQLiteStore**: Uses JSON serialization for Session objects. All timestamps are stored as Unix timestamps (integers). Isolated tests and local defaults only.
 
 - **PostgreSQLStore**: JSONB documents, covering indexes, `ON CONFLICT` upserts, and a partial unique index for one Core session per user. Lives in an isolated schema so it can share a PostgreSQL server with a host application. `store.Open` requires addr and database; there is no silent fallback to SQLite/MongoDB.
 

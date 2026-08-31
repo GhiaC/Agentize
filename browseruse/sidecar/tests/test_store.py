@@ -10,6 +10,16 @@ from app.store import BrowserStore
 
 
 class BrowserStoreTests(unittest.TestCase):
+	def test_job_count_counts_jobs_not_status_transitions(self):
+		with TemporaryDirectory() as directory:
+			store = BrowserStore(Path(directory) / "browser.db")
+			created = datetime(2026, 1, 1, tzinfo=UTC)
+			store.upsert_job("job-1", "session-1", "task", JobStatus.QUEUED, created_at=created)
+			store.upsert_job("job-1", "session-1", "task", JobStatus.RUNNING, created_at=created, started_at=created)
+			store.upsert_job("job-1", "session-1", "task", JobStatus.SUCCEEDED, created_at=created, completed_at=created)
+			stats = {item.session_id: item for item in store.list_session_stats(10)}
+			self.assertEqual(stats["session-1"].job_count, 1)
+
 	def test_job_logs_and_prune(self):
 		with TemporaryDirectory() as directory:
 			store = BrowserStore(Path(directory) / "browser.db", max_jobs=2, max_logs_per_job=3)

@@ -8,7 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import Settings
 from .jobs import JobManager
-from .models import BrowserDebugResponse, BrowserDownloadsResponse, BrowserJobLogsResponse, BrowserTabActionRequest, BrowserTabActionResponse, BrowserTabInspectionResponse, BrowserTabsResponse, DebugSessionResponse, HealthResponse, JobResponse, OpenBrowserTabRequest, SetViewportRequest, StartJobRequest, ViewportState
+from .models import BrowserDebugResponse, BrowserDownloadsResponse, BrowserJobLogsResponse, BrowserTabActionRequest, BrowserTabActionResponse, BrowserTabHistoryResponse, BrowserTabInspectionResponse, BrowserTabsResponse, DebugSessionResponse, HealthResponse, JobResponse, OpenBrowserTabRequest, SetViewportRequest, StartJobRequest, ViewportState
 from .runner import BrowserUseRunner
 
 
@@ -214,7 +214,14 @@ async def get_job_download(
 async def list_tabs(
 	session_id: str = Depends(require_session),
 ) -> BrowserTabsResponse:
-	return BrowserTabsResponse(tabs=await manager.tabs(session_id), viewport=manager.viewport(session_id))
+	busy, job_id = manager.session_busy(session_id)
+	try:
+		tabs = await manager.tabs(session_id)
+	except HTTPException as exc:
+		if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
+			raise
+		return BrowserTabsResponse(tabs=[], session_busy=True, active_job_id=job_id, viewport=manager.viewport(session_id))
+	return BrowserTabsResponse(tabs=tabs, session_busy=busy, active_job_id=job_id, viewport=manager.viewport(session_id))
 
 
 @app.post(
@@ -256,6 +263,18 @@ async def inspect_tab(
 	session_id: str = Depends(require_session),
 ) -> BrowserTabInspectionResponse:
 	return await manager.inspect_tab(session_id, tab_id)
+
+
+@app.get(
+	"/v1/tabs/{tab_id}/history",
+	response_model=BrowserTabHistoryResponse,
+	dependencies=[Depends(require_auth)],
+)
+async def tab_history(
+	tab_id: str,
+	session_id: str = Depends(require_session),
+) -> BrowserTabHistoryResponse:
+	return await manager.tab_history(session_id, tab_id)
 
 
 @app.post(

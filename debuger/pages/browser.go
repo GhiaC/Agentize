@@ -268,10 +268,6 @@ func browserSessionCard(session *browseruse.DebugSession, expanded bool) string 
 	}
 
 	tabsHTML := browserTabBar(session)
-	bodyClass := "d-none"
-	if expanded {
-		bodyClass = ""
-	}
 
 	return fmt.Sprintf(`<article class="border rounded mb-3 browser-session-card" data-session-id="%s">
 		<div class="d-flex flex-wrap gap-2 justify-content-between align-items-center px-3 py-2 bg-light border-bottom">
@@ -284,7 +280,7 @@ func browserSessionCard(session *browseruse.DebugSession, expanded bool) string 
 				%s
 			</div>
 		</div>
-		<div class="browser-tab-bar px-2 py-2 border-bottom bg-white %s">%s</div>
+		<div class="browser-tab-bar px-2 py-2 border-bottom bg-white">%s</div>
 	</article>`,
 		template.HTMLEscapeString(session.SessionID),
 		components.InlineCode(template.HTMLEscapeString(session.SessionID)),
@@ -294,7 +290,6 @@ func browserSessionCard(session *browseruse.DebugSession, expanded bool) string 
 		template.HTMLEscapeString(lastActivity),
 		template.HTMLEscapeString(detailURL),
 		killForm,
-		bodyClass,
 		tabsHTML,
 	)
 }

@@ -14,7 +14,7 @@ a standalone CLI/server).
 - 🔐 **Node RBAC** — role/group/user permissions with inheritance (see [docs/AUTH_EXAMPLES.md](docs/AUTH_EXAMPLES.md))
 - 🤖 **LLM message processing** — single-agent or multi-agent (Core router + worker agents)
 - 💬 **Sessions & summarization** — persistent sessions with a background rolling-window summarizer
-- 🗄️ **Pluggable storage** — SQLite (default) or MongoDB behind one `store.Store` interface
+- 🗄️ **Pluggable storage** — PostgreSQL for production, SQLite for tests, MongoDB secondary — one `store.Store` interface
 - 📎 **Per-user file manager** — shared files across sessions and agents, owner-scoped `manage_files`, generated-file delivery, and optional image edits
 - 🌐 **Isolated browser automation** — optional Dockerized `browser-use` sidecar with asynchronous, session-owned jobs, load tracing, and user-deliverable screenshots
 - ✅ **Human-approved tools** — every tool call can pause for a durable approve/reject decision before execution
@@ -43,7 +43,8 @@ import (
 )
 
 func main() {
-	// Loads every node under ./knowledge (SQLite store + local file store by default).
+	// Loads every node under ./knowledge (SQLite store for local/dev; production
+	// hosts must pass PostgreSQL via store.Open — see section 2).
 	ag, err := agentize.New("./knowledge")
 	if err != nil {
 		panic(err)
@@ -72,10 +73,12 @@ func main() {
 }
 ```
 
-## 2 — Persistence + scheduler (SQLite or MongoDB)
+## 2 — Persistence + scheduler (PostgreSQL first)
 
-Open a store explicitly and pass it in. Switching backends is a one-line config
-change.
+Production hosts must use PostgreSQL. SQLite is the library default for
+isolated tests and local samples. MongoDB stays as a secondary backend.
+Switching is a one-line config change; when `Backend` is `"postgres"`, Open
+fails closed if addr/database are missing.
 
 ```go
 import (
@@ -84,13 +87,19 @@ import (
 	"github.com/ghiac/agentize/store"
 )
 
-// SQLite (default backend)
+// PostgreSQL — production
 s, err := store.Open(store.Config{
-	Backend:    "sqlite",
-	SQLitePath: "./data/sessions.db", // ":memory:" for ephemeral
+	Backend:          "postgres",
+	PostgresAddr:     "localhost:5432",
+	PostgresDatabase: "app",
+	PostgresUser:     "app",
+	PostgresSchema:   "agentize",
 })
 
-// …or MongoDB
+// SQLite — isolated unit tests / local samples
+// s, err := store.Open(store.Config{Backend: "sqlite", SQLitePath: ":memory:"})
+
+// MongoDB — secondary
 // s, err := store.Open(store.Config{Backend: "mongodb", MongoURI: "mongodb://localhost:27017"})
 if err != nil {
 	panic(err)
@@ -327,7 +336,7 @@ agentize/
 ├── agentmanager/ # Worker-agent registry
 ├── engine/       # Per-agent engine (LLM loop, tools, scheduler)
 ├── review/       # Durable, UI-agnostic human approvals
-├── store/        # Persistence (SQLite / MongoDB) behind one interface
+├── store/        # Persistence (PostgreSQL production, SQLite tests, MongoDB secondary)
 ├── filestore/    # Pluggable byte storage for user files
 ├── metrics/      # Prometheus instrumentation
 ├── debuger/      # Debug dashboard pages

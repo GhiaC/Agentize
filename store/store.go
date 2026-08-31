@@ -157,7 +157,8 @@ var (
 
 // Config selects and configures a storage backend for Open.
 type Config struct {
-	// Backend is "sqlite" (default), "mongodb", or "postgres".
+	// Backend is "postgres" (production), "sqlite" (tests / library default),
+	// or "mongodb" (secondary). Empty Backend opens SQLite.
 	Backend string
 	// SQLitePath is the SQLite database file path. Empty defaults to
 	// "./data/sessions.db"; use ":memory:" for an ephemeral in-memory store.
@@ -188,6 +189,9 @@ type Config struct {
 // Open creates a Store for the configured backend. It is the single entry point
 // an application should use so that switching databases is a one-line config
 // change rather than a code change.
+//
+// Production hosts must set Backend to "postgres". An empty backend still
+// opens SQLite so isolated unit tests and the library default keep working.
 func Open(cfg Config) (Store, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Backend)) {
 	case "", "sqlite":

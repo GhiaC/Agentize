@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -51,8 +52,16 @@ class BrowserStore:
 		connection.row_factory = sqlite3.Row
 		return connection
 
+	@contextmanager
+	def _connection(self):
+		connection = self._connect()
+		try:
+			yield connection
+		finally:
+			connection.close()
+
 	def _init_schema(self) -> None:
-		with self._connect() as connection:
+		with self._connection() as connection:
 			connection.executescript(
 				"""
 				PRAGMA journal_mode=WAL;
@@ -106,7 +115,7 @@ class BrowserStore:
 		error: str = "",
 	) -> None:
 		result_json = json.dumps(result.model_dump()) if result is not None else None
-		with self._lock, self._connect() as connection:
+		with self._lock, self._connection() as connection:
 			connection.execute(
 				"""
 				INSERT INTO browser_jobs (
@@ -134,12 +143,19 @@ class BrowserStore:
 			connection.execute(
 				"""
 				INSERT INTO browser_session_stats (session_id, job_count, last_activity)
-				VALUES (?, 1, ?)
+				VALUES (?, 0, ?)
 				ON CONFLICT(session_id) DO UPDATE SET
-					job_count = browser_session_stats.job_count + 1,
 					last_activity = excluded.last_activity
 				""",
 				(session_id, _iso(datetime.now(UTC))),
+			)
+			connection.execute(
+				"""
+				UPDATE browser_session_stats
+				SET job_count = (SELECT COUNT(*) FROM browser_jobs WHERE session_id = ?)
+				WHERE session_id = ?
+				""",
+				(session_id, session_id),
 			)
 			connection.commit()
 		self._prune()
@@ -151,7 +167,7 @@ class BrowserStore:
 			return
 		if len(message) > 4_000:
 			message = message[:4_000] + "..."
-		with self._lock, self._connect() as connection:
+		with self._lock, self._connection() as connection:
 			connection.execute(
 				"""
 				INSERT INTO browser_job_logs (job_id, level, message, created_at)
@@ -178,7 +194,7 @@ class BrowserStore:
 
 	def get_job_logs(self, job_id: str, limit: int) -> list[StoredJobLog]:
 		limit = max(1, min(limit, self._max_logs_per_job))
-		with self._connect() as connection:
+		with self._connection() as connection:
 			rows = connection.execute(
 				"""
 				SELECT id, job_id, level, message, created_at
@@ -202,7 +218,7 @@ class BrowserStore:
 
 	def list_session_stats(self, limit: int) -> list[StoredSessionStats]:
 		limit = max(1, min(limit, 1_000))
-		with self._connect() as connection:
+		with self._connection() as connection:
 			rows = connection.execute(
 				"""
 				SELECT session_id, job_count, last_activity
@@ -222,7 +238,7 @@ class BrowserStore:
 		]
 
 	def count_jobs_for_session(self, session_id: str) -> int:
-		with self._connect() as connection:
+		with self._connection() as connection:
 			row = connection.execute(
 				"SELECT COUNT(*) AS total FROM browser_jobs WHERE session_id = ?",
 				(session_id,),
@@ -230,7 +246,7 @@ class BrowserStore:
 		return int(row["total"]) if row else 0
 
 	def touch_session(self, session_id: str) -> None:
-		with self._lock, self._connect() as connection:
+		with self._lock, self._connection() as connection:
 			connection.execute(
 				"""
 				INSERT INTO browser_session_stats (session_id, job_count, last_activity)
@@ -243,7 +259,7 @@ class BrowserStore:
 
 	def _prune(self) -> None:
 		cutoff = datetime.now(UTC) - timedelta(seconds=self._job_retention_seconds)
-		with self._lock, self._connect() as connection:
+		with self._lock, self._connection() as connection:
 			connection.execute(
 				"""
 				DELETE FROM browser_job_logs
@@ -287,6 +303,15 @@ class BrowserStore:
 					""",
 					(overflow,),
 				)
+			connection.execute(
+				"""
+				UPDATE browser_session_stats
+				SET job_count = (
+					SELECT COUNT(*) FROM browser_jobs
+					WHERE browser_jobs.session_id = browser_session_stats.session_id
+				)
+				"""
+			)
 			connection.commit()
 
 

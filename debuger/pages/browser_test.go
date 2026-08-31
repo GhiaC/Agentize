@@ -80,13 +80,18 @@ func TestRenderBrowserDebugShowsJobsLoadsAndScreenshot(t *testing.T) {
 		"Action trace",
 		"42 B transferred",
 		"Browser sessions",
+		"Open tabs",
 		"Example",
+		"https://example.com",
 		"Kill browser",
 		"Live sessions",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered browser page missing %q", want)
 		}
+	}
+	if strings.Contains(html, "browser-tab-bar px-2 py-2 border-bottom bg-white d-none") {
+		t.Fatal("overview must show open tabs; tab bar was hidden with d-none")
 	}
 	if strings.Contains(html, "<script>alert") || strings.Contains(html, "<unsafe>") || strings.Contains(html, "<b>the title</b>") {
 		t.Fatalf("browser debug page rendered unescaped data:\n%s", html)
