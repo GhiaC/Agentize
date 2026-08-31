@@ -769,6 +769,14 @@ func (ag *Agentize) ProcessConversation(ctx context.Context, userID, conversatio
 	return ag.engine.ProcessConversation(ctx, userID, conversationID, message)
 }
 
+// ProcessConversationDeferred delivers an alert or schedule. If the conversation
+// is already running a turn, the message waits until that turn and every tool
+// call finish. User follow-ups still use ProcessConversation and can be
+// injected between tool rounds.
+func (ag *Agentize) ProcessConversationDeferred(ctx context.Context, userID, conversationID, message string, meta map[string]any) (string, int, error) {
+	return ag.engine.ProcessConversationDeferred(ctx, userID, conversationID, message, meta)
+}
+
 // SetProgress sets the progress state for a session
 func (ag *Agentize) SetProgress(sessionID string, inProgress bool) error {
 	return ag.engine.SetProgress(sessionID, inProgress)

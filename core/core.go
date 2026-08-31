@@ -411,10 +411,32 @@ func (ch *CoreHandler) processMessageLocked(
 	start := time.Now()
 	response, err := ch.processOneMessageCore(ctx, userID, userMessage, contentType)
 	metrics.MessageDone("core", metrics.Status(err), time.Since(start))
+	ch.drainUserQueues(ctx, userID)
 	if err != nil {
 		return "", err
 	}
 	return response, nil
+}
+
+func (ch *CoreHandler) drainUserQueues(ctx context.Context, userID string) {
+	if ch == nil || ch.userProgress == nil {
+		return
+	}
+	for {
+		if item, ok := ch.userProgress.TakeUser(userID); ok {
+			if _, qErr := ch.processOneMessageCore(ctx, userID, item.Content, model.ContentTypeText); qErr != nil {
+				log.Log.Warnf("[CoreHandler] ⚠️  Queued user message failed | Error: %v", qErr)
+			}
+			continue
+		}
+		if item, ok := ch.userProgress.TakeDeferred(userID); ok {
+			if _, qErr := ch.processOneMessageCore(ctx, userID, item.Content, model.ContentTypeText); qErr != nil {
+				log.Log.Warnf("[CoreHandler] ⚠️  Deferred alert/schedule message failed | Error: %v", qErr)
+			}
+			continue
+		}
+		return
+	}
 }
 
 func (ch *CoreHandler) processOneMessageCore(

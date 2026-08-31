@@ -244,6 +244,8 @@ func (ch *CoreHandler) processWithTools(
 	rec := routeRecorderFrom(ctx)
 
 	for i := 0; i < maxIterations; i++ {
+		currentMessages = ch.absorbQueuedUserMessages(ctx, userID, coreSession, currentMessages)
+
 		log.Log.Infof("[CoreHandler] 🔄 processWithTools iteration %d/%d | UserID: %s | Messages: %d",
 			i+1, maxIterations, userID, len(currentMessages))
 
@@ -381,4 +383,52 @@ func (ch *CoreHandler) processWithTools(
 	}
 
 	return "", fmt.Errorf("max iterations (%d) reached without final response", maxIterations)
+}
+
+func (ch *CoreHandler) absorbQueuedUserMessages(
+	ctx context.Context,
+	userID string,
+	coreSession *model.Session,
+	currentMessages []openai.ChatCompletionMessage,
+) []openai.ChatCompletionMessage {
+	if ch == nil || ch.userProgress == nil {
+		return currentMessages
+	}
+	for {
+		item, ok := ch.userProgress.TakeUser(userID)
+		if !ok {
+			break
+		}
+		if strings.TrimSpace(item.Content) == "" {
+			continue
+		}
+		currentMessages = append(currentMessages, openai.ChatCompletionMessage{
+			Role: openai.ChatMessageRoleUser, Content: item.Content,
+		})
+		if coreSession != nil {
+			coreSession.Msgs = append(coreSession.Msgs, openai.ChatCompletionMessage{
+				Role: openai.ChatMessageRoleUser, Content: item.Content,
+			})
+			userMsgID, userSeqID := coreSession.GenerateMessageIDWithSeq()
+			userMsg := model.NewUserMessage(userMsgID, userSeqID, userID, coreSession.SessionID, item.Content, model.ContentTypeText)
+			userMsg.Metadata = cloneCoreMeta(item.Metadata)
+			ch.saveMessage(userMsg)
+			if err := ch.saveCoreSession(coreSession); err != nil {
+				log.Log.Warnf("[CoreHandler] ⚠️  Failed to save core session after injecting user message | Error: %v", err)
+			}
+		}
+		engine.NotifyStatus(ctx, userID, "", engine.StatusReceived, "Queued user message injected")
+	}
+	return currentMessages
+}
+
+func cloneCoreMeta(meta map[string]any) map[string]any {
+	if len(meta) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(meta))
+	for key, value := range meta {
+		out[key] = value
+	}
+	return out
 }

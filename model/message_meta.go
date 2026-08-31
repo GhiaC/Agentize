@@ -60,6 +60,7 @@ func NewScheduleMessageMeta(schedule *TaskSchedule) map[string]any {
 		"summary":   status,
 		"status":    status,
 		"origin_id": strings.TrimSpace(schedule.ScheduleID),
+		"source":    newMessageSource(MessageMetaKindSchedule, schedule.ScheduleID, schedule.Name, scheduleSourceFields(schedule)),
 		"schedule": map[string]any{
 			"id":               schedule.ScheduleID,
 			"name":             schedule.Name,
@@ -105,14 +106,54 @@ func NewAlertMessageMeta(title, summary, detail string, extra map[string]any) ma
 		}
 		alert[key] = value
 	}
-	return map[string]any{
+	originID := MessageMetaString(extra, "origin_id")
+	if originID == "" {
+		originID = MessageMetaString(extra, "rule_id")
+	}
+	meta := map[string]any{
 		"kind":    MessageMetaKindAlert,
 		"widget":  MessageWidgetStatus,
 		"title":   title,
 		"summary": summary,
 		"status":  summary,
 		"alert":   alert,
+		"source":  newMessageSource(MessageMetaKindAlert, originID, title, extra),
 	}
+	if originID != "" {
+		meta["origin_id"] = originID
+	}
+	return meta
+}
+
+func scheduleSourceFields(schedule *TaskSchedule) map[string]any {
+	if schedule == nil {
+		return nil
+	}
+	return map[string]any{
+		"conversation_id":   strings.TrimSpace(schedule.SourceConversationID),
+		"session_id":        strings.TrimSpace(schedule.SourceSessionID),
+		"worker_session_id": strings.TrimSpace(schedule.SessionID),
+		"interval_seconds":  schedule.IntervalSeconds,
+	}
+}
+
+func newMessageSource(kind, id, name string, extra map[string]any) map[string]any {
+	source := map[string]any{
+		"kind": strings.TrimSpace(kind),
+		"id":   strings.TrimSpace(id),
+		"name": strings.TrimSpace(name),
+	}
+	for key, value := range extra {
+		key = strings.TrimSpace(key)
+		if key == "" || value == nil {
+			continue
+		}
+		if text, ok := value.(string); ok && strings.TrimSpace(text) == "" {
+			continue
+		}
+		source[key] = value
+	}
+	return source
 }
 
 func truncateMetaText(text string, limit int) string {

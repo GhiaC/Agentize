@@ -70,6 +70,13 @@ API, security & observability hardening (improvement roadmap
   `collect_result` (LLM-backed semantic extraction). Both are now exposed
   automatically by `GetTools`, registered by `Engine.RegisterTextTools()`, and
   documented in `engine/user_agent.md` and the truncation notice itself.
+- **Dual session queues.** User follow-ups join a foreground queue and are
+  injected into the in-flight session between tool rounds. Alert and schedule
+  messages wait on a deferred queue until the current turn and every tool call
+  finish. `ProcessConversationDeferred` is the host entry for the deferred
+  path; `ProcessScheduledMessage` still waits for the actual model output.
+  Alert/schedule chat rows now store a `source` object in message metadata so
+  hosts can render origin details and later replace them with widgets.
 
 ### Security
 - **`change_session` cross-user session takeover fixed.** The core `change_session`

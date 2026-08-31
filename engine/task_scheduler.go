@@ -171,7 +171,11 @@ func (e *Engine) InitializeTaskScheduler() {
 		e.taskScheduler = NewTaskScheduler(
 			e.Sessions,
 			func(ctx context.Context, schedule *model.TaskSchedule) (string, error) {
-				output, _, err := e.ProcessScheduledMessage(ctx, schedule.SessionID, schedule.Prompt)
+				output, _, err := e.ProcessScheduledIncoming(ctx, schedule.SessionID, IncomingMessage{
+					Content:  schedule.Prompt,
+					Metadata: model.NewScheduleMessageMeta(schedule),
+					Queue:    QueueDeferred,
+				})
 				return output, err
 			},
 			e.concludeScheduledTask,

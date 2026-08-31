@@ -184,8 +184,15 @@ func assertSourceRunTranscript(t *testing.T, st *store.SQLiteStore, sessionID st
 		if item.Role != want[i][0] || !strings.Contains(item.Content, want[i][1]) {
 			t.Fatalf("message %d = %s %q, want %s containing %q", i, item.Role, item.Content, want[i][0], want[i][1])
 		}
-		if model.MessageKind(item) == model.MessageMetaKindSchedule {
-			t.Fatalf("run transcript must not use schedule widget metadata: %#v", item.Metadata)
+		if item.ContentType == model.ContentTypeWidget || strings.HasPrefix(strings.TrimSpace(item.Content), "⏱️") {
+			t.Fatalf("run transcript must stay a full chat bubble, not a compact widget: %#v", item)
+		}
+		if model.MessageKind(item) != model.MessageMetaKindSchedule {
+			t.Fatalf("run transcript must keep schedule origin metadata: %#v", item.Metadata)
+		}
+		source, _ := item.Metadata["source"].(map[string]any)
+		if source == nil || source["kind"] != model.MessageMetaKindSchedule {
+			t.Fatalf("run transcript source = %#v", item.Metadata)
 		}
 	}
 }

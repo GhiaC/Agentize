@@ -71,6 +71,7 @@ func (s *TaskScheduler) publishRunPrompt(ctx context.Context, schedule *model.Ta
 		UserID:    schedule.UserID, SessionID: source,
 		Role: openai.ChatMessageRoleUser, Content: prompt,
 		AgentType: schedule.AgentType, ContentType: model.ContentTypeText,
+		Metadata:  model.NewScheduleMessageMeta(schedule),
 		CreatedAt: time.Now(),
 	}
 	sameSession := strings.TrimSpace(schedule.SessionID) == source
@@ -103,10 +104,10 @@ func (s *TaskScheduler) publishRunTranscript(ctx context.Context, schedule *mode
 	} else {
 		srcUser, srcAsst := s.latestVisibleRunPair(schedule.SessionID)
 		if srcUser != nil {
-			user = cloneMessageOntoSession(srcUser, source, scheduleRunMessageID(source, runID, "1-user"), now)
+			user = cloneMessageOntoSession(srcUser, source, scheduleRunMessageID(source, runID, "1-user"), now, schedule)
 		}
 		if srcAsst != nil {
-			assistant = cloneMessageOntoSession(srcAsst, source, scheduleRunMessageID(source, runID, "2-assistant"), now.Add(time.Millisecond))
+			assistant = cloneMessageOntoSession(srcAsst, source, scheduleRunMessageID(source, runID, "2-assistant"), now.Add(time.Millisecond), schedule)
 		}
 		if user == nil && assistant == nil {
 			user, assistant = s.synthesizeRunPair(schedule, runID, now)
@@ -163,6 +164,7 @@ func (s *TaskScheduler) synthesizeRunPair(schedule *model.TaskSchedule, runID st
 			UserID:    schedule.UserID, SessionID: source,
 			Role: openai.ChatMessageRoleUser, Content: prompt,
 			AgentType: schedule.AgentType, ContentType: model.ContentTypeText,
+			Metadata:  model.NewScheduleMessageMeta(schedule),
 			CreatedAt: now,
 		}
 	}
@@ -172,13 +174,14 @@ func (s *TaskScheduler) synthesizeRunPair(schedule *model.TaskSchedule, runID st
 			UserID:    schedule.UserID, SessionID: source,
 			Role: openai.ChatMessageRoleAssistant, Content: reply,
 			AgentType: schedule.AgentType, ContentType: model.ContentTypeText,
+			Metadata:  model.NewScheduleMessageMeta(schedule),
 			CreatedAt: now.Add(time.Millisecond),
 		}
 	}
 	return user, assistant
 }
 
-func cloneMessageOntoSession(src *model.Message, sessionID, messageID string, now time.Time) *model.Message {
+func cloneMessageOntoSession(src *model.Message, sessionID, messageID string, now time.Time, schedule *model.TaskSchedule) *model.Message {
 	if src == nil {
 		return nil
 	}
@@ -186,7 +189,7 @@ func cloneMessageOntoSession(src *model.Message, sessionID, messageID string, no
 	out.MessageID = messageID
 	out.SessionID = sessionID
 	out.CreatedAt = now
-	out.Metadata = nil
+	out.Metadata = model.NewScheduleMessageMeta(schedule)
 	if out.ContentType == model.ContentTypeWidget {
 		out.ContentType = model.ContentTypeText
 	}

@@ -652,26 +652,55 @@ func (e *Engine) CloseFile(sessionID string, path string) error {
 }
 
 // ProcessMessage routes a user message through the LLM workflow and tool executor.
-// It checks in-progress (without locking) and queues if busy; otherwise holds
-// per-session mutex and processes, then drains the queue.
+// While a turn is busy, the message joins the user follow-up queue and is
+// injected between tool rounds. Alert/schedule callers should use
+// ProcessDeferredMessage or ProcessScheduledMessage instead.
 func (e *Engine) ProcessMessage(
 	ctx context.Context,
 	sessionID string,
 	userMessage string,
 ) (string, int, error) {
+	return e.ProcessIncoming(ctx, sessionID, IncomingMessage{Content: userMessage, Queue: QueueUser})
+}
+
+// ProcessIncoming is the shared session entry for user follow-ups and
+// deferred alert/schedule turns.
+func (e *Engine) ProcessIncoming(
+	ctx context.Context,
+	sessionID string,
+	msg IncomingMessage,
+) (string, int, error) {
 	e.ensureSessionProgress()
-	// Check if already processing - queue if busy
-	if e.sessionProgress.TryQueue(sessionID, userMessage) {
-		metrics.MessageQueued("agent")
-		return "⏳ Processing previous request... Please wait. 📋 Your message was queued and will be answered in order.", 0, nil
+	queued := e.sessionProgress.TryQueueMessage(sessionID, QueuedMessage{Content: msg.Content, Metadata: msg.Metadata}, msg.queueClass())
+	if queued {
+		if msg.queueClass() == QueueDeferred {
+			metrics.MessageQueued("agent_deferred")
+		} else {
+			metrics.MessageQueued("agent")
+		}
+		return queuedAckMessage, 0, nil
 	}
 
-	// Lock session mutex
 	sessionMu := e.getSessionMutex(sessionID)
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 
-	return e.processMessageLocked(ctx, sessionID, userMessage)
+	return e.processMessageLocked(ctx, sessionID, msg)
+}
+
+// ProcessDeferredMessage queues an alert/schedule until the current turn and
+// all of its tool calls finish. Unlike ProcessScheduledMessage it does not
+// wait for the eventual model output — callers that need that output should
+// use ProcessScheduledMessage.
+func (e *Engine) ProcessDeferredMessage(
+	ctx context.Context,
+	sessionID string,
+	userMessage string,
+	meta map[string]any,
+) (string, int, error) {
+	return e.ProcessIncoming(ctx, sessionID, IncomingMessage{
+		Content: userMessage, Metadata: meta, Queue: QueueDeferred,
+	})
 }
 
 // ProcessMessageWithGeneratedFiles processes one session turn and returns files
@@ -683,9 +712,9 @@ func (e *Engine) ProcessMessageWithGeneratedFiles(
 	userMessage string,
 ) (string, int, []*model.UserFile, error) {
 	e.ensureSessionProgress()
-	if e.sessionProgress.TryQueue(sessionID, userMessage) {
+	if e.sessionProgress.TryQueueMessage(sessionID, QueuedMessage{Content: userMessage}, QueueUser) {
 		metrics.MessageQueued("agent")
-		return "⏳ Processing previous request... Please wait. 📋 Your message was queued and will be answered in order.", 0, nil, nil
+		return queuedAckMessage, 0, nil, nil
 	}
 
 	sessionMu := e.getSessionMutex(sessionID)
@@ -696,7 +725,7 @@ func (e *Engine) ProcessMessageWithGeneratedFiles(
 	if err != nil {
 		return "", 0, nil, fmt.Errorf("list session files before message: %w", err)
 	}
-	response, tokens, processErr := e.processMessageLocked(ctx, sessionID, userMessage)
+	response, tokens, processErr := e.processMessageLocked(ctx, sessionID, IncomingMessage{Content: userMessage, Queue: QueueUser})
 	after, afterErr := e.Sessions.GetUserFilesBySession(sessionID)
 	if afterErr != nil {
 		if processErr != nil {
@@ -725,11 +754,17 @@ func (e *Engine) ProcessScheduledMessage(
 	sessionID string,
 	userMessage string,
 ) (string, int, error) {
-	e.dbReadyMu.Lock()
-	if e.sessionProgress == nil {
-		e.sessionProgress = NewProgressGuard()
-	}
-	e.dbReadyMu.Unlock()
+	return e.ProcessScheduledIncoming(ctx, sessionID, IncomingMessage{Content: userMessage, Queue: QueueDeferred})
+}
+
+// ProcessScheduledIncoming is ProcessScheduledMessage with durable origin metadata.
+func (e *Engine) ProcessScheduledIncoming(
+	ctx context.Context,
+	sessionID string,
+	msg IncomingMessage,
+) (string, int, error) {
+	e.ensureSessionProgress()
+	msg.Queue = QueueDeferred
 
 	sessionMu := e.getSessionMutex(sessionID)
 	sessionMu.Lock()
@@ -737,22 +772,22 @@ func (e *Engine) ProcessScheduledMessage(
 	if err := ctx.Err(); err != nil {
 		return "", 0, err
 	}
-	return e.processMessageLocked(ctx, sessionID, userMessage)
+	return e.processMessageLocked(ctx, sessionID, msg)
 }
 
-// processMessageLocked processes one message and drains the foreground queue.
-// Caller must hold the per-session mutex.
+// processMessageLocked processes one message, injects leftover user follow-ups
+// as new turns, then starts deferred alert/schedule turns. Caller must hold
+// the per-session mutex.
 func (e *Engine) processMessageLocked(
 	ctx context.Context,
 	sessionID string,
-	userMessage string,
+	msg IncomingMessage,
 ) (string, int, error) {
 	e.sessionProgress.SetInProgress(sessionID, true)
 	defer e.sessionProgress.SetInProgress(sessionID, false)
 
-	log.Log.Infof("[Engine] 🚀 ProcessMessage | SessionID: %s | MsgLen: %d", sessionID, len(userMessage))
+	log.Log.Infof("[Engine] 🚀 ProcessMessage | SessionID: %s | MsgLen: %d | Queue: %s", sessionID, len(msg.Content), msg.queueClass())
 
-	// Validate prerequisites
 	if !e.IsDBReady() {
 		return "", 0, errors.New("database is not ready. Call Init() first")
 	}
@@ -760,7 +795,6 @@ func (e *Engine) processMessageLocked(
 		return "", 0, errors.New("LLM client is not configured. Call UseLLMConfig first")
 	}
 
-	// Get session
 	session, err := e.Sessions.Get(sessionID)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to get session: %w", err)
@@ -769,7 +803,6 @@ func (e *Engine) processMessageLocked(
 	log.Log.Infof("[Engine] 🔍 Session loaded | SessionID: %s | UserID: %s | Messages: %d",
 		sessionID, session.UserID, len(session.Msgs))
 
-	// Clean old function calls if session is stale (> 2 hours)
 	if session.UpdatedAt.Before(time.Now().Add(-2 * time.Hour)) {
 		if err := e.removeFunctionCalls(sessionID); err != nil {
 			log.Log.Warnf("[Engine] ⚠️  Failed to clean function calls | Error: %v", err)
@@ -778,10 +811,9 @@ func (e *Engine) processMessageLocked(
 
 	e.persistSessionRunState(session, StatusThinking, "", true, UserMessageIDFrom(ctx))
 
-	// Process the message
 	metrics.MessageStart("agent")
 	procStart := time.Now()
-	response, tokens, err := e.processOneMessageBody(ctx, sessionID, userMessage)
+	response, tokens, err := e.processOneMessageBody(ctx, sessionID, msg)
 	metrics.MessageDone("agent", metrics.Status(err), time.Since(procStart))
 	if err != nil {
 		log.Log.Errorf("[Engine] ❌ Processing failed | SessionID: %s | Error: %v", sessionID, err)
@@ -790,17 +822,13 @@ func (e *Engine) processMessageLocked(
 			phase = StatusPhase("stopped")
 		}
 		e.persistSessionRunState(session, phase, err.Error(), false, UserMessageIDFrom(ctx))
+		e.drainSessionQueues(ctx, sessionID)
 		return "", tokens, err
 	}
 	e.persistSessionRunState(session, StatusCompleted, "", false, UserMessageIDFrom(ctx))
 	e.touchOwningConversation(session)
 
-	// Process any queued messages
-	for _, m := range e.sessionProgress.DrainQueue(sessionID) {
-		if _, _, qErr := e.processOneMessageBody(ctx, sessionID, m); qErr != nil {
-			log.Log.Warnf("[Engine] ⚠️  Queued message failed | Error: %v", qErr)
-		}
-	}
+	e.drainSessionQueues(ctx, sessionID)
 
 	log.Log.Infof("[Engine] ✅ Done | SessionID: %s | ResponseLen: %d | Tokens: %d",
 		sessionID, len(response), tokens)
@@ -808,54 +836,52 @@ func (e *Engine) processMessageLocked(
 	return response, tokens, nil
 }
 
+func (e *Engine) drainSessionQueues(ctx context.Context, sessionID string) {
+	for {
+		if item, ok := e.sessionProgress.TakeUser(sessionID); ok {
+			if _, _, qErr := e.processOneMessageBody(ctx, sessionID, incomingFromQueued(item, QueueUser)); qErr != nil {
+				log.Log.Warnf("[Engine] ⚠️  Queued user message failed | Error: %v", qErr)
+			}
+			continue
+		}
+		if item, ok := e.sessionProgress.TakeDeferred(sessionID); ok {
+			if _, _, qErr := e.processOneMessageBody(ctx, sessionID, incomingFromQueued(item, QueueDeferred)); qErr != nil {
+				log.Log.Warnf("[Engine] ⚠️  Deferred alert/schedule message failed | Error: %v", qErr)
+			}
+			continue
+		}
+		return
+	}
+}
+
 // processOneMessageBody appends the user message to session and runs the chat request.
 // Caller must hold session mutex.
-func (e *Engine) processOneMessageBody(ctx context.Context, sessionID string, userMessage string) (string, int, error) {
-	// Add user message to session if not empty
+func (e *Engine) processOneMessageBody(ctx context.Context, sessionID string, msg IncomingMessage) (string, int, error) {
+	userMessage := msg.Content
 	if len(userMessage) > 0 {
 		session, err := e.Sessions.Get(sessionID)
 		if err != nil {
 			return "", 0, fmt.Errorf("failed to get session: %w", err)
 		}
 
-		// Append user message
-		session.Msgs = append(session.Msgs, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: userMessage,
-		})
-		session.UpdatedAt = time.Now()
-
-		// Generate the user-message ID BEFORE persisting the session, so the
-		// bumped MessageSeq is included in the Put below. Otherwise the next
-		// reload (processChatRequest) re-reads the pre-increment seq and the
-		// assistant message gets the SAME MessageID, whose upsert/INSERT OR
-		// REPLACE then overwrites this user-message row.
-		userMsgID, userSeqID := session.GenerateMessageIDWithSeq()
-		userMsg := model.NewUserMessage(userMsgID, userSeqID, session.UserID, sessionID, userMessage, model.ContentTypeText)
-
-		// Save session
-		if err := e.Sessions.Put(session); err != nil {
-			return "", 0, fmt.Errorf("failed to save session: %w", err)
-		}
-
-		// Save user message to messages table
-		if err := e.Sessions.PutMessage(userMsg); err != nil {
-			log.Log.Warnf("[Engine] ⚠️  Failed to save user message | Error: %v", err)
+		userMsg, err := e.appendIncomingUserMessage(session, msg)
+		if err != nil {
+			return "", 0, err
 		}
 
 		rec := model.NewRouteTraceBuilder(session, userMessage)
-		rec.SetUserMessageID(userMsgID)
+		rec.SetUserMessageID(userMsg.MessageID)
 		rec.SetKind("turn")
 		if err := e.Sessions.Put(session); err != nil {
 			log.Log.Warnf("[Engine] ⚠️  Failed to persist turn seq | SessionID: %s | Error: %v", sessionID, err)
 		}
-		ctx = WithUserMessageID(ctx, userMsgID)
+		ctx = WithUserMessageID(ctx, userMsg.MessageID)
 		ctx = withTurnRecorder(ctx, rec)
-		e.persistSessionRunState(session, StatusReceived, "", true, userMsgID)
+		e.persistSessionRunState(session, StatusReceived, "", true, userMsg.MessageID)
 		traceStart := time.Now()
 		defer func() { persistTurnTrace(e.Sessions, rec, time.Since(traceStart)) }()
 
-		response, tokens, err := e.processChatRequest(ctx, sessionID)
+		response, tokens, err := e.processChatRequest(ctx, sessionID, msg.queueClass())
 		if err != nil {
 			rec.Fail(err.Error())
 			return "", tokens, err
@@ -863,7 +889,63 @@ func (e *Engine) processOneMessageBody(ctx context.Context, sessionID string, us
 		return response, tokens, nil
 	}
 
-	return e.processChatRequest(ctx, sessionID)
+	return e.processChatRequest(ctx, sessionID, msg.queueClass())
+}
+
+func (e *Engine) appendIncomingUserMessage(session *model.Session, msg IncomingMessage) (*model.Message, error) {
+	session.Msgs = append(session.Msgs, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: msg.Content,
+	})
+	session.UpdatedAt = time.Now()
+	userMsgID, userSeqID := session.GenerateMessageIDWithSeq()
+	userMsg := model.NewUserMessage(userMsgID, userSeqID, session.UserID, session.SessionID, msg.Content, model.ContentTypeText)
+	userMsg.Metadata = cloneIncomingMeta(msg.Metadata)
+	if err := e.Sessions.Put(session); err != nil {
+		return nil, fmt.Errorf("failed to save session: %w", err)
+	}
+	if err := e.Sessions.PutMessage(userMsg); err != nil {
+		log.Log.Warnf("[Engine] ⚠️  Failed to save user message | Error: %v", err)
+	}
+	return userMsg, nil
+}
+
+func (e *Engine) absorbQueuedUserMessages(ctx context.Context, session *model.Session, localMsgs []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	if e == nil || e.sessionProgress == nil || session == nil {
+		return localMsgs
+	}
+	injected := false
+	for {
+		item, ok := e.sessionProgress.TakeUser(session.SessionID)
+		if !ok {
+			break
+		}
+		if strings.TrimSpace(item.Content) == "" {
+			continue
+		}
+		localMsgs = append(localMsgs, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: item.Content,
+		})
+		session.Msgs = localMsgs
+		session.UpdatedAt = time.Now()
+		userMsgID, userSeqID := session.GenerateMessageIDWithSeq()
+		userMsg := model.NewUserMessage(userMsgID, userSeqID, session.UserID, session.SessionID, item.Content, model.ContentTypeText)
+		userMsg.Metadata = cloneIncomingMeta(item.Metadata)
+		if err := e.Sessions.Put(session); err != nil {
+			log.Log.Warnf("[Engine] ⚠️  Failed to save session after injecting user message | Error: %v", err)
+		}
+		if err := e.Sessions.PutMessage(userMsg); err != nil {
+			log.Log.Warnf("[Engine] ⚠️  Failed to save injected user message | Error: %v", err)
+		}
+		injected = true
+		NotifyStatus(ctx, session.UserID, session.SessionID, StatusReceived, "Queued user message injected")
+		log.Log.Infof("[Engine] 📥 Injected queued user message | SessionID: %s | MessageID: %s", session.SessionID, userMsg.MessageID)
+	}
+	if injected {
+		session.Msgs = localMsgs
+	}
+	return localMsgs
 }
 
 func summarizeNode(node *model.Node) model.NodeDigest {
@@ -1448,6 +1530,7 @@ func sanitizeOrphanedToolResults(msgs []openai.ChatCompletionMessage) []openai.C
 func (e *Engine) processChatRequest(
 	ctx context.Context,
 	sessionID string,
+	queue QueueClass,
 ) (string, int, error) {
 	maxIterations := e.llmConfig.maxLLMIterations()
 	totalTokenUsage := 0
@@ -1500,6 +1583,10 @@ func (e *Engine) processChatRequest(
 	var pendingImages []openai.ChatCompletionMessage
 
 	for i := 0; i < maxIterations; i++ {
+		if queue != QueueDeferred {
+			localMsgs = e.absorbQueuedUserMessages(ctx, session, localMsgs)
+		}
+
 		// Build request messages: system prompts + local messages + open images
 		reqMessages := make([]openai.ChatCompletionMessage, 0, len(systemPrompts)+len(localMsgs)+len(pendingImages))
 		for _, prompt := range systemPrompts {

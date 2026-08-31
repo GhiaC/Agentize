@@ -197,11 +197,23 @@ func (e *Engine) DeleteConversation(userID, conversationID string) error {
 
 // ProcessConversation sends a user message through the conversation's main session.
 func (e *Engine) ProcessConversation(ctx context.Context, userID, conversationID, message string) (string, int, error) {
+	return e.ProcessConversationIncoming(ctx, userID, conversationID, IncomingMessage{Content: message, Queue: QueueUser})
+}
+
+// ProcessConversationDeferred queues an alert/schedule against a conversation
+// until the current turn and all tool calls have finished.
+func (e *Engine) ProcessConversationDeferred(ctx context.Context, userID, conversationID, message string, meta map[string]any) (string, int, error) {
+	return e.ProcessConversationIncoming(ctx, userID, conversationID, IncomingMessage{
+		Content: message, Metadata: meta, Queue: QueueDeferred,
+	})
+}
+
+func (e *Engine) ProcessConversationIncoming(ctx context.Context, userID, conversationID string, msg IncomingMessage) (string, int, error) {
 	conv, err := e.GetConversation(userID, conversationID)
 	if err != nil {
 		return "", 0, err
 	}
-	return e.ProcessMessage(ctx, conv.SessionID, message)
+	return e.ProcessIncoming(ctx, conv.SessionID, msg)
 }
 
 func (e *Engine) touchOwningConversation(session *model.Session) {
