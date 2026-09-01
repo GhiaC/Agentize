@@ -165,6 +165,10 @@ func (s *UserService) CreateFolder(userID, name string) (*model.UserFile, error)
 	return s.backend.RecordUserFileForUser(userID, name, FolderMIME, model.FileSourceUploaded, nil)
 }
 
+func (s *UserService) CreateFile(userID, name, mimeType string, data []byte) (*model.UserFile, error) {
+	return s.Upload(userID, name, mimeType, data)
+}
+
 func (s *UserService) Upload(userID, name, mimeType string, data []byte) (*model.UserFile, error) {
 	name, err := virtualPath(name)
 	if err != nil {
@@ -173,10 +177,7 @@ func (s *UserService) Upload(userID, name, mimeType string, data []byte) (*model
 	if err := s.ensureAvailable(userID, name, ""); err != nil {
 		return nil, err
 	}
-	if mimeType == "" {
-		mimeType = mime.TypeByExtension(path.Ext(name))
-	}
-	return s.backend.RecordUserFileForUser(userID, name, mimeType, model.FileSourceUploaded, data)
+	return s.backend.RecordUserFileForUser(userID, name, ResolveMIME(name, mimeType, data), model.FileSourceUploaded, data)
 }
 
 func (s *UserService) Read(userID, fileID string, opts ReadOptions) (ReadResult, *model.UserFile, error) {
@@ -245,9 +246,6 @@ func (s *UserService) Move(userID, fileID, destination string) (*model.UserFile,
 	if err != nil {
 		return nil, err
 	}
-	if err = s.ensureAvailable(userID, destination, fileID); err != nil {
-		return nil, err
-	}
 	files, err := s.backend.ListUserFiles(userID)
 	if err != nil {
 		return nil, err
@@ -261,6 +259,15 @@ func (s *UserService) Move(userID, fileID, destination string) (*model.UserFile,
 	}
 	if target == nil {
 		return nil, osNotExist()
+	}
+	if directoryAt(files, destination) {
+		destination, err = virtualPath(destination + "/" + path.Base(strings.TrimSuffix(target.Name, "/")))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err = s.ensureAvailable(userID, destination, fileID); err != nil {
+		return nil, err
 	}
 	oldPath := strings.TrimSuffix(target.Name, "/")
 	updated, err := s.backend.MoveUserFileForUser(userID, fileID, destination)
@@ -328,7 +335,82 @@ func (s *UserService) ensureAvailable(userID, name, exceptID string) error {
 	}
 	return nil
 }
+
+func directoryAt(files []*model.UserFile, dest string) bool {
+	if dest == "" {
+		return false
+	}
+	prefix := dest + "/"
+	for _, file := range files {
+		if file == nil {
+			continue
+		}
+		filePath, err := virtualPath(file.Name)
+		if err != nil {
+			continue
+		}
+		if filePath == dest && file.MIMEType == FolderMIME {
+			return true
+		}
+		if strings.HasPrefix(filePath, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func osNotExist() error { return errors.New("file not found") }
+
+// extraMIME covers types Go's mime package does not always know about.
+var extraMIME = map[string]string{
+	".txt":      "text/plain; charset=utf-8",
+	".md":       "text/markdown; charset=utf-8",
+	".markdown": "text/markdown; charset=utf-8",
+	".csv":      "text/csv; charset=utf-8",
+	".json":     "application/json",
+	".png":      "image/png",
+	".jpg":      "image/jpeg",
+	".jpeg":     "image/jpeg",
+	".gif":      "image/gif",
+	".webp":     "image/webp",
+	".svg":      "image/svg+xml",
+	".bmp":      "image/bmp",
+	".ico":      "image/x-icon",
+	".pdf":      "application/pdf",
+	".html":     "text/html; charset=utf-8",
+	".htm":      "text/html; charset=utf-8",
+	".xml":      "application/xml",
+	".yaml":     "text/yaml; charset=utf-8",
+	".yml":      "text/yaml; charset=utf-8",
+	".js":       "text/javascript; charset=utf-8",
+	".ts":       "text/plain; charset=utf-8",
+	".css":      "text/css; charset=utf-8",
+}
+
+// ResolveMIME picks a content type from the stored value, filename, then bytes.
+// Empty and generic octet-stream types are treated as unknown so uploads keep
+// a usable image/text type for previews.
+func ResolveMIME(name, mimeType string, data []byte) string {
+	mimeType = strings.TrimSpace(strings.Split(mimeType, ";")[0])
+	if mimeType != "" && !strings.EqualFold(mimeType, "application/octet-stream") && !strings.EqualFold(mimeType, "binary/octet-stream") {
+		return mimeType
+	}
+	ext := strings.ToLower(path.Ext(name))
+	if t := extraMIME[ext]; t != "" {
+		return t
+	}
+	if t := mime.TypeByExtension(ext); t != "" {
+		return t
+	}
+	if len(data) > 0 {
+		return http.DetectContentType(data)
+	}
+	return "application/octet-stream"
+}
+
+func IsImageMIME(mimeType string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "image/")
+}
 
 func scanLines(r io.Reader, maxLine int) ([]string, error) {
 	scanner := bufio.NewScanner(r)

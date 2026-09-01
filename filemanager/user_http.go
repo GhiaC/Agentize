@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/ghiac/agentize/metrics"
 )
 
 type UserHandler struct {
@@ -17,8 +20,10 @@ type UserHandler struct {
 }
 
 type createRequest struct {
-	Path string `json:"path"`
-	Kind string `json:"kind"`
+	Path     string `json:"path"`
+	Kind     string `json:"kind"`
+	MIMEType string `json:"mime_type,omitempty"`
+	Content  string `json:"content,omitempty"`
 }
 
 func NewUserHandler(service *UserService, owner OwnerResolver) *UserHandler {
@@ -55,7 +60,9 @@ func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *UserHandler) entries(w http.ResponseWriter, r *http.Request, user string) {
 	switch r.Method {
 	case http.MethodGet:
+		start := time.Now()
 		items, err := h.service.List(user, r.URL.Query().Get("path"))
+		observeFileOp("list", err, start, 0, "")
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -66,19 +73,34 @@ func (h *UserHandler) entries(w http.ResponseWriter, r *http.Request, user strin
 		if !decode(w, r, &req) {
 			return
 		}
-		if req.Kind != "directory" {
-			writeError(w, fmt.Errorf("use upload to create files"), 400)
-			return
+		kind := strings.ToLower(strings.TrimSpace(req.Kind))
+		start := time.Now()
+		switch kind {
+		case "directory", "folder":
+			entry, err := h.service.CreateFolder(user, req.Path)
+			observeFileOp("create_folder", err, start, 0, "")
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, 201, entry)
+		case "file", "text", "markdown", "csv":
+			entry, err := h.service.CreateFile(user, req.Path, req.MIMEType, []byte(req.Content))
+			observeFileOp("create_file", err, start, int64(len(req.Content)), "stored")
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, 201, entry)
+		default:
+			writeError(w, fmt.Errorf("kind must be directory or file"), 400)
 		}
-		entry, err := h.service.CreateFolder(user, req.Path)
-		if err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, 201, entry)
 	case http.MethodDelete:
 		recursive, _ := strconv.ParseBool(r.URL.Query().Get("recursive"))
-		if err := h.service.Delete(user, r.URL.Query().Get("id"), recursive); err != nil {
+		start := time.Now()
+		err := h.service.Delete(user, r.URL.Query().Get("id"), recursive)
+		observeFileOp("delete", err, start, 0, "")
+		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
@@ -92,10 +114,12 @@ func (h *UserHandler) file(w http.ResponseWriter, r *http.Request, user string) 
 	switch r.Method {
 	case http.MethodGet:
 		q := r.URL.Query()
-		start, _ := strconv.Atoi(q.Get("start"))
+		startLine, _ := strconv.Atoi(q.Get("start"))
 		end, _ := strconv.Atoi(q.Get("end"))
 		limit, _ := strconv.Atoi(q.Get("limit"))
-		result, meta, err := h.service.Read(user, q.Get("id"), ReadOptions{Mode: ReadMode(q.Get("mode")), Start: start, End: end, Limit: limit})
+		started := time.Now()
+		result, meta, err := h.service.Read(user, q.Get("id"), ReadOptions{Mode: ReadMode(q.Get("mode")), Start: startLine, End: end, Limit: limit})
+		observeFileOp("read", err, started, int64(len(result.Content)), "read")
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -109,7 +133,9 @@ func (h *UserHandler) file(w http.ResponseWriter, r *http.Request, user string) 
 		if !decode(w, r, &req) {
 			return
 		}
+		started := time.Now()
 		meta, err := h.service.Write(user, req.ID, []byte(req.Content))
+		observeFileOp("write", err, started, int64(len(req.Content)), "stored")
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -132,7 +158,9 @@ func (h *UserHandler) move(w http.ResponseWriter, r *http.Request, user string) 
 	if !decode(w, r, &req) {
 		return
 	}
+	started := time.Now()
 	meta, err := h.service.Move(user, req.ID, req.Destination)
+	observeFileOp("move", err, started, 0, "")
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -166,7 +194,9 @@ func (h *UserHandler) upload(w http.ResponseWriter, r *http.Request, user string
 	if directory != "" {
 		name = directory + "/" + name
 	}
+	started := time.Now()
 	meta, err := h.service.Upload(user, name, header.Header.Get("Content-Type"), data)
+	observeFileOp("upload", err, started, int64(len(data)), "stored")
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -179,19 +209,18 @@ func (h *UserHandler) raw(w http.ResponseWriter, r *http.Request, user string) {
 		methodNotAllowed(w)
 		return
 	}
+	started := time.Now()
 	data, meta, err := h.service.backend.ReadUserFileForUser(user, r.URL.Query().Get("id"))
+	observeFileOp("raw", err, started, int64(len(data)), "read")
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	mimeType := meta.MIMEType
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
+	mimeType := ResolveMIME(meta.Name, meta.MIMEType, data)
 	disposition := "inline"
 	// Active document types are never rendered in the product origin. Only
 	// image/PDF previews may be inline; everything else is attachment-only.
-	if r.URL.Query().Get("download") == "1" || (!strings.HasPrefix(mimeType, "image/") && mimeType != "application/pdf") {
+	if r.URL.Query().Get("download") == "1" || (!IsImageMIME(mimeType) && mimeType != "application/pdf") {
 		disposition = "attachment"
 	}
 	safe := strings.NewReplacer("\"", "", "\\", "", "\n", "", "\r", "").Replace(pathBase(meta.Name))
@@ -200,6 +229,13 @@ func (h *UserHandler) raw(w http.ResponseWriter, r *http.Request, user string) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(200)
 	_, _ = w.Write(data)
+}
+
+func observeFileOp(op string, err error, start time.Time, n int64, direction string) {
+	metrics.FileOp(op, metrics.Status(err), time.Since(start))
+	if err == nil && n > 0 && direction != "" {
+		metrics.FileBytes(direction, n)
+	}
 }
 func pathBase(p string) string {
 	parts := strings.Split(strings.TrimSuffix(p, "/"), "/")

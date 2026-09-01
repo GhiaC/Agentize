@@ -2,6 +2,7 @@ package filemanager
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +105,70 @@ func TestUserServiceIsolatesOwnersAndManagesFolderTrees(t *testing.T) {
 	}
 	if len(b.files) != 1 {
 		t.Fatalf("remaining files=%d, want bob only", len(b.files))
+	}
+}
+
+func TestCreateTextCSVMarkdownAndMoveIntoFolder(t *testing.T) {
+	s := NewUserService(newMemoryUserFiles())
+	folder, err := s.CreateFolder("alice", "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	txt, err := s.CreateFile("alice", "readme.txt", "", []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(txt.MIMEType, "text/plain") {
+		t.Fatalf("txt mime=%q", txt.MIMEType)
+	}
+	md, err := s.CreateFile("alice", "plan.md", "", []byte("# Title"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(md.MIMEType, "markdown") {
+		t.Fatalf("md mime=%q", md.MIMEType)
+	}
+	csv, err := s.CreateFile("alice", "rows.csv", "", []byte("a,b\n1,2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(csv.MIMEType, "csv") {
+		t.Fatalf("csv mime=%q", csv.MIMEType)
+	}
+	moved, err := s.Move("alice", txt.FileID, folder.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Name != "notes/readme.txt" {
+		t.Fatalf("moved path=%q", moved.Name)
+	}
+	items, err := s.List("alice", "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range items {
+		if item.Name == "readme.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("file not listed in destination folder: %#v", items)
+	}
+}
+
+func TestResolveMIMEInfersImagesAndText(t *testing.T) {
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	if got := ResolveMIME("shot.png", "application/octet-stream", png); got != "image/png" {
+		t.Fatalf("png mime=%q", got)
+	}
+	if got := ResolveMIME("notes.md", "", nil); !strings.Contains(got, "markdown") {
+		t.Fatalf("md mime=%q", got)
+	}
+	if got := ResolveMIME("rows.csv", "binary/octet-stream", nil); !strings.Contains(got, "csv") {
+		t.Fatalf("csv mime=%q", got)
+	}
+	if !IsImageMIME("image/jpeg; charset=binary") {
+		t.Fatal("jpeg should count as image")
 	}
 }

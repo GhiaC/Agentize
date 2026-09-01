@@ -17,13 +17,18 @@ byte store—the knowledge tree is not part of this feature. A host mounts
 ## HTTP contract
 
 - `GET /entries?path=` lists one directory.
-- `POST /entries` creates a directory.
+- `POST /entries` creates a directory (`kind=directory`) or an empty/simple
+  text file (`kind=file`, optional `mime_type` and `content`). `.txt`, `.md`,
+  and `.csv` names get matching types when MIME is omitted.
 - `DELETE /entries?id=&recursive=` deletes an owned entry.
 - `POST /upload` uploads one file into the requested virtual folder.
 - `GET /file?id=&mode=full|head|tail|lines&start=&end=&limit=` reads text.
 - `PUT /file` replaces file content.
-- `POST /move` renames or moves an entry.
+- `POST /move` renames or moves an entry. A destination that is an existing
+  folder receives the entry (`notes` + `readme.txt` → `notes/readme.txt`).
 - `GET /raw?id=&download=1` previews or downloads original bytes.
 
 Text reads are capped at 2 MiB, scanner lines at 1 MiB, and HTTP uploads at
-20 MiB. Raw downloads preserve the stored MIME type and filename.
+20 MiB. Raw downloads preserve a resolved MIME type and filename. Image and
+PDF previews are inline; other types stay attachment-only. Empty or
+`application/octet-stream` uploads are typed from the filename.
