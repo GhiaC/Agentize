@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class JobStatus(StrEnum):
@@ -100,6 +100,8 @@ class BrowserTabActionRequest(BaseModel):
 	text: str = Field(default="", max_length=16_384)
 	key: str = Field(default="", max_length=64)
 	amount: int = Field(default=0, ge=-10_000, le=10_000)
+	x: int | None = Field(default=None, ge=0, le=10_000)
+	y: int | None = Field(default=None, ge=0, le=10_000)
 
 	@field_validator("action")
 	@classmethod
@@ -108,6 +110,16 @@ class BrowserTabActionRequest(BaseModel):
 		if value not in {"navigate", "click", "type", "press", "scroll", "wait", "back", "forward"}:
 			raise ValueError("unsupported browser tab action")
 		return value
+
+	@model_validator(mode="after")
+	def click_has_target(self):
+		if self.action != "click":
+			return self
+		if (self.x is None) != (self.y is None):
+			raise ValueError("click coordinates require both x and y")
+		if not self.selector and self.x is None:
+			raise ValueError("selector or coordinates are required")
+		return self
 
 
 class BrowserTabActionResponse(BaseModel):

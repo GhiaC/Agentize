@@ -39,6 +39,7 @@ from app.config import Settings
 from app.jobs import JobManager
 from app.models import BrowserDownload, BrowserTab, BrowserTabActionRequest, JobResult, JobStatus, StartJobRequest
 from app.runner import BrowserDisconnected, BrowserTabUnavailable, BrowserUseRunner
+from pydantic import ValidationError
 
 
 def settings() -> Settings:
@@ -158,12 +159,14 @@ class TabCDPClient:
 	def __init__(self):
 		self.navigate = AsyncMock(return_value={})
 		self.evaluate = AsyncMock(return_value={"result": {"value": "evaluated"}})
+		self.dispatch_mouse_event = AsyncMock(return_value={})
 		self.get_navigation_history = AsyncMock(
 			return_value={"entries": [{"id": 1, "url": "https://example.com"}], "currentIndex": 0}
 		)
 		self.send = SimpleNamespace(
 			Page=SimpleNamespace(navigate=self.navigate, getNavigationHistory=self.get_navigation_history),
 			Runtime=SimpleNamespace(evaluate=self.evaluate),
+			Input=SimpleNamespace(dispatchMouseEvent=self.dispatch_mouse_event),
 		)
 
 
@@ -193,6 +196,54 @@ class BrowserUseRunnerTabTests(unittest.IsolatedAsyncioTestCase):
 		response = await runner.act_on_tab("session-1", "tab-1", BrowserTabActionRequest(action="navigate", url="https://example.com"))
 		self.assertEqual(response.result, "navigation started")
 		browser.cdp_client.navigate.assert_awaited_once_with(params={"url": "https://example.com"}, session_id="cdp-session-1")
+
+	async def test_coordinate_click_dispatches_real_mouse_events(self):
+		runner = object.__new__(BrowserUseRunner)
+		browser = TabBrowser()
+		runner.settings = SimpleNamespace(
+			prohibited_domains=(),
+			allowed_domains=(),
+			block_ip_addresses=False,
+			data_dir=Path(self.enterContext(TemporaryDirectory())),
+		)
+		runner._owned_direct_tab = AsyncMock(return_value=browser)
+		runner._tab_cdp_session = AsyncMock(return_value=browser.cdp_session)
+		runner._tab_by_id = AsyncMock(return_value=BrowserTab(id="tab-1", url="https://example.com"))
+		runner._snapshot_tabs = AsyncMock(return_value=[])
+		runner._persist_tabs_state = MagicMock()
+		response = await runner.act_on_tab(
+			"session-1",
+			"tab-1",
+			BrowserTabActionRequest(action="click", x=120, y=80),
+		)
+		self.assertEqual(response.result, "clicked at 120,80")
+		calls = browser.cdp_client.dispatch_mouse_event.await_args_list
+		self.assertEqual([call.kwargs["params"]["type"] for call in calls], ["mouseMoved", "mousePressed", "mouseReleased"])
+		self.assertEqual(calls[1].kwargs["params"]["x"], 120)
+		self.assertEqual(calls[1].kwargs["params"]["y"], 80)
+		self.assertEqual(calls[1].kwargs["params"]["button"], "left")
+		browser.cdp_client.evaluate.assert_not_awaited()
+
+	def test_click_requires_selector_or_coordinates(self):
+		with self.assertRaises(ValidationError):
+			BrowserTabActionRequest(action="click")
+
+	async def test_selector_click_still_uses_page_evaluation(self):
+		runner = object.__new__(BrowserUseRunner)
+		browser = TabBrowser()
+		runner._owned_direct_tab = AsyncMock(return_value=browser)
+		runner._tab_cdp_session = AsyncMock(return_value=browser.cdp_session)
+		runner._tab_by_id = AsyncMock(return_value=BrowserTab(id="tab-1", url="https://example.com"))
+		runner._snapshot_tabs = AsyncMock(return_value=[])
+		runner._persist_tabs_state = MagicMock()
+		response = await runner.act_on_tab(
+			"session-1",
+			"tab-1",
+			BrowserTabActionRequest(action="click", selector="button.submit"),
+		)
+		self.assertEqual(response.result, "evaluated")
+		browser.cdp_client.evaluate.assert_awaited()
+		browser.cdp_client.dispatch_mouse_event.assert_not_awaited()
 
 	async def test_page_evaluation_uses_the_tab_cdp_session(self):
 		runner = object.__new__(BrowserUseRunner)

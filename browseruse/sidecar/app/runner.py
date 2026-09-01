@@ -287,9 +287,12 @@ class BrowserUseRunner:
 			await asyncio.sleep(request.amount)
 			result = f"waited {request.amount}s"
 		elif request.action == "click":
-			if not request.selector:
-				raise ValueError("selector is required")
-			result = await self._evaluate_tab(browser, tab_id, self._selector_script(request.selector, "click"))
+			if request.x is not None and request.y is not None:
+				result = await self._click_tab_at(browser, tab_id, request.x, request.y)
+			elif request.selector:
+				result = await self._evaluate_tab(browser, tab_id, self._selector_script(request.selector, "click"))
+			else:
+				raise ValueError("selector or coordinates are required")
 		elif request.action == "type":
 			if not request.selector or not request.text:
 				raise ValueError("selector and text are required")
@@ -564,6 +567,26 @@ class BrowserUseRunner:
 
 	async def _send_to_tab(self, command: str, operation):
 		return await self._await_cdp(operation, command)
+
+	async def _click_tab_at(self, browser: BrowserSession, tab_id: str, x: int, y: int) -> str:
+		if x < 0 or y < 0 or x > 10_000 or y > 10_000:
+			raise ValueError("click coordinates are out of range")
+		cdp_session = await self._tab_cdp_session(browser, tab_id)
+		point = {"x": float(x), "y": float(y)}
+		events = (
+			{"type": "mouseMoved", **point},
+			{"type": "mousePressed", "button": "left", "clickCount": 1, **point},
+			{"type": "mouseReleased", "button": "left", "clickCount": 1, **point},
+		)
+		for params in events:
+			await self._send_to_tab(
+				"Input.dispatchMouseEvent",
+				cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+					params=params,
+					session_id=cdp_session.session_id,
+				),
+			)
+		return f"clicked at {x},{y}"
 
 	def _selector_script(self, selector: str, action: str, text: str = "") -> str:
 		selector_json = json.dumps(selector)
