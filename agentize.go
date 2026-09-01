@@ -544,6 +544,10 @@ func (ag *Agentize) RecordUserFile(sessionID, name, mimeType string, source mode
 	return ag.engine.RecordUserFile(sessionID, name, mimeType, source, data)
 }
 
+func (ag *Agentize) RecordUserFileForUser(userID, name, mimeType string, source model.FileSource, data []byte) (*model.UserFile, error) {
+	return ag.engine.RecordUserFileForUser(userID, name, mimeType, source, data)
+}
+
 // ListUserFiles returns all files owned by a user, newest first.
 func (ag *Agentize) ListUserFiles(userID string) ([]*model.UserFile, error) {
 	return ag.engine.ListUserFiles(userID)
@@ -558,6 +562,18 @@ func (ag *Agentize) ReadUserFile(fileID string) ([]byte, *model.UserFile, error)
 // chat/API adapters should prefer this over the trusted ReadUserFile method.
 func (ag *Agentize) ReadUserFileForUser(userID, fileID string) ([]byte, *model.UserFile, error) {
 	return ag.engine.ReadUserFileForUser(userID, fileID)
+}
+
+func (ag *Agentize) UpdateUserFileContentForUser(userID, fileID string, data []byte) (*model.UserFile, error) {
+	return ag.engine.UpdateUserFileContentForUser(userID, fileID, data)
+}
+
+func (ag *Agentize) MoveUserFileForUser(userID, fileID, path string) (*model.UserFile, error) {
+	return ag.engine.MoveUserFileForUser(userID, fileID, path)
+}
+
+func (ag *Agentize) DeleteUserFileForUser(userID, fileID string) error {
+	return ag.engine.DeleteUserFileForUser(userID, fileID)
 }
 
 // SetImageEditor wires an image-editing backend, enabling the manage_files

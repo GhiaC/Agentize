@@ -29,7 +29,7 @@ func TestRenderDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderDocuments (empty) failed: %v", err)
 	}
-	if !strings.Contains(html, "No documents found") {
+	if !strings.Contains(html, "No user files found") {
 		t.Errorf("expected empty-state message, got:\n%s", html)
 	}
 
@@ -53,7 +53,7 @@ func TestRenderDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderDocuments (populated) failed: %v", err)
 	}
-	for _, want := range []string{"report.md", "Generated", "2.0 KB", "text/markdown"} {
+	for _, want := range []string{"User File System", "/report.md", "Generated", "2.0 KB", "text/markdown"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered page missing %q\n%s", want, html)
 		}

@@ -62,21 +62,12 @@ func RenderDashboard(handler *debuger.DebugHandler, sysInfo *debuger.SystemInfo)
 	)
 	content += `</div>`
 
-	// Documents card (user-sent + generated files)
+	// Per-user file system (user-sent + generated files)
 	content += `<div class="col-md-6 col-lg-4 col-xl-2">`
 	content += components.StatCardWithLink(
 		fmt.Sprintf("%d", documentCount),
-		"Documents", "📄", "secondary",
+		"User Files", "📁", "secondary",
 		"/agentize/debug/documents", "View Details",
-	)
-	content += `</div>`
-
-	// Files card (knowledge-tree files opened during sessions)
-	content += `<div class="col-md-6 col-lg-4 col-xl-2">`
-	content += components.StatCardWithLink(
-		fmt.Sprintf("%d", stats.TotalFiles),
-		"Opened Files", "📁", "warning",
-		"/agentize/debug/files", "View Details",
 	)
 	content += `</div>`
 
@@ -124,21 +115,12 @@ func RenderDashboard(handler *debuger.DebugHandler, sysInfo *debuger.SystemInfo)
 	)
 	content += `</div>`
 
-	// Documents link
+	// File system link
 	content += `<div class="col-md-6 col-lg-3">`
 	content += components.LinkCard(
-		"View All Documents",
-		"Browse every file users sent or the agent generated, with preview and download",
-		"📄", "/agentize/debug/documents",
-	)
-	content += `</div>`
-
-	// Files link
-	content += `<div class="col-md-6 col-lg-3">`
-	content += components.LinkCard(
-		"View All Opened Files",
-		"Browse all files that were opened during sessions",
-		"📁", "/agentize/debug/files",
+		"Open User File System",
+		"Browse every user's isolated uploads, folders, and generated files",
+		"📁", "/agentize/debug/documents",
 	)
 	content += `</div>`
 

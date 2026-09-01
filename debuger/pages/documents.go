@@ -12,7 +12,7 @@ import (
 	"github.com/ghiac/agentize/model"
 )
 
-// RenderDocuments generates the user documents (files) list HTML page.
+// RenderDocuments generates the operator view of the per-user file system.
 func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 	dp := data.NewDataProvider(handler.GetStore())
 
@@ -27,14 +27,15 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 	paginatedFiles := files[startIdx:endIdx]
 
 	content := ui.ContainerStart()
-	content += ui.CardStartWithCount("All Documents", "file-earmark-text-fill", totalItems)
+	content += ui.CardStartWithCount("User File System", "folder-fill", totalItems)
+	content += `<p class="text-muted small mb-3">Uploaded and AI-generated files are isolated by owner. Names may contain virtual folder paths; stored byte keys remain opaque.</p>`
 
 	if len(files) == 0 {
-		content += components.InfoAlert("No documents found.")
+		content += components.InfoAlert("No user files found.")
 	} else {
 		columns := []components.ColumnConfig{
 			{Header: "Preview", Center: true, NoWrap: true},
-			{Header: "Name"},
+			{Header: "Path"},
 			{Header: "Source", Center: true, NoWrap: true},
 			{Header: "Type", NoWrap: true},
 			{Header: "Size", NoWrap: true},
@@ -57,14 +58,23 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 
 			// Thumbnail for images; a neutral icon otherwise.
 			preview := `<span class="text-muted" style="font-size:1.5rem;">📄</span>`
+			if f.MIMEType == "application/vnd.agentize.folder" {
+				preview = `<span class="text-muted" style="font-size:1.5rem;">📁</span>`
+			}
 			if strings.HasPrefix(f.MIMEType, "image/") {
 				preview = fmt.Sprintf(`<a href="%s" target="_blank"><img src="%s" alt="%s" loading="lazy" style="max-height:42px; max-width:64px; border-radius:4px; object-fit:cover;"></a>`,
 					rawURL, rawURL, escName)
 			}
 
-			nameCell := fmt.Sprintf(`<a href="%s" target="_blank" class="text-decoration-none">%s</a>`, rawURL, escName)
+			nameCell := fmt.Sprintf(`<span class="font-monospace">/%s</span>`, escName)
+			if f.MIMEType != "application/vnd.agentize.folder" {
+				nameCell = fmt.Sprintf(`<a href="%s" target="_blank" class="text-decoration-none font-monospace">/%s</a>`, rawURL, escName)
+			}
 			actions := fmt.Sprintf(`<a href="%s" target="_blank" class="btn btn-sm btn-outline-secondary me-1" title="View">View</a><a href="%s?download=1" class="btn btn-sm btn-outline-primary" title="Download">Download</a>`,
 				rawURL, rawURL)
+			if f.MIMEType == "application/vnd.agentize.folder" {
+				actions = `<span class="text-muted">Folder</span>`
+			}
 
 			content += fmt.Sprintf(`<tr>
                 <td class="text-center">%s</td>
@@ -97,7 +107,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 
 	content += ui.CardEnd()
 	content += ui.ContainerEnd()
-	return ui.Header("Agentize Debug - Documents") + ui.NavbarAndBody("/agentize/debug/documents", content) + ui.Footer(), nil
+	return ui.Header("Agentize Debug - File System") + ui.NavbarAndBody("/agentize/debug/documents", content) + ui.Footer(), nil
 }
 
 // fileSourceBadge renders a colored badge for a file source.

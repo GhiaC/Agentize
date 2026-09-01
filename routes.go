@@ -84,7 +84,6 @@ func (ag *Agentize) RegisterRoutes(router *gin.Engine) {
 	router.GET("/agentize/debug/workflows", p(ag.handleDebugWorkflows))
 	router.GET("/agentize/debug/workflows/:workflowID", p(ag.handleDebugWorkflowDetail))
 	router.GET("/agentize/debug/messages", p(ag.handleDebugMessages))
-	router.GET("/agentize/debug/files", p(ag.handleDebugFiles))
 	router.GET("/agentize/debug/documents", p(ag.handleDebugDocuments))
 	router.GET("/agentize/debug/documents/:fileID/raw", p(ag.handleDebugDocumentRaw))
 	router.GET("/agentize/debug/tool-calls", p(ag.handleDebugToolCalls))
@@ -665,25 +664,6 @@ func (ag *Agentize) handleDebugMessages(c *gin.Context) {
 	html, err := pages.RenderMessages(handler, page, userID, sessionID)
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate messages page: %v", err)})
-		return
-	}
-
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(200, html)
-}
-
-// handleDebugFiles handles opened files list page requests
-func (ag *Agentize) handleDebugFiles(c *gin.Context) {
-	handler, err := ag.createDebugHandler()
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-
-	page := getPageParam(c)
-	html, err := pages.RenderFiles(handler, page)
-	if err != nil {
-		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate files page: %v", err)})
 		return
 	}
 

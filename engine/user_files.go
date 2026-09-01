@@ -65,6 +65,35 @@ func (e *Engine) RecordUserFile(sessionID, name, mimeType string, source model.F
 	return e.recordUserFile(sessionID, name, mimeType, source, "", data)
 }
 
+// RecordUserFileForUser records a file without making a host choose an engine
+// session. Existing user sessions are preferred; a dedicated session is created
+// only when the user has none. This is the entry point for user-facing file
+// manager uploads and virtual folders.
+func (e *Engine) RecordUserFileForUser(userID, name, mimeType string, source model.FileSource, data []byte) (*model.UserFile, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, fmt.Errorf("user id is required")
+	}
+	sessions, err := e.Sessions.List(userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list user sessions: %w", err)
+	}
+	var sessionID string
+	for _, session := range sessions {
+		if session != nil && strings.TrimSpace(session.ParentSessionID) == "" {
+			sessionID = session.SessionID
+			break
+		}
+	}
+	if sessionID == "" {
+		session, createErr := e.CreateSession(userID)
+		if createErr != nil {
+			return nil, fmt.Errorf("failed to create file session: %w", createErr)
+		}
+		sessionID = session.SessionID
+	}
+	return e.RecordUserFile(sessionID, name, mimeType, source, data)
+}
+
 // recordUserFile is the core implementation; parentFileID links a derived file
 // (e.g. an edited image) back to its original while keeping it independent.
 func (e *Engine) recordUserFile(sessionID, name, mimeType string, source model.FileSource, parentFileID string, data []byte) (*model.UserFile, error) {
@@ -145,6 +174,50 @@ func (e *Engine) UpdateUserFileContent(fileID string, data []byte) (*model.UserF
 		return nil, fmt.Errorf("failed to update file metadata: %w", err)
 	}
 	return meta, nil
+}
+
+// UpdateUserFileContentForUser overwrites a file only when userID owns it.
+func (e *Engine) UpdateUserFileContentForUser(userID, fileID string, data []byte) (*model.UserFile, error) {
+	meta, errMsg := e.getOwnedFileMeta(userID, fileID)
+	if errMsg != "" {
+		return nil, fmt.Errorf("file not found: %s", fileID)
+	}
+	return e.UpdateUserFileContent(meta.FileID, data)
+}
+
+// MoveUserFileForUser changes the virtual user-visible path without moving the
+// opaque storage object. name may contain slash-separated folder segments.
+func (e *Engine) MoveUserFileForUser(userID, fileID, name string) (*model.UserFile, error) {
+	meta, errMsg := e.getOwnedFileMeta(userID, fileID)
+	if errMsg != "" {
+		return nil, fmt.Errorf("file not found: %s", fileID)
+	}
+	name = strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
+	if name == "" || strings.HasPrefix(name, "/") || name == ".." || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") {
+		return nil, fmt.Errorf("invalid file path")
+	}
+	meta.Name = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(filepath.FromSlash(name))), "./")
+	st, _ := e.userFiles()
+	if err := st.PutUserFile(meta); err != nil {
+		return nil, fmt.Errorf("failed to update file path: %w", err)
+	}
+	return meta, nil
+}
+
+// DeleteUserFileForUser removes owned bytes and metadata. Ownership failures
+// intentionally look identical to missing files.
+func (e *Engine) DeleteUserFileForUser(userID, fileID string) error {
+	meta, errMsg := e.getOwnedFileMeta(userID, fileID)
+	if errMsg != "" {
+		return fmt.Errorf("file not found: %s", fileID)
+	}
+	if e.Files != nil && meta.StorageKey != "" {
+		if err := e.Files.Delete(meta.StorageKey); err != nil {
+			return fmt.Errorf("failed to delete file bytes: %w", err)
+		}
+	}
+	st, _ := e.userFiles()
+	return st.DeleteUserFile(meta.FileID)
 }
 
 // EditImageFile edits the source image via the configured ImageEditor and saves
