@@ -837,21 +837,51 @@ func (e *Engine) processMessageLocked(
 }
 
 func (e *Engine) drainSessionQueues(ctx context.Context, sessionID string) {
+	drained := false
+	var lastErr error
 	for {
 		if item, ok := e.sessionProgress.TakeUser(sessionID); ok {
+			drained = true
 			if _, _, qErr := e.processOneMessageBody(ctx, sessionID, incomingFromQueued(item, QueueUser)); qErr != nil {
 				log.Log.Warnf("[Engine] ⚠️  Queued user message failed | Error: %v", qErr)
+				lastErr = qErr
+			} else {
+				lastErr = nil
 			}
 			continue
 		}
 		if item, ok := e.sessionProgress.TakeDeferred(sessionID); ok {
+			drained = true
 			if _, _, qErr := e.processOneMessageBody(ctx, sessionID, incomingFromQueued(item, QueueDeferred)); qErr != nil {
 				log.Log.Warnf("[Engine] ⚠️  Deferred alert/schedule message failed | Error: %v", qErr)
+				lastErr = qErr
+			} else {
+				lastErr = nil
 			}
 			continue
 		}
+		break
+	}
+	if !drained {
 		return
 	}
+	session, err := e.Sessions.Get(sessionID)
+	if err != nil || session == nil {
+		return
+	}
+	if lastErr != nil {
+		phase := StatusError
+		if errors.Is(lastErr, context.Canceled) {
+			phase = StatusPhase("stopped")
+		}
+		e.persistSessionRunState(session, phase, lastErr.Error(), false, UserMessageIDFrom(ctx))
+		return
+	}
+	if ctx.Err() != nil {
+		e.persistSessionRunState(session, StatusPhase("stopped"), ctx.Err().Error(), false, UserMessageIDFrom(ctx))
+		return
+	}
+	e.persistSessionRunState(session, StatusCompleted, "", false, UserMessageIDFrom(ctx))
 }
 
 // processOneMessageBody appends the user message to session and runs the chat request.
