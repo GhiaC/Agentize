@@ -185,6 +185,10 @@ class JobManager:
 		except ValueError as exc:
 			raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
 
+	def session_busy(self, session_id: str) -> tuple[bool, str]:
+		job_id = self._active_job_ids.get(session_id, "")
+		return bool(job_id), job_id
+
 	async def tabs(self, session_id: str) -> list[BrowserTab]:
 		lister = getattr(self.runner, "tabs", None)
 		if lister is None:

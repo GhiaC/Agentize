@@ -281,6 +281,18 @@ class BrowserUseRunnerTabTests(unittest.IsolatedAsyncioTestCase):
 
 
 class JobManagerTests(unittest.IsolatedAsyncioTestCase):
+	async def test_session_busy_tracks_the_running_job(self):
+		runner = BlockingRunner()
+		manager = JobManager(settings(), runner)
+		self.assertEqual(manager.session_busy("session-1"), (False, ""))
+		created = await manager.create("session-1", StartJobRequest(task="hold"))
+		await asyncio.wait_for(runner.started.wait(), timeout=1)
+		self.assertEqual(manager.session_busy("session-1"), (True, created.id))
+		self.assertEqual(manager.session_busy("session-2"), (False, ""))
+		await manager.cancel("session-1", created.id)
+		self.assertEqual(manager.session_busy("session-1"), (False, ""))
+		await manager.shutdown()
+
 	async def test_running_job_makes_tab_actions_fail_fast_but_job_screenshot_remains_available(self):
 		class BlockingTabRunner(TabRunner):
 			def __init__(self):
