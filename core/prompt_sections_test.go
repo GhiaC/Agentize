@@ -16,7 +16,7 @@ func TestSystemPromptSectionsFor_KeysAndClassification(t *testing.T) {
 		SessionID: "s1",
 		UserID:    "user1",
 		AgentType: model.AgentTypeCore,
-		Summary:   "the user likes go",
+		Summary:   model.SummaryEntries{"the user likes go"},
 		Tags:      []string{"golang"},
 	}
 
@@ -136,7 +136,7 @@ func TestSystemPromptSectionsFor_DropsOverBudget(t *testing.T) {
 		SessionID: "s1",
 		UserID:    "user1",
 		AgentType: model.AgentTypeCore,
-		Summary:   huge,
+		Summary:   model.SummaryEntries{huge},
 	}
 	required := len(coreControllerPrompt) +
 		len(ch.agents.BuildAgentsDescriptionPrompt()) +
@@ -184,7 +184,7 @@ func TestPreviewSystemPromptSections_FromStore(t *testing.T) {
 		SessionID: "core-s",
 		UserID:    "user1",
 		AgentType: model.AgentTypeCore,
-		Summary:   "stored summary",
+		Summary:   model.SummaryEntries{"stored summary"},
 		Tags:      []string{"topic"},
 	}); err != nil {
 		t.Fatalf("seed core session: %v", err)

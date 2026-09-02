@@ -183,6 +183,8 @@ func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
 
 	s := model.NewSessionWithType("pg-user-1", model.AgentTypeLow)
 	s.Title = "postgres-roundtrip"
+	s.Summary = model.SummaryEntries{"first fact", "second fact"}
+	s.SummaryInitialized = true
 	if err := st.Put(s); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -190,7 +192,7 @@ func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Title != "postgres-roundtrip" || got.UserID != "pg-user-1" {
+	if got.Title != "postgres-roundtrip" || got.UserID != "pg-user-1" || strings.Join(got.Summary, "|") != "first fact|second fact" || !got.SummaryInitialized {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 

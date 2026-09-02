@@ -3,6 +3,8 @@ package pages
 import (
 	"fmt"
 	"html/template"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/ghiac/agentize/debuger"
@@ -12,6 +14,51 @@ import (
 	"github.com/ghiac/agentize/model"
 	"github.com/sashabaranov/go-openai"
 )
+
+const sessionDetailItemsPerPage = 25
+
+// SessionDetailPages keeps every collection on a large session independently
+// pageable. Page 1 means newest/current; higher pages walk backward in history.
+type SessionDetailPages struct {
+	Prompts       int
+	Messages      int
+	Archived      int
+	Summarization int
+	ToolCalls     int
+	Files         int
+}
+
+func detailPageSlice[T any](items []T, page int) []T {
+	start, end, _ := components.GetPaginationInfo(page, len(items), sessionDetailItemsPerPage)
+	return items[start:end]
+}
+
+func detailPagination(sessionID, pageParam string, current int, total int, pages SessionDetailPages) string {
+	params := url.Values{
+		"prompts_page": {fmt.Sprint(pages.Prompts)}, "messages_page": {fmt.Sprint(pages.Messages)},
+		"archived_page": {fmt.Sprint(pages.Archived)}, "summaries_page": {fmt.Sprint(pages.Summarization)},
+		"tools_page": {fmt.Sprint(pages.ToolCalls)}, "files_page": {fmt.Sprint(pages.Files)},
+	}
+	params.Del(pageParam)
+	return components.Pagination(components.PaginationConfig{
+		CurrentPage: current, TotalItems: total, ItemsPerPage: sessionDetailItemsPerPage,
+		BaseURL: "/agentize/debug/sessions/" + url.PathEscape(sessionID), PageParam: pageParam, QueryParams: params,
+	})
+}
+
+func collapsibleCardStart(title, icon string, count int, open bool) string {
+	openAttr := ""
+	if open {
+		openAttr = " open"
+	}
+	return fmt.Sprintf(`<details class="card mb-4 debug-section"%s>
+<summary class="card-header d-flex align-items-center justify-content-between" style="cursor:pointer;list-style:none">
+<h5 class="mb-0"><i class="bi bi-%s me-2"></i>%s <span class="badge bg-secondary">%d</span></h5>
+<span class="text-muted small">Expand / collapse</span></summary><div class="card-body">`,
+		openAttr, template.HTMLEscapeString(icon), template.HTMLEscapeString(title), count)
+}
+
+func collapsibleCardEnd() string { return `</div></details>` }
 
 // RenderSessions generates the sessions list HTML page
 func RenderSessions(handler *debuger.DebugHandler, page int) (string, error) {
@@ -85,6 +132,17 @@ func convertExMsgToMessage(chatMsg openai.ChatCompletionMessage, sessionID, user
 
 // RenderSessionDetail generates the session detail HTML page
 func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (string, error) {
+	return RenderSessionDetailPage(handler, sessionID, SessionDetailPages{Prompts: 1, Messages: 1, Archived: 1, Summarization: 1, ToolCalls: 1, Files: 1})
+}
+
+// RenderSessionDetailPage renders the independently paginated detail view.
+func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pages SessionDetailPages) (string, error) {
+	pageValues := []*int{&pages.Prompts, &pages.Messages, &pages.Archived, &pages.Summarization, &pages.ToolCalls, &pages.Files}
+	for _, page := range pageValues {
+		if *page < 1 {
+			*page = 1
+		}
+	}
 	dp := data.NewDataProvider(handler.GetStore())
 
 	session, err := dp.GetSession(sessionID)
@@ -163,8 +221,16 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 	}
 
 	summaryDisplay := "-"
-	if session.Summary != "" {
-		summaryDisplay = template.HTMLEscapeString(session.Summary)
+	if len(session.Summary) > 0 {
+		var items strings.Builder
+		items.WriteString(`<ol class="mb-0 ps-3 summary-entries">`)
+		for _, entry := range session.Summary {
+			items.WriteString(`<li class="mb-2">`)
+			items.WriteString(template.HTMLEscapeString(entry))
+			items.WriteString(`</li>`)
+		}
+		items.WriteString(`</ol>`)
+		summaryDisplay = items.String()
 	}
 
 	summarizedAtDisplay := "-"
@@ -267,34 +333,41 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 		components.CountBadge(session.ToolSeq, "info"),
 	)
 
-	// System Prompts card
+	// System prompts are runtime context, not transcript history. Old releases
+	// archived a fresh snapshot each cycle; report that debt without presenting
+	// every stale copy as a current prompt.
 	var systemPrompts []string
 	for _, msg := range session.Msgs {
 		if msg.Role == openai.ChatMessageRoleSystem && msg.Content != "" {
 			systemPrompts = append(systemPrompts, msg.Content)
 		}
 	}
+	archivedSystemPromptCount := 0
 	for _, msg := range session.ArchivedMsgs {
-		if msg.Role == openai.ChatMessageRoleSystem && msg.Content != "" {
-			systemPrompts = append(systemPrompts, msg.Content)
+		if msg.Role == openai.ChatMessageRoleSystem {
+			archivedSystemPromptCount++
 		}
 	}
 
 	if len(systemPrompts) > 0 {
-		content += ui.CardStartWithCount("System Prompts", "gear-fill", len(systemPrompts))
-		for i, prompt := range systemPrompts {
-			promptDisplay := debuger.TruncateString(prompt, 500)
+		content += collapsibleCardStart("Current System Prompts", "gear-fill", len(systemPrompts), pages.Prompts > 1)
+		if archivedSystemPromptCount > 0 {
+			content += components.NoteAlert("Historical snapshots hidden", fmt.Sprintf("%d stale system-prompt snapshots were archived by an older summarization flow. They are not current prompts and will be purged on the next summary cycle.", archivedSystemPromptCount))
+		}
+		promptPage := detailPageSlice(systemPrompts, pages.Prompts)
+		for i, prompt := range promptPage {
 			content += fmt.Sprintf(`
 <div class="mb-3">
     <strong class="d-block mb-2">System Prompt #%d:</strong>
     %s
-</div>`, i+1, components.ExpandablePre(promptDisplay, 300))
+</div>`, (pages.Prompts-1)*sessionDetailItemsPerPage+i+1, components.ExpandableWithPreview(prompt, 500))
 		}
-		content += ui.CardEnd()
+		content += detailPagination(sessionID, "prompts_page", pages.Prompts, len(systemPrompts), pages)
+		content += collapsibleCardEnd()
 	}
 
 	// Messages card
-	content += ui.CardStartWithCount("Messages", "chat-dots-fill", len(messages))
+	content += collapsibleCardStart("Active Messages", "chat-dots-fill", len(messages), true)
 
 	if len(messages) == 0 {
 		content += components.InfoAlert("No messages found for this session.")
@@ -312,31 +385,34 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 			AlignMiddle: true,
 		})
 
-		for i, msg := range messages {
+		messagePage := detailPageSlice(messages, pages.Messages)
+		for i, msg := range messagePage {
 			content += components.MessageTableRow(msg, rowConfig, i)
 		}
 
 		content += components.TableEnd(true)
 		content += components.MessageTableScript()
+		content += detailPagination(sessionID, "messages_page", pages.Messages, len(messages), pages)
 	}
 
-	content += ui.CardEnd()
+	content += collapsibleCardEnd()
 
 	// ArchivedMsgs card (previously ExMsgs)
-	archivedCount := len(session.ArchivedMsgs)
-	content += fmt.Sprintf(`
-<div class="card mb-4">
-    <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-archive-fill me-2"></i>Archived Messages (%d) <small class="text-muted">(Debug Only)</small></h5>
-    </div>
-    <div class="card-body">`, archivedCount)
+	archivedMessages := make([]openai.ChatCompletionMessage, 0, len(session.ArchivedMsgs))
+	for _, archived := range session.ArchivedMsgs {
+		if archived.Role != openai.ChatMessageRoleSystem {
+			archivedMessages = append(archivedMessages, archived)
+		}
+	}
+	archivedCount := len(archivedMessages)
+	content += collapsibleCardStart("Archived Messages (Debug Only)", "archive-fill", archivedCount, pages.Archived > 1)
 
 	if archivedCount == 0 {
 		content += components.InfoAlert("No archived messages found for this session.")
 	} else {
 		content += components.NoteAlert("Note", "ArchivedMsgs are messages moved from Msgs after summarization. They are only displayed here for debugging purposes and are not used in normal operations.")
 
-		// ArchivedMsgs are already sorted by CreatedAt DESC in GetSession
+		// Page 1 is newest; higher pages walk backward through archived history.
 		rowConfig := components.DefaultMessageRowConfig()
 		rowConfig.ShowUser = false    // Already on session page, user is known
 		rowConfig.ShowSession = false // Already on session page
@@ -351,9 +427,9 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 			AlignMiddle: true,
 		})
 
-		for i, chatMsg := range session.ArchivedMsgs {
-			// Calculate original index (since we reversed, original index is len - i - 1)
-			originalIndex := len(session.ArchivedMsgs) - i - 1
+		archivedPage := detailPageSlice(archivedMessages, pages.Archived)
+		for i, chatMsg := range archivedPage {
+			originalIndex := len(session.ArchivedMsgs) - ((pages.Archived-1)*sessionDetailItemsPerPage + i) - 1
 			msg := convertExMsgToMessage(
 				chatMsg,
 				sessionID,
@@ -368,18 +444,19 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 
 		content += components.TableEnd(true)
 		content += components.MessageTableScript()
+		content += detailPagination(sessionID, "archived_page", pages.Archived, archivedCount, pages)
 	}
 
-	content += ui.CardEnd()
+	content += collapsibleCardEnd()
 
 	// Summarization Logs card
-	content += ui.CardStartWithCount("Summarization Logs", "file-text-fill", len(summarizationLogs))
+	content += collapsibleCardStart("Summarization Cycles", "file-text-fill", len(summarizationLogs), pages.Summarization > 1)
 
 	if len(summarizationLogs) == 0 {
 		content += components.InfoAlert("No summarization logs found for this session.")
 	} else {
 		content += components.ListGroupStart()
-		for _, log := range summarizationLogs {
+		for _, log := range detailPageSlice(summarizationLogs, pages.Summarization) {
 			statusBadge := components.StatusBadge(log.Status)
 
 			promptDisplay := components.ExpandableWithPreview(log.PromptSent, 500)
@@ -433,13 +510,14 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 			)
 		}
 		content += components.ListGroupEnd()
+		content += detailPagination(sessionID, "summaries_page", pages.Summarization, len(summarizationLogs), pages)
 	}
 
-	content += ui.CardEnd()
+	content += collapsibleCardEnd()
 
 	// Tool Calls card
-	content += ui.CardStartWithAction("Tool Calls", "tools", len(toolCalls),
-		"/agentize/debug/tool-calls?session="+template.URLQueryEscaper(sessionID), "View All")
+	content += collapsibleCardStart("Tool Calls", "tools", len(toolCalls), pages.ToolCalls > 1)
+	content += fmt.Sprintf(`<div class="d-flex justify-content-end mb-3"><a class="btn btn-sm btn-outline-secondary" href="/agentize/debug/tool-calls?session=%s">Dedicated view</a></div>`, template.URLQueryEscaper(sessionID))
 
 	if len(toolCalls) == 0 {
 		content += components.InfoAlert("No tool calls found for this session.")
@@ -460,7 +538,7 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 			AlignMiddle: true,
 		})
 
-		for _, tc := range toolCalls {
+		for _, tc := range detailPageSlice(toolCalls, pages.ToolCalls) {
 			argsDisplay := components.ExpandableWithPreview(tc.Arguments, 150)
 			resultDisplay := components.ExpandableWithPreview(tc.Result, 150)
 			agentBadge := components.AgentTypeBadgeFromString(tc.AgentType)
@@ -483,12 +561,13 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 		}
 
 		content += components.TableEnd(true)
+		content += detailPagination(sessionID, "tools_page", pages.ToolCalls, len(toolCalls), pages)
 	}
 
-	content += ui.CardEnd()
+	content += collapsibleCardEnd()
 
 	// Files card
-	content += ui.CardStartWithCount("Opened Files", "folder-fill", len(files))
+	content += collapsibleCardStart("Opened Files", "folder-fill", len(files), pages.Files > 1)
 
 	if len(files) == 0 {
 		content += components.InfoAlert("No opened files found for this session.")
@@ -508,7 +587,7 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 			AlignMiddle: true,
 		})
 
-		for _, f := range files {
+		for _, f := range detailPageSlice(files, pages.Files) {
 			status := components.BadgeWithIcon("Open", "✅", "success")
 			if !f.IsOpen {
 				status = components.BadgeWithIcon("Closed", "❌", "secondary")
@@ -534,9 +613,10 @@ func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (strin
 		}
 
 		content += components.TableEnd(true)
+		content += detailPagination(sessionID, "files_page", pages.Files, len(files), pages)
 	}
 
-	content += ui.CardEnd()
+	content += collapsibleCardEnd()
 	content += ui.ContainerEnd()
 	return ui.Header("Agentize Debug - Session: "+template.HTMLEscapeString(sessionID)) + ui.NavbarAndBody("/agentize/debug", content) + ui.Footer(), nil
 }

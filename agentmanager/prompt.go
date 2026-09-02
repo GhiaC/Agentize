@@ -335,7 +335,7 @@ func (am *AgentManager) BuildSessionContextPrompt(
 		return ""
 	}
 
-	if session.Summary == "" && len(session.Tags) == 0 {
+	if len(session.Summary) == 0 && len(session.Tags) == 0 {
 		return ""
 	}
 
@@ -346,9 +346,9 @@ func (am *AgentManager) BuildSessionContextPrompt(
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("## Session Context for %s\n\n", displayName))
-	if session.Summary != "" {
+	if len(session.Summary) > 0 {
 		sb.WriteString("### Summary\n")
-		sb.WriteString(session.Summary)
+		sb.WriteString(session.Summary.Text())
 		sb.WriteString("\n\n")
 	}
 	if len(session.Tags) > 0 {

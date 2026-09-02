@@ -23,6 +23,25 @@ type SessionStore interface {
 	GetNextSessionSeq(userID string, agentType AgentType) (int, error)
 }
 
+type sessionConversationStore interface {
+	GetConversationBySession(sessionID string) (*Conversation, error)
+	PutConversation(conversation *Conversation) error
+}
+
+func syncConversationTitleForSession(store SessionStore, sessionID, title string, updatedAt time.Time) error {
+	cs, ok := store.(sessionConversationStore)
+	if !ok {
+		return nil
+	}
+	conversation, err := cs.GetConversationBySession(sessionID)
+	if err != nil || conversation == nil {
+		return err
+	}
+	conversation.Title = title
+	conversation.UpdatedAt = updatedAt
+	return cs.PutConversation(conversation)
+}
+
 // LLMClient defines the interface for LLM operations (for summarization)
 type LLMClient interface {
 	CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error)
@@ -347,10 +366,11 @@ func (sh *SessionHandler) UpdateSessionMetadata(sessionID string, title string, 
 		session.Title = title
 	}
 	if tags != nil {
-		session.Tags = tags
+		session.Tags = AppendTags(session.Tags, tags, 7)
 	}
 	if summary != "" {
-		session.Summary = summary
+		session.Summary = AppendSummaryEntries(session.Summary, summary)
+		session.SummaryInitialized = true
 	}
 	session.UpdatedAt = time.Now()
 
@@ -450,22 +470,44 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	// Generate title if not set
-	if session.Title == "" {
-		title, err := sh.generateSessionTitle(ctx, conversationText)
-		if err == nil {
-			session.Title = title
-		}
+	// Refresh title on every cycle.
+	title, titleErr := sh.generateSessionTitle(ctx, conversationText)
+	if titleErr == nil && strings.TrimSpace(title) != "" {
+		session.Title = strings.TrimSpace(title)
+	}
+	if generatedTags, tagErr := session.generateTags(ctx, sh.llmClient, sh.config.SummaryModel, conversationText); tagErr == nil {
+		session.Tags = AppendTags(session.Tags, generatedTags, 7)
 	}
 
-	// Archive messages and update session
-	session.ArchivedMsgs = append(session.ArchivedMsgs, session.Msgs...)
-	session.Msgs = []openai.ChatCompletionMessage{}
-	session.Summary = summary
+	// Runtime system context remains active and is never transcript history.
+	archived := session.ArchivedMsgs[:0]
+	for _, message := range session.ArchivedMsgs {
+		if message.Role != openai.ChatMessageRoleSystem {
+			archived = append(archived, message)
+		}
+	}
+	activeSystem := make([]openai.ChatCompletionMessage, 0, 1)
+	for _, message := range session.Msgs {
+		if message.Role == openai.ChatMessageRoleSystem {
+			activeSystem = append(activeSystem, message)
+		} else {
+			archived = append(archived, message)
+		}
+	}
+	session.ArchivedMsgs = archived
+	session.Msgs = activeSystem
+	session.Summary = AppendSummaryEntries(session.Summary, summary)
+	session.SummaryInitialized = true
 	session.SummarizedAt = time.Now()
 	session.UpdatedAt = time.Now()
 
-	return sh.store.Put(session)
+	if err := sh.store.Put(session); err != nil {
+		return err
+	}
+	if titleErr == nil && strings.TrimSpace(title) != "" {
+		_ = syncConversationTitleForSession(sh.store, session.SessionID, session.Title, session.UpdatedAt)
+	}
+	return nil
 }
 
 // GetSessionsPrompt generates a formatted prompt showing all user sessions
@@ -529,8 +571,8 @@ func (sh *SessionHandler) formatSessionEntry(sb *strings.Builder, index int, s *
 
 	sb.WriteString(fmt.Sprintf("%d. [%s] \"%s\" - Last: %s\n", index, s.SessionID, title, timeAgo))
 
-	if s.Summary != "" {
-		sb.WriteString(fmt.Sprintf("   Summary: %s\n", s.Summary))
+	if len(s.Summary) > 0 {
+		sb.WriteString(fmt.Sprintf("   Summary: %s\n", s.Summary.Text()))
 	}
 
 	if len(s.Tags) > 0 {
@@ -605,7 +647,10 @@ Example: "Debugged Kubernetes pod restart issue. Found memory limits too low. Ap
 		return "", fmt.Errorf("no response from LLM")
 	}
 
-	summary := resp.Choices[0].Message.Content
+	summary := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if summary == "" {
+		return "", fmt.Errorf("empty summary response")
+	}
 
 	// Update log with success response
 	summLog.Status = "success"
@@ -671,6 +716,9 @@ Example outputs:
 func formatMessagesForSummary(msgs []openai.ChatCompletionMessage) string {
 	var sb strings.Builder
 	for _, msg := range msgs {
+		if msg.Role != openai.ChatMessageRoleUser {
+			continue
+		}
 		role := msg.Role
 		content := msg.Content
 
@@ -684,8 +732,9 @@ func formatMessagesForSummary(msgs []openai.ChatCompletionMessage) string {
 		}
 
 		// Truncate long messages
-		if len(content) > 500 {
-			content = content[:500] + "..."
+		runes := []rune(content)
+		if len(runes) > 500 {
+			content = string(runes[:500]) + "..."
 		}
 
 		sb.WriteString(fmt.Sprintf("%s: %s\n", role, content))

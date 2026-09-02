@@ -1,8 +1,16 @@
 package engine
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/ghiac/agentize/model"
+	"github.com/ghiac/agentize/store"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -47,6 +55,30 @@ func TestSplitRollingWindow(t *testing.T) {
 				t.Fatalf("archive+keep=%d want total %d", len(arch)+len(keep), c.total)
 			}
 		})
+	}
+}
+
+func TestSummarizationEligibilityDistinguishesValidEmptyFromLegacyEmpty(t *testing.T) {
+	now := time.Now()
+	config := DefaultSessionSchedulerConfig()
+	config.FirstSummarizationThreshold = 5
+	config.SubsequentMessageThreshold = 25
+	config.ImmediateSummarizationThreshold = 50
+	scheduler := &SessionScheduler{config: config}
+
+	legacy := &model.Session{
+		Msgs:         msgs(5),
+		SummarizedAt: now.Add(-2 * time.Hour),
+		UpdatedAt:    now,
+	}
+	if !scheduler.isEligibleForSummarization(legacy, now) {
+		t.Fatal("legacy empty summary should use the first/recovery threshold")
+	}
+
+	validNoop := legacy.Clone()
+	validNoop.SummaryInitialized = true
+	if scheduler.isEligibleForSummarization(validNoop, now) {
+		t.Fatal("a valid empty summary must use the subsequent threshold")
 	}
 }
 
@@ -100,5 +132,94 @@ func TestSplitRollingWindow_CutOnToolResult_ShiftsBack(t *testing.T) {
 	}
 	if len(arch)+len(keep) != len(conv) {
 		t.Fatalf("arch(%d)+keep(%d) != 8", len(arch), len(keep))
+	}
+}
+
+func TestSummarizeSessionAppendsMetadataAndSyncsConversation(t *testing.T) {
+	responses := []string{`["new decision"]`, "bitcoin,new-topic", "Updated Market Plan"}
+	call := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if call >= len(responses) {
+			t.Fatalf("unexpected LLM call %d", call+1)
+		}
+		content := strings.ReplaceAll(responses[call], `"`, `\"`)
+		call++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"test","model":"summary-test","choices":[{"message":{"role":"assistant","content":"%s"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`, content)
+	}))
+	defer server.Close()
+
+	st, err := store.NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	session := model.NewSessionWithID("u1", "u1-conv-s0001", model.AgentTypeConversation)
+	session.Title = "New market conversation"
+	session.Summary = model.SummaryEntries{"old fact"}
+	session.Tags = []string{"bitcoin"}
+	session.ArchivedMsgs = []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "stale runtime context"},
+		{Role: openai.ChatMessageRoleUser, Content: "old user message"},
+	}
+	session.Msgs = []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "current runtime context"},
+		{Role: openai.ChatMessageRoleUser, Content: "make a new decision"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "done"},
+	}
+	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	conversation := model.NewConversation("u1", "u1-c0001", session.SessionID, session.Title, "", 1)
+	if err := st.PutConversation(conversation); err != nil {
+		t.Fatal(err)
+	}
+
+	config := openai.DefaultConfig("test")
+	config.BaseURL = server.URL
+	client := openai.NewClientWithConfig(config)
+	handler := model.NewSessionHandler(st, model.DefaultSessionHandlerConfig())
+	schedulerConfig := DefaultSessionSchedulerConfig()
+	schedulerConfig.SummaryModel = "summary-test"
+	schedulerConfig.RetainRecentMessages = 1
+	schedulerConfig.DisableLogs = true
+	scheduler := NewSessionScheduler(handler, client, schedulerConfig)
+	if err := scheduler.summarizeSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.Get(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.Summary, "|") != "old fact|new decision" {
+		t.Fatalf("summary = %#v", got.Summary)
+	}
+	if strings.Join(got.Tags, "|") != "bitcoin|new-topic" {
+		t.Fatalf("tags = %#v", got.Tags)
+	}
+	if got.Title != "Updated Market Plan" {
+		t.Fatalf("session title = %q", got.Title)
+	}
+	for _, archived := range got.ArchivedMsgs {
+		if archived.Role == openai.ChatMessageRoleSystem {
+			t.Fatal("system prompt leaked into archived history")
+		}
+	}
+	if len(got.Msgs) == 0 || got.Msgs[0].Role != openai.ChatMessageRoleSystem {
+		t.Fatalf("current system prompt was not retained: %#v", got.Msgs)
+	}
+	linked, err := st.GetConversationBySession(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked.Title != got.Title || linked.UpdatedAt.Before(got.UpdatedAt.Add(-time.Second)) {
+		t.Fatalf("conversation metadata not synchronized: %#v", linked)
+	}
+}
+
+func TestParseSummaryEntriesRejectsEmptyProviderContent(t *testing.T) {
+	if _, err := parseSummaryEntries(""); err == nil {
+		t.Fatal("empty provider content must fail closed")
 	}
 }

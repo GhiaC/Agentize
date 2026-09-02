@@ -2,8 +2,8 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -107,19 +107,23 @@ type userStore interface {
 	PutUser(user *model.User) error
 }
 
+type conversationMetadataStore interface {
+	GetConversationBySession(sessionID string) (*model.Conversation, error)
+	PutConversation(conversation *model.Conversation) error
+}
+
 // DefaultSummarizationPrompts returns default prompts for summarization
 func DefaultSummarizationPrompts() SummarizationPrompts {
 	return SummarizationPrompts{
-		SummarySystemPrompt: `You are an INCREMENTAL conversation summarizer. You maintain a running summary by MERGING new information into the previous summary. You never rewrite it from scratch and never drop previously captured specifics.
+		SummarySystemPrompt: `You are an incremental conversation summarizer. The application stores summary memory as an append-only array. Return only NEW important facts from the new conversation; never repeat, rewrite, merge, correct, or delete an existing entry.
 
 CONTENT VIOLATION (check first): If the user's messages contain offensive, vulgar, abusive, or clearly inappropriate language (insults, slurs, explicit content, hate speech, etc.), respond with ONLY this exact word, nothing else: OFFENSIVE_CONTENT. No explanation, no other text.
 
-HOW TO MERGE (append-style):
-- Start from the previous summary and KEEP all of its specific facts.
-- ADD only genuinely new specific information found in the new conversation.
-- If new info CORRECTS or UPDATES an existing fact (preference changed, a value/name/number changed), update just that fact and keep the rest.
-- Never delete a previously captured specific unless it was explicitly retracted or corrected.
-- Deduplicate: do not state the same fact twice.
+APPEND-ONLY RULES:
+- Treat existing summary entries as immutable history.
+- Emit only genuinely new specific information from the NEW conversation.
+- If a fact changed, append a new entry describing the change; do not rewrite the old entry.
+- Do not emit facts already present in the existing entries.
 
 WHAT COUNTS AS SPECIFIC (include):
 - Names of people, places, or entities
@@ -134,19 +138,19 @@ WHAT TO IGNORE (never add):
 - Generic how-to and common-knowledge lookups, filler
 
 OUTPUT REQUIREMENTS:
-- Return the FULL updated summary (previous facts + additions/corrections), NOT just the delta.
-- Use compact factual sentences. Soft limit ~800 characters; if you would exceed it, compress by merging related facts, but NEVER drop a unique specific.
-- If nothing specific is present, return the previous summary unchanged (or empty if there was none).
+- Return a valid JSON array of compact strings and nothing else.
+- Each string is one independently useful new fact.
+- Return [] when there is nothing important to append.
 
-Example: previous "User Ali, 28, prefers dark mode." + new "I just turned 29 and joined TechCorp" => "User Ali, 29, prefers dark mode. Works at TechCorp."`,
+Example: existing ["User Ali is 28."] + new "I turned 29 and joined TechCorp" => ["User Ali turned 29.","User Ali joined TechCorp."]`,
 
-		SummaryUserPromptTemplate: `{{if .PreviousSummary}}CURRENT running summary (keep all its facts; update one only if the new conversation corrects it):
+		SummaryUserPromptTemplate: `{{if .PreviousSummary}}IMMUTABLE EXISTING SUMMARY ENTRIES (do not repeat or edit):
 {{.PreviousSummary}}
 
-NEW conversation to merge in:
+NEW conversation to inspect:
 {{end}}{{.ConversationText}}
 
-Return the FULL updated summary by merging the new specific information into the current one (add new specifics, correct outdated facts, keep everything else, ignore small talk):`,
+Return only the JSON array of NEW important facts to append:`,
 
 		TagSystemPrompt: `You are a conversation tagger that identifies SPECIFIC topics only.
 
@@ -163,20 +167,20 @@ WHAT NOT TO TAG (generic topics):
 - Any generic action words
 
 CRITICAL RULES:
-1. PRESERVE existing tags that are still relevant
-2. ADD new tags only for genuinely specific new topics
-3. Maximum 7 tags total
+1. Existing tags are immutable; never return them again
+2. Return only new tags for genuinely specific new topics
+3. The application will append at most enough tags to reach 7 total
 4. Be very selective - fewer specific tags are better than many generic ones
 
 Format: lowercase, hyphenated (e.g., "kubernetes", "project-alpha", "user-preferences")
-Return only the final tag list, comma-separated, no quotes or extra text.`,
+Return only new tags, comma-separated, no quotes or extra text. Return an empty response when none are new.`,
 
 		TagUserPromptTemplate: `{{if .ExistingTags}}EXISTING TAGS (preserve these unless completely irrelevant): {{.ExistingTags}}
 
 {{end}}NEW CONVERSATION CONTENT:
 {{.ConversationText}}
 
-Generate tags for SPECIFIC topics only (ignore generic questions and small talk):`,
+		Generate only NEW tags for SPECIFIC topics (ignore generic questions and small talk):`,
 
 		TitleSystemPrompt: `Generate a short title (3-5 words) for this conversation.
 Focus on the SPECIFIC topic or person discussed, not generic actions.
@@ -468,7 +472,7 @@ sessionLoop:
 				}
 
 				// Check thresholds based on whether session was summarized before
-				if session.SummarizedAt.IsZero() {
+				if session.SummarizedAt.IsZero() || (!session.SummaryInitialized && len(session.Summary) == 0) {
 					// First summarization check
 					if msgCount < ss.config.FirstSummarizationThreshold {
 						reasons = append(reasons, fmt.Sprintf("only %d messages (need %d for first summarization)", msgCount, ss.config.FirstSummarizationThreshold))
@@ -560,7 +564,9 @@ sessionLoop:
 func (ss *SessionScheduler) isEligibleForSummarization(session *model.Session, now time.Time) bool {
 	// Check if session has messages
 	if len(session.Msgs) == 0 {
-		return false
+		// Legacy rows could archive everything and still persist an empty provider
+		// response as "summarized". Recover them once from archived user messages.
+		return !session.SummaryInitialized && len(session.Summary) == 0 && len(session.ArchivedMsgs) > 0
 	}
 
 	msgCount := len(session.Msgs)
@@ -580,7 +586,7 @@ func (ss *SessionScheduler) isEligibleForSummarization(session *model.Session, n
 	}
 
 	// CASE 1: First summarization (session never summarized before)
-	if session.SummarizedAt.IsZero() {
+	if session.SummarizedAt.IsZero() || (!session.SummaryInitialized && len(session.Summary) == 0) {
 		// Only need FirstSummarizationThreshold messages (default: 5)
 		return msgCount >= ss.config.FirstSummarizationThreshold
 	}
@@ -676,7 +682,7 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 
 	if !ss.config.DisableLogs {
 		log.Log.Infof("[SessionScheduler] 📝 Summarizing session %s | Messages: %d | PreviousSummary: %s | ExistingTags: %v",
-			session.SessionID, msgCount, truncateStringForLog(session.Summary, 50), session.Tags)
+			session.SessionID, msgCount, truncateStringForLog(session.Summary.Text(), 50), session.Tags)
 	}
 
 	// Ensure user_id is in context
@@ -684,7 +690,9 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 
 	// Determine summarization type
 	summarizationType := "first"
-	if !session.SummarizedAt.IsZero() {
+	if !session.SummarizedAt.IsZero() && !session.SummaryInitialized && len(session.Summary) == 0 {
+		summarizationType = "recovery"
+	} else if !session.SummarizedAt.IsZero() {
 		if msgCount >= ss.config.ImmediateSummarizationThreshold {
 			summarizationType = "immediate"
 		} else {
@@ -695,7 +703,7 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	// Create summarization log with all context before summarization
 	summLog := model.NewSummarizationLog(session)
 	summLog.SessionTitle = session.Title
-	summLog.PreviousSummary = session.Summary
+	summLog.PreviousSummary = session.Summary.Text()
 	summLog.PreviousTags = strings.Join(session.Tags, ", ")
 	summLog.MessagesBeforeCount = msgCount
 	summLog.ArchivedMessagesCount = len(session.ArchivedMsgs)
@@ -716,9 +724,16 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	// Track what we generate
 	var generatedSummary, generatedTags, generatedTitle string
 
-	// Generate improved summary (incorporating previous summary)
-	previousSummary := session.Summary
-	newSummary, summaryResp, promptSent, err := ss.generateImprovedSummaryWithResponse(ctx, session.SessionID, session.UserID, previousSummary, conversationText)
+	// Generate only the delta and append it to immutable prior entries.
+	previousSummary := session.Summary.Clone()
+	previousTitle := session.Title
+	previousTags := append([]string(nil), session.Tags...)
+	previousSummaryPrompt := ""
+	if len(previousSummary) > 0 {
+		previousSummaryJSON, _ := json.Marshal(previousSummary)
+		previousSummaryPrompt = string(previousSummaryJSON)
+	}
+	rawSummary, summaryResp, promptSent, err := ss.generateImprovedSummaryWithResponse(ctx, session.SessionID, session.UserID, previousSummaryPrompt, conversationText)
 	summLog.PromptSent = promptSent // Store prompt for debug/DB (even on failure)
 	if err != nil {
 		if !ss.config.DisableLogs {
@@ -730,13 +745,13 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		if hasDebugStore {
 			_ = debugStore.PutSummarizationLog(summLog)
 		}
-		metrics.SummarizationResult(summarizationType, "failed", msgCount, 0, 0, len(previousSummary), 0, 0, 0)
+		metrics.SummarizationResult(summarizationType, "failed", msgCount, 0, 0, len(previousSummary.Text()), 0, 0, 0)
 		// Do not set SummarizedAt or move messages when summary generation failed
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
 
 	// Offensive content: LLM returned the signal word → ban user and do not save summary
-	if strings.TrimSpace(newSummary) == SummaryOffensiveContentSignal {
+	if strings.TrimSpace(rawSummary) == SummaryOffensiveContentSignal {
 		if us, ok := sessionStore.(userStore); ok {
 			user, err := us.GetOrCreateUser(session.UserID)
 			if err == nil {
@@ -747,14 +762,26 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 				}
 			}
 		}
-		metrics.SummarizationResult(summarizationType, "offensive", msgCount, 0, 0, len(previousSummary), 0, 0, 0)
+		metrics.SummarizationResult(summarizationType, "offensive", msgCount, 0, 0, len(previousSummary.Text()), 0, 0, 0)
 		// Do not save OFFENSIVE_CONTENT as summary; do not set SummarizedAt or move messages
 		return nil
 	}
 
-	// Always assign so persisted state reflects LLM response (even when empty)
-	session.Summary = newSummary
-	generatedSummary = newSummary
+	newEntries, err := parseSummaryEntries(rawSummary)
+	if err != nil {
+		summLog.ErrorMessage = fmt.Sprintf("invalid summary response: %v", err)
+		summLog.ResponseReceived = rawSummary
+		summLog.MarkCompleted("failed")
+		if hasDebugStore {
+			_ = debugStore.PutSummarizationLog(summLog)
+		}
+		metrics.SummarizationResult(summarizationType, "failed", msgCount, 0, 0, len(previousSummary.Text()), 0, 0, 0)
+		return fmt.Errorf("invalid summary response: %w", err)
+	}
+	session.Summary = model.AppendSummaryEntries(previousSummary, newEntries...)
+	previousSummaryInitialized := session.SummaryInitialized
+	session.SummaryInitialized = true
+	generatedSummary = strings.Join(newEntries, "\n")
 	if summaryResp != nil {
 		summLog.PromptTokens = summaryResp.Usage.PromptTokens
 		summLog.CompletionTokens = summaryResp.Usage.CompletionTokens
@@ -766,34 +793,36 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 
 	// Generate and merge tags
 	existingTags := session.Tags
-	newTags, err := ss.generateAndMergeTags(ctx, existingTags, conversationText)
+	mergedTags, err := ss.generateAndMergeTags(ctx, existingTags, conversationText)
 	if err != nil {
 		if !ss.config.DisableLogs {
 			log.Log.Warnf("[SessionScheduler] ⚠️  Failed to generate tags for session %s: %v", session.SessionID, err)
 		}
-	} else if len(newTags) > 0 {
-		session.Tags = newTags
-		generatedTags = strings.Join(newTags, ", ")
+	} else {
+		session.Tags = mergedTags
+		if len(mergedTags) > len(existingTags) {
+			generatedTags = strings.Join(mergedTags[len(existingTags):], ", ")
+		}
 	}
 
-	// Generate title if not set
-	if session.Title == "" {
-		title, err := ss.generateTitle(ctx, conversationText)
-		if err != nil {
-			if !ss.config.DisableLogs {
-				log.Log.Warnf("[SessionScheduler] ⚠️  Failed to generate title for session %s: %v", session.SessionID, err)
-			}
-		} else if title != "" {
-			session.Title = title
-			generatedTitle = title
+	// Refresh the title on every cycle from accumulated memory plus the new
+	// window. Conversation rows are synchronized after the session is durable.
+	titleContext := strings.TrimSpace(conversationText + "\nAccumulated summary:\n" + session.Summary.Text())
+	title, err := ss.generateTitle(ctx, titleContext)
+	if err != nil {
+		if !ss.config.DisableLogs {
+			log.Log.Warnf("[SessionScheduler] ⚠️  Failed to generate title for session %s: %v", session.SessionID, err)
 		}
+	} else if title = strings.TrimSpace(title); title != "" {
+		session.Title = title
+		generatedTitle = title
 	}
 
 	// Update log with generated content
 	summLog.GeneratedSummary = generatedSummary
 	summLog.GeneratedTags = generatedTags
 	summLog.GeneratedTitle = generatedTitle
-	summLog.ResponseReceived = generatedSummary
+	summLog.ResponseReceived = rawSummary
 	if summLog.ModelUsed == "" {
 		summLog.ModelUsed = ss.config.SummaryModel
 	}
@@ -809,12 +838,19 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		retain = 0
 	}
 
-	archivedMsgsBackupLen := len(session.ArchivedMsgs)
+	archivedMsgsBackup := append([]openai.ChatCompletionMessage(nil), session.ArchivedMsgs...)
 	previousSummarizedAt := session.SummarizedAt
 
 	toArchive, toKeep := splitRollingWindow(originalMsgs, retain)
 	movedCount := len(toArchive)
-	if movedCount > 0 {
+	// System messages are mutable runtime context, not conversation history.
+	// Keep current ones active and purge historical snapshots accumulated by old
+	// versions. This also repairs existing sessions on their next summary cycle.
+	toArchive, keptSystem := withoutSystemMessages(toArchive)
+	session.ArchivedMsgs, _ = withoutSystemMessages(session.ArchivedMsgs)
+	toKeep = append(keptSystem, toKeep...)
+	movedCount = len(toArchive)
+	if movedCount > 0 || len(archivedMsgsBackup) != len(session.ArchivedMsgs) {
 		session.ArchivedMsgs = append(session.ArchivedMsgs, toArchive...)
 		kept := make([]openai.ChatCompletionMessage, len(toKeep))
 		copy(kept, toKeep)
@@ -831,19 +867,27 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 
 	// Save session - if this fails, rollback all in-memory changes
 	if err := sessionStore.Put(session); err != nil {
-		if movedCount > 0 {
-			session.Msgs = originalMsgs
-			session.ArchivedMsgs = session.ArchivedMsgs[:archivedMsgsBackupLen]
-		}
+		session.Msgs = originalMsgs
+		session.ArchivedMsgs = archivedMsgsBackup
 		session.Summary = previousSummary
+		session.SummaryInitialized = previousSummaryInitialized
+		session.Title = previousTitle
+		session.Tags = previousTags
 		session.SummarizedAt = previousSummarizedAt
 		summLog.MarkCompleted("failed")
 		summLog.ErrorMessage = fmt.Sprintf("failed to save session: %v", err)
 		if hasDebugStore {
 			_ = debugStore.PutSummarizationLog(summLog)
 		}
-		metrics.SummarizationResult(summarizationType, "failed", msgCount, 0, 0, len(previousSummary), 0, summLog.PromptTokens, summLog.CompletionTokens)
+		metrics.SummarizationResult(summarizationType, "failed", msgCount, 0, 0, len(previousSummary.Text()), 0, summLog.PromptTokens, summLog.CompletionTokens)
 		return fmt.Errorf("failed to save session: %w", err)
+	}
+	if generatedTitle != "" {
+		if err := syncConversationTitle(sessionStore, session.SessionID, generatedTitle, session.UpdatedAt); err != nil {
+			if !ss.config.DisableLogs {
+				log.Log.Warnf("[SessionScheduler] ⚠️  Session title saved but conversation title sync failed | SessionID: %s | Error: %v", session.SessionID, err)
+			}
+		}
 	}
 
 	// Mark log as successful and save
@@ -853,7 +897,7 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	}
 
 	metrics.SummarizationResult(summarizationType, "ok", msgCount, movedCount, retainedCount,
-		len(previousSummary), len(session.Summary), summLog.PromptTokens, summLog.CompletionTokens)
+		len(previousSummary.Text()), len(session.Summary.Text()), summLog.PromptTokens, summLog.CompletionTokens)
 
 	// Record how stale the previous summary was when we refreshed it. Skipped on
 	// the first-ever summarization, where there is no previous summary to age.
@@ -864,7 +908,7 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	if !ss.config.DisableLogs {
 		log.Log.Infof("[SessionScheduler] ✅ Session %s summarized | Type: %s | Moved: %d msgs | Retained: %d | Archived: %d | Summary: %s | Tags: %v | Duration: %dms",
 			session.SessionID, summarizationType, movedCount, retainedCount, len(session.ArchivedMsgs),
-			truncateStringForLog(session.Summary, 50), session.Tags, summLog.DurationMs)
+			truncateStringForLog(session.Summary.Text(), 50), session.Tags, summLog.DurationMs)
 	}
 
 	// Notify the host (e.g. so the Core drops this user's cached system prompt and
@@ -994,27 +1038,56 @@ func (ss *SessionScheduler) generateAndMergeTags(ctx context.Context, existingTa
 		return nil, fmt.Errorf("no response from LLM")
 	}
 
-	// Parse tags from response - LLM handles merging intelligently via prompt
+	// Existing tags are immutable. Parse only the delta, then append in order.
 	tagsStr := getMessageContentString(resp.Choices[0].Message)
 	tagsStr = strings.Trim(tagsStr, "\"'")
 	rawTags := strings.Split(tagsStr, ",")
 
-	// Clean and normalize tags
-	result := make([]string, 0, len(rawTags))
-	seen := make(map[string]bool)
-
+	additions := make([]string, 0, len(rawTags))
 	for _, tag := range rawTags {
 		tag = strings.TrimSpace(strings.ToLower(tag))
-		if tag != "" && !seen[tag] {
-			seen[tag] = true
-			result = append(result, tag)
+		if tag != "" {
+			additions = append(additions, tag)
 		}
 	}
+	return model.AppendTags(existingTags, additions, 7), nil
+}
 
-	// Sort for consistency
-	sort.Strings(result)
+func parseSummaryEntries(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("empty LLM response")
+	}
+	var entries []string
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return nil, fmt.Errorf("expected JSON string array: %w", err)
+	}
+	return []string(model.AppendSummaryEntries(nil, entries...)), nil
+}
 
-	return result, nil
+func withoutSystemMessages(messages []openai.ChatCompletionMessage) (nonSystem, system []openai.ChatCompletionMessage) {
+	for _, message := range messages {
+		if message.Role == openai.ChatMessageRoleSystem {
+			system = append(system, message)
+			continue
+		}
+		nonSystem = append(nonSystem, message)
+	}
+	return nonSystem, system
+}
+
+func syncConversationTitle(store model.SessionStore, sessionID, title string, updatedAt time.Time) error {
+	conversations, ok := store.(conversationMetadataStore)
+	if !ok {
+		return nil
+	}
+	conversation, err := conversations.GetConversationBySession(sessionID)
+	if err != nil || conversation == nil {
+		return err
+	}
+	conversation.Title = title
+	conversation.UpdatedAt = updatedAt
+	return conversations.PutConversation(conversation)
 }
 
 // generateTitle generates a title for the session
@@ -1024,10 +1097,7 @@ func (ss *SessionScheduler) generateTitle(ctx context.Context, conversationText 
 		systemPrompt = DefaultSummarizationPrompts().TitleSystemPrompt
 	}
 
-	// Truncate conversation if too long
-	if len(conversationText) > 300 {
-		conversationText = conversationText[:300] + "..."
-	}
+	conversationText = truncateRunesForSummary(conversationText, 300)
 
 	request := openai.ChatCompletionRequest{
 		Model: ss.config.SummaryModel,
@@ -1075,10 +1145,7 @@ func formatMessagesForSummary(msgs []openai.ChatCompletionMessage) string {
 			continue
 		}
 
-		// Truncate long messages
-		if len(content) > 300 {
-			content = content[:300] + "..."
-		}
+		content = truncateRunesForSummary(content, 300)
 
 		result += fmt.Sprintf("%s: %s\n", msg.Role, content)
 	}
@@ -1095,10 +1162,15 @@ func min(a, b int) int {
 
 // truncateStringForLog truncates a string to a maximum length for logging
 func truncateStringForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	return truncateRunesForSummary(s, maxLen)
+}
+
+func truncateRunesForSummary(s string, maxLen int) string {
+	runes := []rune(s)
+	if maxLen <= 0 || len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }
 
 // OpenAIClientWrapper wraps openai.Client to implement model.LLMClient interface

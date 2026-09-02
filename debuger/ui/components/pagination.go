@@ -11,7 +11,10 @@ type PaginationConfig struct {
 	TotalItems   int
 	ItemsPerPage int
 	BaseURL      string
-	QueryParams  url.Values
+	// PageParam lets pages with several independently paged collections avoid
+	// clobbering one another. Empty keeps the conventional "page" parameter.
+	PageParam   string
+	QueryParams url.Values
 }
 
 // DefaultItemsPerPage is the default number of items per page
@@ -49,6 +52,10 @@ func Pagination(config PaginationConfig) string {
 	if config.ItemsPerPage <= 0 {
 		config.ItemsPerPage = DefaultItemsPerPage
 	}
+	pageParam := config.PageParam
+	if pageParam == "" {
+		pageParam = "page"
+	}
 
 	_, _, totalPages := GetPaginationInfo(config.CurrentPage, config.TotalItems, config.ItemsPerPage)
 
@@ -70,7 +77,7 @@ func Pagination(config PaginationConfig) string {
 					}
 				}
 			}
-			params.Set("page", fmt.Sprintf("%d", page))
+			params.Set(pageParam, fmt.Sprintf("%d", page))
 			return config.BaseURL + "?" + params.Encode()
 		}
 
@@ -87,7 +94,7 @@ func Pagination(config PaginationConfig) string {
 		}
 
 		// Set page param
-		params.Set("page", fmt.Sprintf("%d", page))
+		params.Set(pageParam, fmt.Sprintf("%d", page))
 		parsedURL.RawQuery = params.Encode()
 		return parsedURL.String()
 	}

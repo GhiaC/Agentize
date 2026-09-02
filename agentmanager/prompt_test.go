@@ -331,7 +331,7 @@ func TestBuildSessionContextPrompt_WithSummary(t *testing.T) {
 	am := newTestManagerWithAgents([]AgentConfig{
 		{Name: "a", DisplayName: "Agent A", CostTier: CostTierLow},
 	}, nil)
-	session := &model.Session{SessionID: "s1", Summary: "test summary", Tags: []string{"go", "testing"}}
+	session := &model.Session{SessionID: "s1", Summary: model.SummaryEntries{"test summary"}, Tags: []string{"go", "testing"}}
 	getSession := func(sessionID string) (*model.Session, error) {
 		if sessionID == "s1" {
 			return session, nil
@@ -368,8 +368,8 @@ func TestBuildAllSessionContextsPrompt_Multiple(t *testing.T) {
 		{Name: "a1", CostTier: CostTierLow},
 		{Name: "a2", CostTier: CostTierLow},
 	}, nil)
-	s1 := &model.Session{SessionID: "s1", Summary: "summary one"}
-	s2 := &model.Session{SessionID: "s2", Summary: "summary two"}
+	s1 := &model.Session{SessionID: "s1", Summary: model.SummaryEntries{"summary one"}}
+	s2 := &model.Session{SessionID: "s2", Summary: model.SummaryEntries{"summary two"}}
 	getSession := func(sessionID string) (*model.Session, error) {
 		if sessionID == "s1" {
 			return s1, nil

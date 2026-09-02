@@ -239,7 +239,11 @@ func (ag *Agentize) createDebugHandler() (*debuger.DebugHandler, error) {
 
 // getPageParam extracts page number from query params (defaults to 1)
 func getPageParam(c *gin.Context) int {
-	pageStr := c.Query("page")
+	return getNamedPageParam(c, "page")
+}
+
+func getNamedPageParam(c *gin.Context, name string) int {
+	pageStr := c.Query(name)
 	if pageStr == "" {
 		return 1
 	}
@@ -640,7 +644,14 @@ func (ag *Agentize) handleDebugSessionDetail(c *gin.Context) {
 		return
 	}
 
-	html, err := pages.RenderSessionDetail(handler, sessionID)
+	html, err := pages.RenderSessionDetailPage(handler, sessionID, pages.SessionDetailPages{
+		Prompts:       getNamedPageParam(c, "prompts_page"),
+		Messages:      getNamedPageParam(c, "messages_page"),
+		Archived:      getNamedPageParam(c, "archived_page"),
+		Summarization: getNamedPageParam(c, "summaries_page"),
+		ToolCalls:     getNamedPageParam(c, "tools_page"),
+		Files:         getNamedPageParam(c, "files_page"),
+	})
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate session detail page: %v", err)})
 		return

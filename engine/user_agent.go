@@ -1032,7 +1032,7 @@ func (e *Engine) GetSystemPrompts(session *model.Session) []string {
 // This is used to provide context from archived/summarized messages
 func (e *Engine) buildSessionContext(session *model.Session) string {
 	// Only include context if session has been summarized (has summary or tags)
-	if session.Summary == "" && len(session.Tags) == 0 {
+	if len(session.Summary) == 0 && len(session.Tags) == 0 {
 		return ""
 	}
 
@@ -1040,9 +1040,9 @@ func (e *Engine) buildSessionContext(session *model.Session) string {
 	sb.WriteString("# Session Context\n\n")
 	sb.WriteString("This is a continuation of a previous conversation. Here is the context from earlier messages:\n\n")
 
-	if session.Summary != "" {
+	if len(session.Summary) > 0 {
 		sb.WriteString("## Summary of Previous Conversation\n")
-		sb.WriteString(session.Summary)
+		sb.WriteString(session.Summary.Text())
 		sb.WriteString("\n\n")
 	}
 

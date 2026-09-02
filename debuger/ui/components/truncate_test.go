@@ -51,8 +51,8 @@ func TestExpandableWithPreviewRuneSafe(t *testing.T) {
 func TestSessionTableRowRuneSafe(t *testing.T) {
 	session := &model.Session{
 		AgentType: model.AgentTypeCore,
-		Title:     strings.Repeat("ش", 60),     // > 40 runes → title truncates
-		Summary:   strings.Repeat("سلام ", 80), // 400 runes → summary truncates
+		Title:     strings.Repeat("ش", 60),                           // > 40 runes → title truncates
+		Summary:   model.SummaryEntries{strings.Repeat("سلام ", 80)}, // 400 runes → summary truncates
 	}
 	out := SessionTableRow(session, DefaultSessionRowConfig(), 0)
 	assertCleanUTF8(t, "SessionTableRow", out)

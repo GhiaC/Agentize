@@ -175,12 +175,12 @@ Emitted by the built-in OpenRouter image editor (`imageedit/`) on every
 ### Summarization (detail beyond `scheduler_*`)
 | Metric | Type | Labels |
 |--------|------|--------|
-| `summarization_runs_total` | counter | `type` (first/subsequent/immediate), `status` (ok/failed/offensive/empty) |
+| `summarization_runs_total` | counter | `type` (first/recovery/subsequent/immediate), `status` (ok/failed/offensive) |
 | `summarization_input_messages` | histogram | — (messages fed to the summarizer) |
 | `summarization_messages_archived` | histogram | — (evicted from the rolling window) |
 | `summarization_messages_retained` | histogram | — (kept active in the rolling window) |
 | `summarization_summary_chars` | histogram | — (resulting summary length) |
-| `summarization_summary_growth_chars` | histogram | — (delta vs previous; <0 = compaction) |
+| `summarization_summary_growth_chars` | histogram | — (append-only character growth; zero means no new fact) |
 | `summarization_tokens_total` | counter | `type` (prompt/completion) |
 | `summarization_offensive_total` | counter | — |
 | `summary_age_seconds` | histogram | — (age of the previous summary when a session is re-summarized; high = summaries go stale before refresh. First-ever summarization is not counted.) |

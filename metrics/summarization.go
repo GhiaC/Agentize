@@ -17,7 +17,7 @@ var (
 
 	summarizationRuns = factory.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace, Subsystem: "summarization", Name: "runs_total",
-		Help: "Summarizations by type (first|subsequent|immediate) and status (ok|failed|offensive|empty).",
+		Help: "Summarizations by type (first|recovery|subsequent|immediate) and status (ok|failed|offensive).",
 	}, []string{"type", "status"})
 
 	summarizationArchived = factory.NewHistogram(prometheus.HistogramOpts{
@@ -37,12 +37,12 @@ var (
 
 	summarizationChars = factory.NewHistogram(prometheus.HistogramOpts{
 		Namespace: namespace, Subsystem: "summarization", Name: "summary_chars",
-		Help: "Resulting summary length in characters (tracks append-style growth).", Buckets: summCharBuckets,
+		Help: "Total character length of the append-only summary entries after a successful cycle.", Buckets: summCharBuckets,
 	})
 
 	summarizationGrowth = factory.NewHistogram(prometheus.HistogramOpts{
 		Namespace: namespace, Subsystem: "summarization", Name: "summary_growth_chars",
-		Help:    "Change in summary length vs the previous summary (append delta; negative = compaction).",
+		Help:    "Character growth vs the previous append-only summary (zero means no new important fact).",
 		Buckets: []float64{-400, -200, -50, 0, 25, 50, 100, 200, 400, 800},
 	})
 
@@ -75,8 +75,8 @@ func SummaryAge(dur time.Duration) {
 
 // SummarizationResult records a completed (or failed) summarization run.
 //
-//	typ        : "first" | "subsequent" | "immediate"
-//	status     : "ok" | "failed" | "offensive" | "empty"
+//	typ        : "first" | "recovery" | "subsequent" | "immediate"
+//	status     : "ok" | "failed" | "offensive"
 //	input      : number of messages summarized
 //	archived   : messages evicted to the archive this run
 //	retained   : messages kept in the active rolling window

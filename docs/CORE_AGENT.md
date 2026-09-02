@@ -149,29 +149,30 @@ This is a continuation of a previous conversation. ...
 
 The agent-side equivalent, `BuildSessionContextPrompt`
 ([agentmanager/prompt.go:287](../agentmanager/prompt.go)), does the same per agent
-and is aggregated by `BuildAllSessionContextsPrompt`. **All of these read a single
-`session.Summary` string** — the field that summarization maintains (§5).
+and is aggregated by `BuildAllSessionContextsPrompt`. These projections join the
+ordered `session.Summary` string array at the prompt boundary (§5).
 
 ## 5. Memory: how summaries get into the prompt
 
 The Core's long-term memory of a user is the **`Summary` + `Tags`** on each session,
 produced in the background by the `SessionScheduler`
-([engine/schedules.go](../engine/schedules.go)). Today the model holds a single
-summary string per session:
+([engine/schedules.go](../engine/schedules.go)):
 
-- `Session.Summary string` ([model/session.go:77](../model/session.go)).
-- Summarization is **incremental/merge-style**: `summarizeSession`
-  ([engine/schedules.go:639](../engine/schedules.go)) feeds the *previous* summary +
-  new messages to the LLM and replaces `Summary` with a full merged result
-  (prompt: `DefaultSummarizationPrompts` [engine/schedules.go:104](../engine/schedules.go)).
+- `Session.Summary model.SummaryEntries` is an append-only string array. Legacy
+  scalar JSON loads as one entry without a destructive migration.
+- `summarizeSession` sends immutable earlier entries only as deduplication
+  context. The LLM returns a JSON array containing new important facts; validated
+  entries are appended without rewriting earlier items.
+  (prompt: `DefaultSummarizationPrompts` [engine/schedules.go](../engine/schedules.go)).
   Raw messages are not lost — older ones move to `ArchivedMsgs` while a rolling
   window of the most recent stays in `Msgs` (`splitRollingWindow`
-  [engine/schedules.go:617](../engine/schedules.go)).
+  [engine/schedules.go](../engine/schedules.go)). Runtime system messages stay
+  active and are not archived.
 - Eligibility: first summary after `FirstSummarizationThreshold` (5) messages, then
   subsequent ones gated by message count + time
   ([engine/schedules.go:553](../engine/schedules.go)).
 
-So the data flow is: **messages (detail) → scheduler → `Summary` (snapshot) →
+So the data flow is: **messages (detail) → scheduler → `Summary` (fact timeline) →
 sections 4–5 of the Core's system-prompt array → routing decision.**
 
 **Keeping the Core's cached prompt fresh.** Because summarization runs in the
@@ -184,12 +185,8 @@ user's memory immediately instead of waiting out the 10-minute TTL. (The Core al
 self-heals for its *own* Core session via `memorySummarizedSince`, but the hook is
 what covers the worker agents' sessions.)
 
-> **Roadmap (Stage 2).** `Summary` is a single merged string today. A planned change
-> turns it into an **append-only array of snapshots** (`Summaries []string`): each
-> summarization appends one delta snapshot instead of overwriting, and the Core
-> renders the whole timeline in sections 4–5. That touches the `Session` model and
-> both stores (a DB migration), so it is sequenced after the Stage 1 cache/files/UI
-> work described here.
+The detailed invariants, compatibility decoder and debug-page behavior live in
+[`docs/summarization/`](./summarization/README.md).
 
 ## 6. Where the Core surfaces in the debug UI
 

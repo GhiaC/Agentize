@@ -414,8 +414,8 @@ func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedS
 			}
 
 			summaryDisplay := "-"
-			if session.Summary != "" {
-				summaryDisplay = debuger.TruncateString(session.Summary, 100)
+			if len(session.Summary) > 0 {
+				summaryDisplay = debuger.TruncateString(session.Summary.Text(), 100)
 			}
 
 			summarizedAtDisplay := "-"
@@ -601,8 +601,8 @@ func renderCoreBrainCard(coreSession *model.Session, docCount int) string {
 	}
 
 	summary := `<span class="text-muted">No summary yet</span>`
-	if coreSession.Summary != "" {
-		summary = template.HTMLEscapeString(coreSession.Summary)
+	if len(coreSession.Summary) > 0 {
+		summary = template.HTMLEscapeString(coreSession.Summary.Text())
 	}
 	tags := `<span class="text-muted">-</span>`
 	if len(coreSession.Tags) > 0 {

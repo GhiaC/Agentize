@@ -41,7 +41,7 @@ func TestUserDetailPage_CoreSystemPromptCard(t *testing.T) {
 		SessionID: "core-s1",
 		UserID:    userID,
 		AgentType: model.AgentTypeCore,
-		Summary:   "remembers the user prefers Go",
+		Summary:   model.SummaryEntries{"remembers the user prefers Go"},
 		Tags:      []string{"golang"},
 	}); err != nil {
 		t.Fatalf("seed core session: %v", err)

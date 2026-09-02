@@ -135,8 +135,8 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 
 	// Summary display
 	summaryDisplay := "-"
-	if session.Summary != "" {
-		summaryDisplay = debuger.TruncateString(session.Summary, 200)
+	if len(session.Summary) > 0 {
+		summaryDisplay = debuger.TruncateString(session.Summary.Text(), 200)
 	}
 
 	// Tags display

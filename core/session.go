@@ -99,7 +99,7 @@ func (ch *CoreHandler) getActiveSessionIDFunc() agentmanager.ActiveSessionIDGett
 }
 
 func (ch *CoreHandler) buildCoreSessionContext(session *model.Session) string {
-	if session.Summary == "" && len(session.Tags) == 0 {
+	if len(session.Summary) == 0 && len(session.Tags) == 0 {
 		return ""
 	}
 
@@ -107,9 +107,9 @@ func (ch *CoreHandler) buildCoreSessionContext(session *model.Session) string {
 	sb.WriteString("# Core Session Context\n\n")
 	sb.WriteString("This is a continuation of a previous conversation. Here is the context from earlier messages:\n\n")
 
-	if session.Summary != "" {
+	if len(session.Summary) > 0 {
 		sb.WriteString("## Summary of Previous Conversation\n")
-		sb.WriteString(session.Summary)
+		sb.WriteString(session.Summary.Text())
 		sb.WriteString("\n\n")
 	}
 

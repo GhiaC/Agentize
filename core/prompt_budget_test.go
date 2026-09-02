@@ -21,7 +21,7 @@ func TestBuildSystemPrompts_DropsOptionalSectionsOverBudget(t *testing.T) {
 		SessionID: "s1",
 		UserID:    "user1",
 		AgentType: model.AgentTypeCore,
-		Summary:   hugeSummary,
+		Summary:   model.SummaryEntries{hugeSummary},
 	}
 
 	// First build with a generous budget: the summary must be present.

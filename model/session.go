@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -9,6 +10,106 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 )
+
+// SummaryEntries is the append-only memory produced by successive
+// summarization cycles.  Its JSON decoder accepts the legacy scalar string so
+// existing SQLite, PostgreSQL and MongoDB session rows migrate on read without
+// a destructive data migration.
+type SummaryEntries []string
+
+// MarshalJSON always emits an array. In particular, an uninitialized/nil
+// value is persisted as [] rather than null so the durable schema has one
+// stable shape after legacy rows are rewritten.
+func (s SummaryEntries) MarshalJSON() ([]byte, error) {
+	if s == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]string(s))
+}
+
+func (s *SummaryEntries) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*s = nil
+		return nil
+	}
+	var entries []string
+	if err := json.Unmarshal(data, &entries); err == nil {
+		// Persisted entries are immutable history. Do not trim, reorder or
+		// deduplicate them while loading.
+		*s = SummaryEntries(entries)
+		return nil
+	}
+	var legacy string
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return fmt.Errorf("summary must be a string or string array: %w", err)
+	}
+	if legacy = strings.TrimSpace(legacy); legacy != "" {
+		*s = SummaryEntries{legacy}
+	} else {
+		*s = nil
+	}
+	return nil
+}
+
+// Text renders entries for prompts and compact debug previews. Storage remains
+// an array; presentation is deliberately kept at the edges.
+func (s SummaryEntries) Text() string { return strings.Join(s, "\n") }
+
+func (s SummaryEntries) Clone() SummaryEntries {
+	if s == nil {
+		return nil
+	}
+	return append(SummaryEntries(nil), s...)
+}
+
+// AppendSummaryEntries preserves every existing item byte-for-byte and appends
+// only non-empty, non-duplicate new facts in their generated order.
+func AppendSummaryEntries(existing SummaryEntries, additions ...string) SummaryEntries {
+	out := existing.Clone()
+	seen := make(map[string]struct{}, len(out))
+	for _, entry := range out {
+		seen[strings.ToLower(strings.TrimSpace(entry))] = struct{}{}
+	}
+	for _, entry := range additions {
+		entry = strings.TrimSpace(entry)
+		key := strings.ToLower(entry)
+		if entry == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// AppendTags preserves the existing order and values and appends only new
+// case-insensitive tags. A positive limit caps the final list.
+func AppendTags(existing, additions []string, limit int) []string {
+	out := append([]string(nil), existing...)
+	seen := make(map[string]struct{}, len(out))
+	for _, tag := range out {
+		seen[strings.ToLower(strings.TrimSpace(tag))] = struct{}{}
+	}
+	for _, tag := range additions {
+		tag = strings.TrimSpace(tag)
+		key := strings.ToLower(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		seen[key] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
+}
 
 // Context key for user ID
 type userIDKey struct{}
@@ -86,9 +187,12 @@ type Session struct {
 	SummarizedAt time.Time // When the session was last summarized
 
 	// ==================== Summarization ====================
-	Tags    []string // User-defined or auto-generated tags for categorization
-	Title   string   // Session title (auto-generated or user-set)
-	Summary string   `json:"Summary"` // LLM-generated summary of the conversation (explicit key for persist/load)
+	Tags    []string       // User-defined or auto-generated tags for categorization
+	Title   string         // Session title (auto-generated or user-set)
+	Summary SummaryEntries `json:"Summary"` // Append-only LLM-generated facts; legacy scalar JSON is accepted on load.
+	// SummaryInitialized distinguishes a valid no-op [] result from legacy rows
+	// that were marked summarized after an empty/invalid provider response.
+	SummaryInitialized bool
 
 	// ==================== Sequences ====================
 	MessageSeq          int // Sequence counter for messages
@@ -131,7 +235,8 @@ func NewSessionWithID(userID string, sessionID string, agentType AgentType) *Ses
 		UpdatedAt:           now,
 		Tags:                []string{},
 		Title:               "",
-		Summary:             "",
+		Summary:             SummaryEntries{},
+		SummaryInitialized:  false,
 		MessageSeq:          0,
 		ToolSeq:             0,
 		OpenedFileSeq:       0,
@@ -348,7 +453,8 @@ func (s *Session) Clone() *Session {
 		UpdatedAt:           s.UpdatedAt,
 		SummarizedAt:        s.SummarizedAt,
 		Title:               s.Title,
-		Summary:             s.Summary,
+		Summary:             s.Summary.Clone(),
+		SummaryInitialized:  s.SummaryInitialized,
 		MessageSeq:          s.MessageSeq,
 		ToolSeq:             s.ToolSeq,
 		OpenedFileSeq:       s.OpenedFileSeq,
@@ -445,22 +551,22 @@ func (s *Session) PopulateFields(ctx context.Context, client LLMClient, model st
 		conversationText += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
 	}
 
-	// Generate Title
-	if s.Title == "" {
-		title, err := s.generateTitle(ctx, client, model, conversationText)
-		if err != nil {
-			return fmt.Errorf("failed to generate title: %w", err)
-		}
-		s.Title = title
+	// Refresh title on every population cycle.
+	title, err := s.generateTitle(ctx, client, model, conversationText)
+	if err != nil {
+		return fmt.Errorf("failed to generate title: %w", err)
 	}
+	s.Title = title
 
-	// Generate Summary
-	if s.Summary == "" {
+	// PopulateFields is a compatibility path. Preserve earlier entries and add
+	// its new compact result as one append-only item.
+	if len(s.Summary) == 0 {
 		summary, err := s.generateSummary(ctx, client, model, conversationText)
 		if err != nil {
 			return fmt.Errorf("failed to generate summary: %w", err)
 		}
-		s.Summary = summary
+		s.Summary = AppendSummaryEntries(s.Summary, summary)
+		s.SummaryInitialized = true
 	}
 
 	// Generate Tags

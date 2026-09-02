@@ -88,7 +88,7 @@ func TestConversationTools_InspectModelArchiveDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
-	session.Summary = "Discussed BTC support and a long plan"
+	session.Summary = model.SummaryEntries{"Discussed BTC support and a long plan"}
 	session.Tags = []string{"btc", "plan"}
 	session.Msgs = []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleUser, Content: "How is BTC looking?"},
@@ -217,7 +217,7 @@ func TestConversationsPrompt_IncludesSessionMemory(t *testing.T) {
 	}
 	conv, _ := eng.GetConversation("alice", "alice-c0001")
 	session, _ := eng.Sessions.Get(conv.SessionID)
-	session.Summary = "the user likes go for market bots"
+	session.Summary = model.SummaryEntries{"the user likes go for market bots"}
 	session.Tags = []string{"golang"}
 	if err := eng.Sessions.Put(session); err != nil {
 		t.Fatalf("put: %v", err)

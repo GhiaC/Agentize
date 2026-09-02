@@ -68,7 +68,7 @@ func conversationToolDefs() []openai.Tool {
 		{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
-				Name: "select_conversation",
+				Name:        "select_conversation",
 				Description: "Make a conversation current. Use before send_conversation when the message belongs to a different chat.",
 				Parameters: map[string]interface{}{
 					"type": "object",
@@ -222,8 +222,8 @@ func (ch *CoreHandler) writeConversationListEntry(sb *strings.Builder, eng *engi
 	if session == nil {
 		return
 	}
-	if session.Summary != "" {
-		fmt.Fprintf(sb, "   Summary: %s\n", truncateRunes(session.Summary, conversationSummaryPreviewLimit))
+	if len(session.Summary) > 0 {
+		fmt.Fprintf(sb, "   Summary: %s\n", truncateRunes(session.Summary.Text(), conversationSummaryPreviewLimit))
 	}
 	if len(session.Tags) > 0 {
 		fmt.Fprintf(sb, "   Tags: %s\n", strings.Join(session.Tags, ", "))
@@ -262,8 +262,8 @@ func (ch *CoreHandler) formatConversationDetail(eng *engine.Engine, userID strin
 		sb.WriteString("- Session details: unavailable\n")
 		return sb.String()
 	}
-	if session.Summary != "" {
-		fmt.Fprintf(&sb, "- Summary: %s\n", session.Summary)
+	if len(session.Summary) > 0 {
+		fmt.Fprintf(&sb, "- Summary: %s\n", session.Summary.Text())
 	}
 	if len(session.Tags) > 0 {
 		fmt.Fprintf(&sb, "- Tags: %s\n", strings.Join(session.Tags, ", "))
