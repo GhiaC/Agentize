@@ -201,6 +201,25 @@ func TestManageFilesTool_SaveListRead(t *testing.T) {
 	}
 }
 
+func TestManageFilesTool_ListPaginationFilterAndLineEdit(t *testing.T) {
+	eng, session := newUserFileTestEngine(t)
+	base := map[string]interface{}{"__user_id__": "user-1", "__session_id__": session.SessionID}
+	first, _ := eng.RecordUserFile(session.SessionID, "alpha.txt", "text/plain", model.FileSourceUploaded, []byte("one\ntwo\nthree"))
+	_, _ = eng.RecordUserFile(session.SessionID, "beta.md", "text/markdown", model.FileSourceGenerated, []byte("beta"))
+	list, err := eng.Functions.Execute("manage_files", cloneArgs(base, map[string]interface{}{"action": "list", "filter": "alpha", "sort_by": "name", "sort_order": "asc", "page": 1, "page_size": 1}))
+	if err != nil || !strings.Contains(list, "alpha.txt") || strings.Contains(list, "beta.md") {
+		t.Fatalf("filtered page = %q err=%v", list, err)
+	}
+	edit, err := eng.Functions.Execute("manage_files", cloneArgs(base, map[string]interface{}{"action": "edit", "file_id": first.FileID, "start_line": 2, "end_line": 2, "content": "TWO\n2.5"}))
+	if err != nil || !strings.Contains(edit, "Edited") {
+		t.Fatalf("line edit = %q err=%v", edit, err)
+	}
+	read, _ := eng.Functions.Execute("manage_files", cloneArgs(base, map[string]interface{}{"action": "read", "file_id": first.FileID}))
+	if !strings.Contains(read, "one\nTWO\n2.5\nthree") {
+		t.Fatalf("line edit content = %q", read)
+	}
+}
+
 func TestManageFilesTool_ReadEnforcesOwnership(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
 

@@ -29,6 +29,11 @@ type User struct {
 	// Distinct from ActiveSessionIDs which is keyed by agent type.
 	ActiveConversationID string
 
+	// Cross-conversation memory. Session-specific title/summary/tags remain on
+	// Session; these fields contain only durable facts useful to future sessions.
+	ContextSummary SummaryEntries
+	ContextTags    []string
+
 	// Session sequence counters per agent type
 	// Key: AgentType (core, high, low), Value: last session sequence number
 	// Used to generate unique SessionIDs: {UserID}-{AgentType}-{SeqCounter}
@@ -50,6 +55,8 @@ func NewUser(userID string) *User {
 		NonsenseCount:    0,
 		ActiveSessionIDs: make(map[AgentType]string),
 		SessionSeqs:      make(map[AgentType]int),
+		ContextSummary:   SummaryEntries{},
+		ContextTags:      []string{},
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}

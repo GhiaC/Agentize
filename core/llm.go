@@ -116,7 +116,8 @@ func (ch *CoreHandler) InvalidateSystemPromptCache(userID string) {
 // order. SystemPromptSectionsFor returns the same assembly with full metadata
 // for the debug UI, so the live array and the debug view never drift.
 func (ch *CoreHandler) buildSystemPrompts(userID string) ([]string, error) {
-	sections, err := ch.assembleSections(userID, ch.currentCoreSession(userID))
+	coreSession := ch.currentCoreSession(userID)
+	sections, err := ch.assembleSections(userID, coreSession)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +126,17 @@ func (ch *CoreHandler) buildSystemPrompts(userID string) ([]string, error) {
 		if s.Included {
 			prompts = append(prompts, s.Content)
 		}
+	}
+	if coreSession != nil {
+		coreSession.SystemPrompts = coreSession.SystemPrompts[:0]
+		for _, s := range sections {
+			if s.Included {
+				coreSession.SystemPrompts = append(coreSession.SystemPrompts, model.SystemPromptEntry{
+					Key: s.Key, Title: s.Title, Content: s.Content, Source: "core",
+				})
+			}
+		}
+		coreSession.SystemPromptsUpdatedAt = time.Now()
 	}
 	return prompts, nil
 }

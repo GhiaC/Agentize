@@ -40,5 +40,8 @@ data/
 browseruse/sidecar/.env
 *.pyc
 /docs
+!/docs/
+/docs/*
+!/docs/context-architecture.md
 .cursor/rules/postgres-first.mdc
 AGENTS.md

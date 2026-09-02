@@ -17,6 +17,13 @@ import (
 // a destructive data migration.
 type SummaryEntries []string
 
+// ContextDelta is a validated append-only proposal for cross-conversation user
+// memory. PendingUserContext makes scheduler delivery retryable across crashes.
+type ContextDelta struct {
+	Summary SummaryEntries `json:"summary"`
+	Tags    []string       `json:"tags"`
+}
+
 // MarshalJSON always emits an array. In particular, an uninitialized/nil
 // value is persisted as [] rather than null so the durable schema has one
 // stable shape after legacy rows are rewritten.
@@ -178,6 +185,11 @@ type Session struct {
 	// NodeDigests stores lightweight information about visited nodes
 	NodeDigests []NodeDigest
 
+	// SystemPrompts is the ordered array most recently assembled for an LLM
+	// request in this session. It is observability state, not transcript history.
+	SystemPrompts          []SystemPromptEntry
+	SystemPromptsUpdatedAt time.Time
+
 	// ToolResults stores tool execution results by unique ID (for large results)
 	ToolResults map[string]string
 
@@ -193,6 +205,7 @@ type Session struct {
 	// SummaryInitialized distinguishes a valid no-op [] result from legacy rows
 	// that were marked summarized after an empty/invalid provider response.
 	SummaryInitialized bool
+	PendingUserContext *ContextDelta
 
 	// ==================== Sequences ====================
 	MessageSeq          int // Sequence counter for messages
@@ -230,6 +243,7 @@ func NewSessionWithID(userID string, sessionID string, agentType AgentType) *Ses
 		InProgress:          false,
 		Queue:               []openai.ChatCompletionMessage{},
 		NodeDigests:         []NodeDigest{},
+		SystemPrompts:       []SystemPromptEntry{},
 		ToolResults:         make(map[string]string),
 		CreatedAt:           now,
 		UpdatedAt:           now,

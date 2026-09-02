@@ -680,6 +680,13 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		return fmt.Errorf("failed to get fresh session: %w", err)
 	}
 	session = freshSession
+	// Complete an idempotent user-memory delivery left by a previous crash before
+	// generating another delta.
+	if session.PendingUserContext != nil {
+		if err := ss.applyPendingUserContext(sessionStore, session); err != nil {
+			return fmt.Errorf("apply pending user context: %w", err)
+		}
+	}
 
 	msgCount := len(session.Msgs)
 	// When Msgs is empty but summarization is needed (e.g. SummarizedAt set but Summary empty), use ArchivedMsgs
@@ -747,6 +754,7 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	previousSummary := session.Summary.Clone()
 	previousTitle := session.Title
 	previousTags := append([]string(nil), session.Tags...)
+	previousPendingUserContext := session.PendingUserContext
 	previousSummaryPrompt := ""
 	if len(previousSummary) > 0 {
 		previousSummaryJSON, _ := json.Marshal(previousSummary)
@@ -824,6 +832,17 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		}
 	}
 
+	// Classify only stable cross-conversation facts into User Context. The delta
+	// is first stored on the session as an outbox, then delivered idempotently
+	// after the session commit.
+	if delta, deltaErr := ss.generateUserContextDelta(ctx, sessionStore, session.UserID, conversationText); deltaErr != nil {
+		if !ss.config.DisableLogs {
+			log.Log.Warnf("[SessionScheduler] user-context classification skipped | SessionID: %s | Error: %v", session.SessionID, deltaErr)
+		}
+	} else if len(delta.Summary) > 0 || len(delta.Tags) > 0 {
+		session.PendingUserContext = delta
+	}
+
 	// Refresh the title on every cycle from accumulated memory plus the new
 	// window. Conversation rows are synchronized after the session is durable.
 	titleContext := strings.TrimSpace(conversationText + "\nAccumulated summary:\n" + session.Summary.Text())
@@ -892,6 +911,7 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		session.SummaryInitialized = previousSummaryInitialized
 		session.Title = previousTitle
 		session.Tags = previousTags
+		session.PendingUserContext = previousPendingUserContext
 		session.SummarizedAt = previousSummarizedAt
 		summLog.MarkCompleted("failed")
 		summLog.ErrorMessage = fmt.Sprintf("failed to save session: %v", err)
@@ -900,6 +920,11 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		}
 		metrics.SummarizationResult(summarizationType, "failed", msgCount, 0, 0, len(previousSummary.Text()), 0, summLog.PromptTokens, summLog.CompletionTokens)
 		return fmt.Errorf("failed to save session: %w", err)
+	}
+	if session.PendingUserContext != nil {
+		if err := ss.applyPendingUserContext(sessionStore, session); err != nil && !ss.config.DisableLogs {
+			log.Log.Warnf("[SessionScheduler] user-context delivery pending retry | SessionID: %s | Error: %v", session.SessionID, err)
+		}
 	}
 	if generatedTitle != "" {
 		if err := syncConversationTitle(sessionStore, session.SessionID, generatedTitle, session.UpdatedAt); err != nil {
@@ -937,6 +962,60 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	}
 
 	return nil
+}
+
+func (ss *SessionScheduler) generateUserContextDelta(ctx context.Context, sessionStore model.SessionStore, userID, conversationText string) (*model.ContextDelta, error) {
+	users, ok := sessionStore.(userStore)
+	if !ok {
+		return &model.ContextDelta{}, nil
+	}
+	user, err := users.GetOrCreateUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	existing, _ := json.Marshal(map[string]interface{}{"summary": user.ContextSummary, "tags": user.ContextTags})
+	systemPrompt := `Extract only stable facts about the user that will remain useful across future, unrelated conversations (preferences, constraints, durable profile facts). Do not copy task progress, one-off requests, secrets, credentials, or transient details. Return exactly one JSON object: {"summary":["new fact"],"tags":["new-tag"]}. Both arrays may be empty. Return only NEW items not already present.`
+	userPrompt := "Existing user context:\n" + string(existing) + "\n\nNew conversation window:\n" + conversationText
+	request := openai.ChatCompletionRequest{Model: ss.config.SummaryModel, Messages: []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: systemPrompt}, {Role: openai.ChatMessageRoleUser, Content: userPrompt}}, MaxCompletionTokens: ss.config.MetadataMaxCompletionTokens, ReasoningEffort: ss.summaryReasoningEffort()}
+	if request.MaxCompletionTokens <= 0 {
+		request.MaxCompletionTokens = 256
+	}
+	resp, err := ss.chatCompletion(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("no user-context response")
+	}
+	raw := getMessageContentString(resp.Choices[0].Message)
+	var delta model.ContextDelta
+	if err := json.Unmarshal([]byte(raw), &delta); err != nil {
+		return nil, fmt.Errorf("invalid user-context JSON: %w", err)
+	}
+	delta.Summary = model.AppendSummaryEntries(nil, delta.Summary...)
+	delta.Tags = model.AppendTags(nil, delta.Tags, 20)
+	return &delta, nil
+}
+
+func (ss *SessionScheduler) applyPendingUserContext(sessionStore model.SessionStore, session *model.Session) error {
+	if session.PendingUserContext == nil {
+		return nil
+	}
+	users, ok := sessionStore.(userStore)
+	if !ok {
+		return fmt.Errorf("store does not support user context")
+	}
+	user, err := users.GetOrCreateUser(session.UserID)
+	if err != nil {
+		return err
+	}
+	user.ContextSummary = model.AppendSummaryEntries(user.ContextSummary, session.PendingUserContext.Summary...)
+	user.ContextTags = model.AppendTags(user.ContextTags, session.PendingUserContext.Tags, 20)
+	if err := users.PutUser(user); err != nil {
+		return err
+	}
+	session.PendingUserContext = nil
+	return sessionStore.Put(session)
 }
 
 // generateImprovedSummaryWithResponse generates an improved summary and returns the full response and the prompt sent (for logging).

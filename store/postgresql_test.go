@@ -185,6 +185,8 @@ func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
 	s.Title = "postgres-roundtrip"
 	s.Summary = model.SummaryEntries{"first fact", "second fact"}
 	s.SummaryInitialized = true
+	s.SystemPrompts = []model.SystemPromptEntry{{Key: "session_context", Title: "Session Context", Content: "current", Source: "test"}}
+	s.SystemPromptsUpdatedAt = time.Now().Truncate(time.Second)
 	if err := st.Put(s); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -192,8 +194,21 @@ func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Title != "postgres-roundtrip" || got.UserID != "pg-user-1" || strings.Join(got.Summary, "|") != "first fact|second fact" || !got.SummaryInitialized {
+	if got.Title != "postgres-roundtrip" || got.UserID != "pg-user-1" || strings.Join(got.Summary, "|") != "first fact|second fact" || !got.SummaryInitialized || len(got.SystemPrompts) != 1 || got.SystemPrompts[0].Key != "session_context" {
 		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	user, err := st.GetOrCreateUser(s.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.ContextSummary = model.SummaryEntries{"prefers concise answers"}
+	user.ContextTags = []string{"concise"}
+	if err := st.PutUser(user); err != nil {
+		t.Fatal(err)
+	}
+	gotUser, err := st.GetUser(s.UserID)
+	if err != nil || gotUser == nil || len(gotUser.ContextSummary) != 1 || len(gotUser.ContextTags) != 1 {
+		t.Fatalf("user-context round-trip: %v %+v", err, gotUser)
 	}
 
 	msg := model.NewUserMessage(s.SessionID+"-m0001", 1, s.UserID, s.SessionID, "hello jsonb", model.ContentTypeWidget)

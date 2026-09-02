@@ -20,13 +20,20 @@ func TestRenderSessionDetailPaginatesAndCollapsesCollections(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	session := model.NewSessionWithID("alice", "alice-conv-s0001", model.AgentTypeConversation)
 	session.Summary = model.SummaryEntries{"first immutable fact", "second immutable fact"}
-	session.Msgs = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: "current context"}}
+	session.SystemPrompts = []model.SystemPromptEntry{{Key: "knowledge_tree", Title: "Knowledge Tree Nodes", Content: "current context", Source: "knowledge-tree"}}
+	session.SystemPromptsUpdatedAt = time.Now()
 	session.ArchivedMsgs = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: "stale context one"}}
 	for i := 1; i <= 26; i++ {
 		session.ArchivedMsgs = append(session.ArchivedMsgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("archived-%02d", i)})
 	}
 	session.ArchivedMsgs = append(session.ArchivedMsgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: "stale context two"})
 	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	user, _ := st.GetOrCreateUser("alice")
+	user.ContextSummary = model.SummaryEntries{"prefers concise answers"}
+	user.ContextTags = []string{"concise"}
+	if err := st.PutUser(user); err != nil {
 		t.Fatal(err)
 	}
 	for i := 1; i <= 26; i++ {
@@ -54,6 +61,7 @@ func TestRenderSessionDetailPaginatesAndCollapsesCollections(t *testing.T) {
 		`<details class="card mb-4 debug-section"`, "Archived Messages (Debug Only)",
 		"Historical snapshots hidden", "26</span>", "archived_page=1", "tools_page=1",
 		"first immutable fact", "second immutable fact",
+		"Knowledge Tree Nodes", "knowledge_tree", "User Context", "prefers concise answers",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("missing %q in rendered session page", want)

@@ -1,8 +1,6 @@
 package core
 
 import (
-	"fmt"
-
 	"github.com/ghiac/agentize/agentmanager"
 	"github.com/ghiac/agentize/log"
 	"github.com/ghiac/agentize/metrics"
@@ -13,16 +11,9 @@ import (
 // labels of the agentize_system_prompt_sections_dropped_total metric, so keep
 // them in sync with the values passed to metrics.SystemPromptSectionDropped.
 const (
-	SectionCoreController       = "core_controller"
-	SectionAppPolicy            = "app_policy"
-	SectionAgents               = "agents"
-	SectionAgentTools           = "agent_tools"
-	SectionCoreSessionContext   = "core_session_context"
-	SectionAgentSessionContexts = "agent_session_contexts"
-	SectionUserFiles            = "user_files"
-	SectionActiveSessions       = "active_sessions"
-	SectionSessionsList         = "sessions_list"
-	SectionConversations        = "conversations"
+	SectionCoreController     = "core_controller"
+	SectionUserContext        = "user_context"
+	SectionCoreSessionContext = "core_session_context"
 )
 
 // sectionSpec is the un-budgeted description of one prompt section: its identity
@@ -57,35 +48,9 @@ func (ch *CoreHandler) assembleSections(userID string, coreSession *model.Sessio
 
 	specs := []sectionSpec{
 		{SectionCoreController, "Core Controller", true, false, coreControllerPrompt},
+		{SectionUserContext, "User Context", false, true, ch.buildUserContext(userID)},
+		{SectionCoreSessionContext, "Session Context", false, true, coreCtx},
 	}
-
-	// Deployment Policy: optional app-supplied rules (output language, length
-	// limits, app-owned capabilities to delegate, billing/quota handling). It sits
-	// in the static prefix right after the controller so it caches provider-side
-	// and so its rules refine/override the generic controller for this deployment.
-	if ap := ch.config.AppPolicy; ap != "" {
-		specs = append(specs, sectionSpec{SectionAppPolicy, ch.config.appPolicyTitle(), true, false, ap})
-	}
-
-	specs = append(specs,
-		sectionSpec{SectionAgents, "Available Agents", true, false, ch.agents.BuildAgentsDescriptionPrompt()},
-		sectionSpec{SectionAgentTools, "Registered Agent Tools", true, false, ch.agents.BuildAgentToolsPrompt()},
-		sectionSpec{SectionCoreSessionContext, "Core Session Context", false, true, coreCtx},
-		sectionSpec{SectionAgentSessionContexts, "Agent Session Contexts", false, true,
-			ch.agents.BuildAllSessionContextsPrompt(ch.getSessionFunc(), ch.getActiveSessionIDFunc(), userID)},
-		sectionSpec{SectionUserFiles, "User Files", false, true, ch.buildUserFilesPrompt(userID)},
-		sectionSpec{SectionActiveSessions, "Active Sessions", false, true,
-			ch.agents.BuildActiveSessionsPrompt(ch.getSessionFunc(), ch.getActiveSessionIDFunc(), userID)},
-	)
-
-	// Sessions list (for change_session) can fail when the store is unreachable;
-	// surface that rather than silently shipping a prompt without it.
-	sessionsPrompt, err := ch.sessionHandler.GetSessionsPrompt(userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get sessions prompt: %w", err)
-	}
-	specs = append(specs, sectionSpec{SectionSessionsList, "Sessions List", false, true, sessionsPrompt})
-	specs = append(specs, sectionSpec{SectionConversations, "Conversations", false, true, ch.buildConversationsPrompt(userID)})
 
 	limit := ch.config.maxSystemPromptSize()
 	used := 0
@@ -183,10 +148,5 @@ func PreviewSystemPromptSections(store model.SessionStore, userID string, cfg Co
 // isAgentDependentSection reports whether a section's content comes from the
 // registered AgentManager, and so is empty in a store-only preview.
 func isAgentDependentSection(key string) bool {
-	switch key {
-	case SectionAgents, SectionAgentTools, SectionAgentSessionContexts, SectionActiveSessions:
-		return true
-	default:
-		return false
-	}
+	return false
 }

@@ -207,7 +207,7 @@ func TestSendConversation_SwitchesCurrent(t *testing.T) {
 	}
 }
 
-func TestConversationsPrompt_IncludesSessionMemory(t *testing.T) {
+func TestConversationsStayBehindTools(t *testing.T) {
 	ch, eng := newConversationCore(t)
 	if _, err := ch.createConversationTool(context.Background(), "alice", map[string]interface{}{
 		"title": "Market",
@@ -227,17 +227,10 @@ func TestConversationsPrompt_IncludesSessionMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sections: %v", err)
 	}
-	var conversations model.PromptSection
 	for _, s := range sections {
-		if s.Key == SectionConversations {
-			conversations = s
+		if s.Key == "conversations" {
+			t.Fatal("conversation list must not be injected into system prompts")
 		}
-	}
-	if conversations.Content == "" || !conversations.Included {
-		t.Fatalf("conversations section missing: %+v", conversations)
-	}
-	if !strings.Contains(conversations.Content, "the user likes go") || !strings.Contains(conversations.Content, "[CURRENT]") {
-		t.Fatalf("prompt must expose conversation memory: %s", conversations.Content)
 	}
 }
 

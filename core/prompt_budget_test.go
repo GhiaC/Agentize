@@ -36,9 +36,7 @@ func TestBuildSystemPrompts_DropsOptionalSectionsOverBudget(t *testing.T) {
 	generousCount := len(prompts)
 
 	// Now shrink the budget below what the required sections + summary need.
-	required := len(coreControllerPrompt) +
-		len(ch.agents.BuildAgentsDescriptionPrompt()) +
-		len(ch.agents.BuildAgentToolsPrompt())
+	required := len(coreControllerPrompt)
 	ch.config.MaxSystemPromptSize = required + 1000 // room for small sections, not the 5000-char summary
 
 	prompts, err = ch.buildSystemPrompts("user1")
@@ -51,9 +49,6 @@ func TestBuildSystemPrompts_DropsOptionalSectionsOverBudget(t *testing.T) {
 	}
 	if prompts[0] != coreControllerPrompt {
 		t.Error("controller prompt must always be the first required section")
-	}
-	if !strings.Contains(all, "researcher") {
-		t.Error("agent descriptions are required and must survive the budget")
 	}
 	if len(prompts) >= generousCount {
 		t.Errorf("tight budget should produce fewer sections: got %d, generous was %d", len(prompts), generousCount)

@@ -113,7 +113,7 @@ func TestNewCoreHandler_Smoke(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompts_ContainsBaseAndAgents(t *testing.T) {
+func TestBuildSystemPrompts_ContainsBaseWithoutAgentCatalog(t *testing.T) {
 	ch, _ := newTestCoreHandler(t, []string{"researcher", "coder"})
 	prompts, err := ch.buildSystemPrompts("user1")
 	if err != nil {
@@ -127,20 +127,19 @@ func TestBuildSystemPrompts_ContainsBaseAndAgents(t *testing.T) {
 	if !strings.Contains(first, "orchestrator") && !strings.Contains(first, "Core") {
 		t.Errorf("first prompt should contain controller text, got snippet: %s", first[:min(100, len(first))])
 	}
-	// At least one prompt should contain agent descriptions (from BuildAgentsDescriptionPrompt)
 	allText := strings.Join(prompts, " ")
-	if !strings.Contains(allText, "researcher") || !strings.Contains(allText, "coder") {
-		t.Errorf("prompts should contain agent names; combined: %s", allText[:min(500, len(allText))])
+	if strings.Contains(allText, "researcher") || strings.Contains(allText, "coder") {
+		t.Errorf("agent catalog belongs to tool schemas, not system prompts: %s", allText[:min(500, len(allText))])
 	}
 }
 
-func TestBuildSystemPrompts_WithSessionsList(t *testing.T) {
+func TestBuildSystemPrompts_ExcludesSessionsList(t *testing.T) {
 	ch, sqliteStore := newTestCoreHandler(t, []string{"researcher"})
 	user, err := sqliteStore.GetOrCreateUser("user1")
 	if err != nil {
 		t.Fatalf("GetOrCreateUser: %v", err)
 	}
-	_, err = ch.sessionHandler.CreateSessionForUser(user, model.AgentType("researcher"))
+	session, err := ch.sessionHandler.CreateSessionForUser(user, model.AgentType("researcher"))
 	if err != nil {
 		t.Fatalf("CreateSessionForUser: %v", err)
 	}
@@ -149,8 +148,8 @@ func TestBuildSystemPrompts_WithSessionsList(t *testing.T) {
 		t.Fatalf("buildSystemPrompts: %v", err)
 	}
 	allText := strings.Join(prompts, " ")
-	if !strings.Contains(allText, "Sessions:") && !strings.Contains(allText, "Session") {
-		t.Errorf("prompts should contain sessions section when user has sessions; got snippet: %s", allText[:min(600, len(allText))])
+	if strings.Contains(allText, "Active Sessions") || strings.Contains(allText, session.SessionID) {
+		t.Errorf("session collection belongs behind tools; got snippet: %s", allText[:min(600, len(allText))])
 	}
 }
 

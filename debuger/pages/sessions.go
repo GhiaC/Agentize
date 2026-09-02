@@ -177,6 +177,13 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 	if err != nil {
 		return "", fmt.Errorf("failed to get files: %w", err)
 	}
+	openNodes := files[:0]
+	for _, file := range files {
+		if file.IsOpen {
+			openNodes = append(openNodes, file)
+		}
+	}
+	files = openNodes
 
 	summarizationLogs, _ := dp.GetSummarizationLogsBySession(sessionID)
 	dbToolCalls, _ := dp.GetToolCallsBySession(sessionID)
@@ -298,7 +305,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
                     <div>%s + %s</div>
                 </div>
                 <div class="mb-3">
-                    <strong class="d-block mb-2">Opened Files:</strong>
+					<strong class="d-block mb-2">Opened Nodes:</strong>
                     <div>%s</div>
                 </div>
                 <div class="mb-3">
@@ -333,13 +340,16 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 		components.CountBadge(session.ToolSeq, "info"),
 	)
 
-	// System prompts are runtime context, not transcript history. Old releases
-	// archived a fresh snapshot each cycle; report that debt without presenting
-	// every stale copy as a current prompt.
-	var systemPrompts []string
-	for _, msg := range session.Msgs {
-		if msg.Role == openai.ChatMessageRoleSystem && msg.Content != "" {
-			systemPrompts = append(systemPrompts, msg.Content)
+	// Prefer the typed last-assembled prompt array. Legacy rows may still contain
+	// system messages in Msgs; use those only as an explicitly-labelled fallback.
+	systemPrompts := append([]model.SystemPromptEntry(nil), session.SystemPrompts...)
+	legacyPromptFallback := false
+	if len(systemPrompts) == 0 {
+		for _, msg := range session.Msgs {
+			if msg.Role == openai.ChatMessageRoleSystem && msg.Content != "" {
+				legacyPromptFallback = true
+				systemPrompts = append(systemPrompts, model.SystemPromptEntry{Key: "legacy", Title: "Legacy System Message", Content: msg.Content, Source: "session.Msgs"})
+			}
 		}
 	}
 	archivedSystemPromptCount := 0
@@ -351,6 +361,11 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 
 	if len(systemPrompts) > 0 {
 		content += collapsibleCardStart("Current System Prompts", "gear-fill", len(systemPrompts), pages.Prompts > 1)
+		if legacyPromptFallback {
+			content += components.WarningAlert("Legacy fallback — this session has no typed prompt snapshot yet; these entries came from transcript system messages.")
+		} else if !session.SystemPromptsUpdatedAt.IsZero() {
+			content += components.NoteAlert("Last assembled", debuger.FormatTime(session.SystemPromptsUpdatedAt)+" ("+debuger.FormatDuration(session.SystemPromptsUpdatedAt)+")")
+		}
 		if archivedSystemPromptCount > 0 {
 			content += components.NoteAlert("Historical snapshots hidden", fmt.Sprintf("%d stale system-prompt snapshots were archived by an older summarization flow. They are not current prompts and will be purged on the next summary cycle.", archivedSystemPromptCount))
 		}
@@ -358,11 +373,29 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 		for i, prompt := range promptPage {
 			content += fmt.Sprintf(`
 <div class="mb-3">
-    <strong class="d-block mb-2">System Prompt #%d:</strong>
+    <div class="d-flex align-items-center gap-2 mb-2"><strong>System Prompt #%d — %s</strong>%s%s</div>
     %s
-</div>`, (pages.Prompts-1)*sessionDetailItemsPerPage+i+1, components.ExpandableWithPreview(prompt, 500))
+</div>`, (pages.Prompts-1)*sessionDetailItemsPerPage+i+1,
+				template.HTMLEscapeString(prompt.Title), components.Badge(prompt.Key, "secondary"), components.Badge(fmt.Sprintf("%d bytes", len(prompt.Content)), "info"),
+				components.ExpandableWithPreview(prompt.Content, 500))
 		}
 		content += detailPagination(sessionID, "prompts_page", pages.Prompts, len(systemPrompts), pages)
+		content += collapsibleCardEnd()
+	}
+
+	user, _ := dp.GetUser(session.UserID)
+	if user != nil && (len(user.ContextSummary) > 0 || len(user.ContextTags) > 0) {
+		content += collapsibleCardStart("User Context", "person-lines-fill", len(user.ContextSummary)+len(user.ContextTags), false)
+		if len(user.ContextSummary) > 0 {
+			content += `<h6>Summary</h6><ol>`
+			for _, entry := range user.ContextSummary {
+				content += `<li>` + template.HTMLEscapeString(entry) + `</li>`
+			}
+			content += `</ol>`
+		}
+		if len(user.ContextTags) > 0 {
+			content += `<h6>Tags</h6>` + components.TagBadges(user.ContextTags)
+		}
 		content += collapsibleCardEnd()
 	}
 
@@ -567,14 +600,14 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 	content += collapsibleCardEnd()
 
 	// Files card
-	content += collapsibleCardStart("Opened Files", "folder-fill", len(files), pages.Files > 1)
+	content += collapsibleCardStart("Opened Nodes", "folder-fill", len(files), pages.Files > 1)
 
 	if len(files) == 0 {
-		content += components.InfoAlert("No opened files found for this session.")
+		content += components.InfoAlert("No opened nodes found for this session.")
 	} else {
 		columns := []components.ColumnConfig{
-			{Header: "File Path"},
-			{Header: "File Name"},
+			{Header: "Node Path"},
+			{Header: "Node Title"},
 			{Header: "Status", Center: true, NoWrap: true},
 			{Header: "Opened At", NoWrap: true},
 			{Header: "Closed At", NoWrap: true},

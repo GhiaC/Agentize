@@ -30,7 +30,7 @@ func TestSystemPromptSectionsFor_KeysAndClassification(t *testing.T) {
 		byKey[s.Key] = s
 	}
 
-	for _, k := range []string{SectionCoreController, SectionAgents, SectionAgentTools} {
+	for _, k := range []string{SectionCoreController} {
 		s, ok := byKey[k]
 		if !ok {
 			t.Fatalf("missing required section %q", k)
@@ -60,69 +60,23 @@ func TestSystemPromptSectionsFor_KeysAndClassification(t *testing.T) {
 		t.Error("core_session_context should be included and carry the summary")
 	}
 
-	if !strings.Contains(byKey[SectionAgents].Content, "researcher") {
-		t.Error("agents section should mention the registered agent")
+	if _, ok := byKey["agents"]; ok {
+		t.Error("agent catalog must be a tool concern, not prompt content")
 	}
 }
 
-// TestAppPolicySection_InjectedWhenConfigured verifies the deployment-policy
-// injection hook: when CoreHandlerConfig.AppPolicy is set, it appears as a
-// required, static section titled by AppPolicyTitle, positioned in the static
-// prefix right after the Core Controller; when empty, no such section exists.
-func TestAppPolicySection_InjectedWhenConfigured(t *testing.T) {
+func TestRemovedCorePromptCollectionsStayOutOfPrompt(t *testing.T) {
 	ch, _ := newTestCoreHandler(t, []string{"researcher"})
-
-	// Empty by default: no app_policy section.
+	ch.config.AppPolicy = "must not be injected"
 	sections, err := ch.SystemPromptSectionsFor("user1")
 	if err != nil {
 		t.Fatalf("SystemPromptSectionsFor: %v", err)
 	}
-	for _, s := range sections {
-		if s.Key == SectionAppPolicy {
-			t.Fatal("app_policy section must be absent when AppPolicy is empty")
+	removed := map[string]bool{"app_policy": true, "agents": true, "agent_tools": true, "agent_session_contexts": true, "user_files": true, "active_sessions": true, "sessions_list": true, "conversations": true}
+	for _, section := range sections {
+		if removed[section.Key] {
+			t.Errorf("removed section %q was assembled", section.Key)
 		}
-	}
-
-	// Configured: section is present, required, static, included, byte-exact, and
-	// sits immediately after the Core Controller (so it caches in the static prefix).
-	const policy = "DEPLOY-POLICY-XYZ: reply only in Klingon."
-	ch.config.AppPolicy = policy
-	ch.config.AppPolicyTitle = "Deployment Policy"
-
-	sections, err = ch.SystemPromptSectionsFor("user1")
-	if err != nil {
-		t.Fatalf("SystemPromptSectionsFor: %v", err)
-	}
-
-	var idx = -1
-	for i, s := range sections {
-		if s.Key == SectionAppPolicy {
-			idx = i
-			if s.Content != policy || s.Bytes != len(policy) {
-				t.Errorf("app_policy content/bytes mismatch: %q (%d)", s.Content, s.Bytes)
-			}
-			if !s.Required || s.Dynamic || !s.Included {
-				t.Error("app_policy must be Required+Static+Included")
-			}
-			if s.Title != "Deployment Policy" {
-				t.Errorf("app_policy title = %q, want %q", s.Title, "Deployment Policy")
-			}
-		}
-	}
-	if idx == -1 {
-		t.Fatal("app_policy section must be present when AppPolicy is set")
-	}
-	if sections[0].Key != SectionCoreController || idx != 1 {
-		t.Errorf("app_policy must sit right after core_controller; got index %d (section[0]=%s)", idx, sections[0].Key)
-	}
-
-	// The live array projects the same assembly, so the policy text must be in it.
-	prompts, err := ch.buildSystemPrompts("user1")
-	if err != nil {
-		t.Fatalf("buildSystemPrompts: %v", err)
-	}
-	if !strings.Contains(strings.Join(prompts, "\n"), policy) {
-		t.Error("live system-prompt array must contain the injected AppPolicy text")
 	}
 }
 
@@ -138,9 +92,7 @@ func TestSystemPromptSectionsFor_DropsOverBudget(t *testing.T) {
 		AgentType: model.AgentTypeCore,
 		Summary:   model.SummaryEntries{huge},
 	}
-	required := len(coreControllerPrompt) +
-		len(ch.agents.BuildAgentsDescriptionPrompt()) +
-		len(ch.agents.BuildAgentToolsPrompt())
+	required := len(coreControllerPrompt)
 	ch.config.MaxSystemPromptSize = required + 1000 // room for small sections, not the 5000-char summary
 
 	sections, err := ch.SystemPromptSectionsFor("user1")
@@ -207,11 +159,4 @@ func TestPreviewSystemPromptSections_FromStore(t *testing.T) {
 		t.Error("preview should surface the stored Core session summary")
 	}
 
-	agentCtx := byKey[SectionAgentSessionContexts]
-	if agentCtx.Content != "" {
-		t.Error("agent session contexts should be empty in a store-only preview")
-	}
-	if agentCtx.Note == "" {
-		t.Error("an empty agent-dependent section should carry a Note in preview mode")
-	}
 }

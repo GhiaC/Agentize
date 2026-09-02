@@ -23,6 +23,7 @@ func (ch *CoreHandler) getCoreToolsForLLM() []openai.Tool {
 	// Session management tools with dynamic agent names
 	tools = append(tools, ch.agents.BuildSessionManagementTools()...)
 	tools = append(tools, conversationToolDefs()...)
+	tools = append(tools, engine.ManageContextToolDefinition())
 
 	// Static tools
 	tools = append(tools,
@@ -407,6 +408,8 @@ func (ch *CoreHandler) runCoreToolImpl(
 
 	case "list_sessions":
 		return ch.listSessionsTool(userID)
+	case "manage_context":
+		return ch.manageContextTool(userID, coreSession, args)
 
 	case "list_conversations":
 		return ch.listConversationsTool(userID)
@@ -470,6 +473,71 @@ func (ch *CoreHandler) runCoreToolImpl(
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
+}
+
+func (ch *CoreHandler) manageContextTool(userID string, session *model.Session, args map[string]interface{}) (string, error) {
+	action, _ := args["action"].(string)
+	scope, _ := args["scope"].(string)
+	stringsFrom := func(key string) []string {
+		raw, _ := args[key].([]interface{})
+		out := make([]string, 0, len(raw))
+		for _, value := range raw {
+			if s, ok := value.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	encode := func(summary model.SummaryEntries, tags []string, title string) string {
+		payload := map[string]interface{}{"summary": []string(summary), "tags": tags}
+		if title != "" {
+			payload["title"] = title
+		}
+		b, _ := json.Marshal(payload)
+		return string(b)
+	}
+	if scope == "user" {
+		user, err := ch.getOrCreateUser(userID)
+		if err != nil {
+			return "", err
+		}
+		switch action {
+		case "get":
+		case "add_summary":
+			user.ContextSummary = model.AppendSummaryEntries(user.ContextSummary, stringsFrom("entries")...)
+		case "add_tags":
+			user.ContextTags = model.AppendTags(user.ContextTags, stringsFrom("tags"), 20)
+		default:
+			return "", fmt.Errorf("unsupported context action %q", action)
+		}
+		if action != "get" {
+			if err := ch.saveUser(user); err != nil {
+				return "", err
+			}
+			ch.invalidateSystemPrompt(userID)
+		}
+		return encode(user.ContextSummary, user.ContextTags, ""), nil
+	}
+	if scope != "session" || session == nil {
+		return "", fmt.Errorf("unsupported context scope %q", scope)
+	}
+	switch action {
+	case "get":
+	case "add_summary":
+		session.Summary = model.AppendSummaryEntries(session.Summary, stringsFrom("entries")...)
+		session.SummaryInitialized = true
+	case "add_tags":
+		session.Tags = model.AppendTags(session.Tags, stringsFrom("tags"), 20)
+	default:
+		return "", fmt.Errorf("unsupported context action %q", action)
+	}
+	if action != "get" {
+		if err := ch.saveCoreSession(session); err != nil {
+			return "", err
+		}
+		ch.invalidateSystemPrompt(userID)
+	}
+	return encode(session.Summary, session.Tags, session.Title), nil
 }
 
 // callAgent sends a message to an agent's Engine.

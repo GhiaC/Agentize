@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,15 +40,18 @@ type FileOpener interface {
 // Ensure Engine implements FileOpener
 var _ FileOpener = (*Engine)(nil)
 
-// RegisterFileTools registers open_file and close_file tools with the given registry
-// The tools use the Engine's OpenFile/CloseFile methods to manage session files
+// RegisterFileTools registers the node-context operations. Legacy file-named
+// aliases remain executable for persisted tool calls during migration.
 func (e *Engine) RegisterFileTools(registry *model.FunctionRegistry) {
 	if registry == nil {
 		return
 	}
 
-	registry.Register("open_file", "Open File", e.createOpenFileFunction())
-	registry.Register("close_file", "Close File", e.createCloseFileFunction())
+	openNode, closeNode := e.createOpenFileFunction(), e.createCloseFileFunction()
+	registry.RegisterOrReplace("open_node", "Open Node", openNode)
+	registry.RegisterOrReplace("close_node", "Close Node", closeNode)
+	registry.RegisterOrReplace("open_file", "Open Node (legacy alias)", openNode)
+	registry.RegisterOrReplace("close_file", "Close Node (legacy alias)", closeNode)
 }
 
 // createOpenFileFunction creates the open_file tool function
@@ -161,8 +165,8 @@ func getStringArg(args map[string]interface{}, key string) (string, error) {
 func GetFileToolDefinitions() []model.Tool {
 	return []model.Tool{
 		{
-			Name:        "open_file",
-			Description: "Opens a knowledge tree file/node by its path and adds it to the current session context. The file content will be available in the LLM context for subsequent messages.",
+			Name:        "open_node",
+			Description: "Opens a knowledge-tree node by path and adds its content and active tools to this session context.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -176,8 +180,8 @@ func GetFileToolDefinitions() []model.Tool {
 			Status: "active",
 		},
 		{
-			Name:        "close_file",
-			Description: "Closes a previously opened file/node and removes it from the session context. This helps manage context size by removing files that are no longer needed.",
+			Name:        "close_node",
+			Description: "Closes a previously opened knowledge-tree node and removes its content and node-owned tools from this session context.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -232,11 +236,11 @@ func ManageFilesToolDefinition() openai.Tool {
 		Function: &openai.FunctionDefinition{
 			Name: "manage_files",
 			Description: "Manage the current user's files (documents they sent or that were generated for them). Actions:\n" +
-				"- list: list the user's files (file_id, name, type, size, summary).\n" +
+				"- list: filter, sort, and paginate the user's files (file_id, name, type, size, summary).\n" +
 				"- read: load a file by file_id. Text files return their content (use offset/limit lines for large files); image files are loaded into your vision context so you can see them.\n" +
 				"- grep: search text files for 'query' (regex) and return matching lines with line numbers; pass file_id to search one file, omit it to search all the user's text files.\n" +
 				"- save: store 'content' as a new text file named 'name'; returns the new file_id.\n" +
-				"- edit: edit a text file in place — replace 'old_string' with 'new_string' (set replace_all=true for all occurrences), or pass 'content' to overwrite the whole file.\n" +
+				"- edit: edit a text file in place — replace text, replace a line range, or overwrite the whole file.\n" +
 				"- edit_image: edit an image file (file_id) per 'instruction' using an image model; the edited image is saved as a NEW independent file and its file_id is returned.\n" +
 				"- delete: permanently delete an owned file's bytes and metadata.",
 			Parameters: map[string]interface{}{
@@ -287,6 +291,27 @@ func ManageFilesToolDefinition() openai.Tool {
 						"type":        "integer",
 						"description": "Number of lines to read from offset for action=read.",
 					},
+					"filter": map[string]interface{}{
+						"type": "string", "description": "Case-insensitive name/type/source/summary filter for action=list.",
+					},
+					"sort_by": map[string]interface{}{
+						"type": "string", "enum": []string{"created_at", "name", "size", "type"}, "description": "Sort field for action=list (default created_at).",
+					},
+					"sort_order": map[string]interface{}{
+						"type": "string", "enum": []string{"asc", "desc"}, "description": "Sort direction for action=list (default desc).",
+					},
+					"page": map[string]interface{}{
+						"type": "integer", "description": "1-based page for action=list.",
+					},
+					"page_size": map[string]interface{}{
+						"type": "integer", "description": "Items per page for action=list (1-50).",
+					},
+					"start_line": map[string]interface{}{
+						"type": "integer", "description": "First 1-based line to replace for action=edit.",
+					},
+					"end_line": map[string]interface{}{
+						"type": "integer", "description": "Last 1-based line to replace for action=edit.",
+					},
 				},
 				"required": []string{"action"},
 			},
@@ -317,7 +342,7 @@ func (e *Engine) manageFilesFunction() model.ToolFunction {
 		start := time.Now()
 		switch strings.ToLower(strings.TrimSpace(action)) {
 		case "list":
-			s, opErr := e.manageFilesList(userID)
+			s, opErr := e.manageFilesList(userID, args)
 			return recordFileOp("list", start, s, opErr)
 		case "read":
 			// manageFilesRead records its own metric (it returns an image, not an error).
@@ -355,22 +380,85 @@ func recordFileOp(op string, start time.Time, result string, opErr error) (strin
 }
 
 // manageFilesList returns a compact listing of the user's files.
-func (e *Engine) manageFilesList(userID string) (string, error) {
+func (e *Engine) manageFilesList(userID string, args map[string]interface{}) (string, error) {
 	files, err := e.ListUserFiles(userID)
 	if err != nil {
 		return fmt.Sprintf("Error listing files: %v", err), err
 	}
+	filter := strings.ToLower(strings.TrimSpace(stringArg(args, "filter")))
+	if filter != "" {
+		filtered := files[:0]
+		for _, f := range files {
+			haystack := strings.ToLower(strings.Join([]string{f.Name, f.MIMEType, string(f.Source), f.Summary}, " "))
+			if strings.Contains(haystack, filter) {
+				filtered = append(filtered, f)
+			}
+		}
+		files = filtered
+	}
 	if len(files) == 0 {
 		return "You have no files yet.", nil
 	}
+	sortBy := stringArg(args, "sort_by")
+	if sortBy == "" {
+		sortBy = "created_at"
+	}
+	desc := stringArg(args, "sort_order") != "asc"
+	sort.SliceStable(files, func(i, j int) bool {
+		cmp := 0
+		switch sortBy {
+		case "name":
+			cmp = strings.Compare(strings.ToLower(files[i].Name), strings.ToLower(files[j].Name))
+		case "size":
+			if files[i].Size < files[j].Size {
+				cmp = -1
+			} else if files[i].Size > files[j].Size {
+				cmp = 1
+			}
+		case "type":
+			cmp = strings.Compare(files[i].MIMEType, files[j].MIMEType)
+		default:
+			if files[i].CreatedAt.Before(files[j].CreatedAt) {
+				cmp = -1
+			} else if files[i].CreatedAt.After(files[j].CreatedAt) {
+				cmp = 1
+			}
+		}
+		if cmp == 0 {
+			cmp = strings.Compare(files[i].FileID, files[j].FileID)
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+	page, pageSize := intArg(args, "page"), intArg(args, "page_size")
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > maxFileListItems {
+		pageSize = maxFileListItems
+	}
+	total := len(files)
+	totalPages := (total + pageSize - 1) / pageSize
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("You have %d file(s):\n", len(files)))
-	limit := len(files)
-	if limit > maxFileListItems {
-		limit = maxFileListItems
-	}
-	for _, f := range files[:limit] {
+	b.WriteString(fmt.Sprintf("Files page %d (%d-%d of %d):\n", page, start+1, end, total))
+	for _, f := range files[start:end] {
 		summary := f.Summary
 		if summary == "" {
 			summary = "-"
@@ -382,8 +470,8 @@ func (e *Engine) manageFilesList(userID string) (string, error) {
 		b.WriteString(fmt.Sprintf("- id=%s | name=%s | type=%s | %d bytes | %s%s | %s\n",
 			f.FileID, f.Name, f.MIMEType, f.Size, f.Source, derived, summary))
 	}
-	if len(files) > limit {
-		b.WriteString(fmt.Sprintf("... and %d more.\n", len(files)-limit))
+	if end < total {
+		b.WriteString(fmt.Sprintf("Next page: page=%d (remaining %d).\n", page+1, total-end))
 	}
 	return b.String(), nil
 }
@@ -571,6 +659,21 @@ func (e *Engine) manageFilesEdit(userID string, args map[string]interface{}) (st
 		} else {
 			updated = strings.Replace(content, oldStr, newStr, 1)
 		}
+	case intArg(args, "start_line") > 0:
+		startLine, endLine := intArg(args, "start_line"), intArg(args, "end_line")
+		if endLine == 0 {
+			endLine = startLine
+		}
+		lines := strings.Split(content, "\n")
+		if startLine < 1 || endLine < startLine || endLine > len(lines) {
+			return fmt.Sprintf("Error: line range %d-%d is outside 1-%d.", startLine, endLine, len(lines)), errManageFiles
+		}
+		replacement, _ := args["content"].(string)
+		replLines := strings.Split(replacement, "\n")
+		merged := append([]string{}, lines[:startLine-1]...)
+		merged = append(merged, replLines...)
+		merged = append(merged, lines[endLine:]...)
+		updated = strings.Join(merged, "\n")
 	case args["content"] != nil:
 		// Full overwrite.
 		updated, _ = args["content"].(string)
@@ -583,6 +686,11 @@ func (e *Engine) manageFilesEdit(userID string, args map[string]interface{}) (st
 		return fmt.Sprintf("Error writing file: %v", err), err
 	}
 	return fmt.Sprintf("Edited %s (id=%s, now %d bytes).", uf.Name, uf.FileID, uf.Size), nil
+}
+
+func stringArg(args map[string]interface{}, key string) string {
+	v, _ := args[key].(string)
+	return strings.TrimSpace(v)
 }
 
 // manageFilesEditImage edits an image via the configured ImageEditor and stores

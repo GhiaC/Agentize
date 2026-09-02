@@ -137,7 +137,7 @@ func TestSplitRollingWindow_CutOnToolResult_ShiftsBack(t *testing.T) {
 }
 
 func TestSummarizeSessionAppendsMetadataAndSyncsConversation(t *testing.T) {
-	responses := []string{`["new decision"]`, "bitcoin,new-topic", "Updated Market Plan"}
+	responses := []string{`["new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`, "Updated Market Plan"}
 	call := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if call >= len(responses) {
