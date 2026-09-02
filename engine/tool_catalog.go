@@ -66,8 +66,9 @@ func searchToolsDefinition() openai.Tool {
 		Type: openai.ToolTypeFunction,
 		Function: &openai.FunctionDefinition{
 			Name: searchToolsName,
-			Description: "Search the tool catalog and load matching tool schemas into this turn. " +
-				"Call this before using a specialized capability that is not already in the current tool list.",
+			Description: "Search the knowledge tree for tools that are not in the current list. " +
+				"Results include the node path; call open_node (or manage_knowledge action=open) to activate those tools. " +
+				"This does not search the user's product memory/journal.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -90,30 +91,62 @@ func alwaysOnToolNames() map[string]bool {
 		"inspect_result":   true,
 		"manage_files":     true,
 		"manage_schedules": true,
+		"open_node":        true,
+		"close_node":       true,
+		"manage_knowledge": true,
 	}
+}
+
+func platformKnowledgeToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "open_file", "close_file", "open_node", "close_node", "manage_knowledge":
+		return true
+	default:
+		return false
+	}
+}
+
+func knowledgeCapabilityTool(name string) bool {
+	return platformKnowledgeToolName(name)
+}
+
+func appendOpenAITool(tools []openai.Tool, extra openai.Tool) []openai.Tool {
+	name := toolName(extra)
+	if name == "" {
+		return append(tools, extra)
+	}
+	for _, tool := range tools {
+		if toolName(tool) == name {
+			return tools
+		}
+	}
+	return append(tools, extra)
 }
 
 func toolsForLLMRequest(all []openai.Tool, mode ToolCatalogMode, discovered []string) []openai.Tool {
 	if mode != ToolCatalogDeferredSearch {
 		return all
 	}
-	allow := alwaysOnToolNames()
-	for _, name := range discovered {
-		name = strings.TrimSpace(name)
-		if name != "" {
-			allow[name] = true
-		}
-	}
-	out := make([]openai.Tool, 0, len(allow)+1)
+	// GetTools is already session-scoped to opened nodes plus platform tools.
+	// Keep that catalog visible and add search_tools so unopened capabilities
+	// can be found by node path. discovered is unused: activating a node
+	// refreshes GetTools instead of injecting foreign schemas.
+	_ = discovered
+	out := make([]openai.Tool, 0, len(all)+1)
 	haveSearch := false
+	seen := map[string]bool{}
 	for _, tool := range all {
 		name := toolName(tool)
 		if name == searchToolsName {
 			haveSearch = true
 		}
-		if allow[name] {
-			out = append(out, tool)
+		if name != "" && seen[name] {
+			continue
 		}
+		if name != "" {
+			seen[name] = true
+		}
+		out = append(out, tool)
 	}
 	if !haveSearch {
 		out = append(out, searchToolsDefinition())
@@ -223,6 +256,10 @@ func (e *Engine) executeSearchTools(all []openai.Tool, arguments string, discove
 	query := ""
 	if json.Unmarshal([]byte(arguments), &args) == nil {
 		query, _ = args["query"].(string)
+	}
+	if e != nil && e.Repo != nil {
+		hits := e.searchKnowledgeToolCatalog(query, toolCatalogSearchLimit)
+		return formatKnowledgeSearchToolsResult(hits), discovered
 	}
 	hits := searchToolCatalog(all, query, toolCatalogSearchLimit)
 	for _, hit := range hits {

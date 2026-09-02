@@ -229,6 +229,7 @@ func (e *Engine) UseFunctionRegistry(registry *model.FunctionRegistry) {
 		registry = model.NewFunctionRegistry()
 	}
 	e.Functions = registry
+	e.RegisterFileTools(e.Functions)
 	e.RegisterManageFilesTool()
 	e.RegisterManageContextTool()
 	e.RegisterManageKnowledgeTool()
@@ -1100,53 +1101,43 @@ func (e *Engine) GetTools(session *model.Session) []openai.Tool {
 		}
 	}
 
-	// Convert to openai.Tool format
 	accumulatedTools := registry.GetTools()
-	tools := make([]openai.Tool, 0, len(accumulatedTools))
+	tools := make([]openai.Tool, 0, len(accumulatedTools)+8)
 	for _, tool := range accumulatedTools {
 		if tool.Status != model.ToolStatusActive {
 			continue
 		}
-		name := tool.Name
-		if name == "open_file" {
-			name = "open_node"
-		}
-		if name == "close_file" {
-			name = "close_node"
+		if platformKnowledgeToolName(tool.Name) {
+			continue
 		}
 		tools = append(tools, openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
-				Name:        name,
+				Name:        tool.Name,
 				Description: tool.Description,
 				Parameters:  tool.InputSchema,
 			},
 		})
 	}
 
-	// Expose the file-manager tool to the agent when a file store is configured.
-	// This makes manage_files available without editing every node's tools.json.
 	if e.Files != nil {
-		tools = append(tools, ManageFilesToolDefinition())
+		tools = appendOpenAITool(tools, ManageFilesToolDefinition())
 	}
-
-	// Expose the result-inspection tools whenever a session store is configured.
-	// They let the agent pull back specific parts of oversized tool results that
-	// were buffered on its session (see processToolResult / text_tools.go).
 	if e.Sessions != nil {
-		tools = append(tools, ManageContextToolDefinition(), CollectResultToolDefinition(), InspectResultToolDefinition())
+		tools = appendOpenAITool(tools, ManageContextToolDefinition())
+		tools = appendOpenAITool(tools, CollectResultToolDefinition())
+		tools = appendOpenAITool(tools, InspectResultToolDefinition())
 	}
 	if e.Repo != nil {
-		tools = append(tools, ManageKnowledgeToolDefinition())
+		tools = appendOpenAITool(tools, OpenNodeToolDefinition())
+		tools = appendOpenAITool(tools, CloseNodeToolDefinition())
+		tools = appendOpenAITool(tools, ManageKnowledgeToolDefinition())
 	}
-	// Persistent recurring tasks are a built-in capability, so the LLM receives
-	// this schema without requiring a repository tools.json entry.
 	if e.GetTaskScheduler() != nil {
-		tools = append(tools, TaskSchedulerToolDefinition())
+		tools = appendOpenAITool(tools, TaskSchedulerToolDefinition())
 	}
-	// browser-use is optional and only exposed when a sidecar client is wired.
 	if e.BrowserUse != nil {
-		tools = append(tools, BrowserUseToolDefinition())
+		tools = appendOpenAITool(tools, BrowserUseToolDefinition())
 	}
 	return tools
 }
@@ -1651,6 +1642,12 @@ func (e *Engine) processChatRequest(
 					result, inject = e.executeTool(ctx, session, messageID, toolCall)
 					if toolCall.Function.Name != "" {
 						discoveredTools = appendUniqueTool(discoveredTools, toolCall.Function.Name)
+					}
+					if knowledgeCapabilityTool(toolCall.Function.Name) {
+						if next, err := e.Sessions.Get(sessionID); err == nil {
+							session = next
+							allTools = e.GetTools(session)
+						}
 					}
 				}
 				localMsgs = append(localMsgs, openai.ChatCompletionMessage{

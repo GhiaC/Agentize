@@ -43,15 +43,23 @@ system messages until existing rows are naturally rewritten.
 
 ## Knowledge-tree capability rule
 
-`manage_knowledge` is the single discovery/read interface: `list` and `search`
+`manage_knowledge` is the discovery/read interface: `list` and `search`
 return bounded metadata, `get` reads one node without changing capability
 state, `open` returns its content and activates that exact node's tools, and
-`close` deactivates them.
+`close` deactivates them. `open_node` / `close_node` are the same open/close
+operations with a dedicated schema. Both are registered as executable tools
+and advertised whenever a knowledge repository is configured. Node content is
+returned in the tool result; it is never copied into the system prompt.
+
+`search_tools` searches the tree and returns `{name, path}` so the model can
+open the owning node. It does not load an unopened node's schema into the
+turn.
 
 No descendant, sibling, or unopened node grants tools. Root behaves like every
 other node: its tools are available only when root is explicitly represented in
 the session's opened-node set. Built-in platform tools (file manager, result
-inspection, scheduler, browser) are not knowledge-node tools and are gated by
+inspection, scheduler, browser, and knowledge-tree `open_node` /
+`manage_knowledge`) are not knowledge-node tools and are gated by
 their configured runtime dependency.
 
 The former `LoadAllTools()` path violated this invariant and must not be used on

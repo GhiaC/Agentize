@@ -15,7 +15,7 @@ const maxKnowledgeResultChars = 12000
 func ManageKnowledgeToolDefinition() openai.Tool {
 	return openai.Tool{Type: openai.ToolTypeFunction, Function: &openai.FunctionDefinition{
 		Name:        "manage_knowledge",
-		Description: "Discover and read the knowledge tree on demand. list/search return metadata, get reads one node without activating it, open reads it and activates only that node's tools for this session, and close deactivates them. Knowledge is never preloaded into the system prompt.",
+		Description: "Discover and read the knowledge tree on demand. list/search return metadata, get reads one node without activating it, open reads it and activates only that node's tools for this session, and close deactivates them. Knowledge-tree content is never preloaded into the system prompt. This is not the user's product memory or trade journal.",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -145,4 +145,81 @@ func boundedKnowledgeJSON(value interface{}) string {
 		return string(b)
 	}
 	return string(b[:maxKnowledgeResultChars]) + "..."
+}
+
+type knowledgeToolHit struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Path        string `json:"path"`
+}
+
+func (e *Engine) searchKnowledgeToolCatalog(query string, limit int) []knowledgeToolHit {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if limit <= 0 {
+		limit = toolCatalogSearchLimit
+	}
+	if query == "" || e == nil || e.Repo == nil {
+		return nil
+	}
+	tokens := tokenizeQuery(query)
+	type scored struct {
+		hit   knowledgeToolHit
+		score int
+	}
+	var ranked []scored
+	e.walkKnowledge("root", func(node *model.Node) {
+		for _, tool := range node.Tools {
+			if tool.Status != model.ToolStatusActive || platformKnowledgeToolName(tool.Name) {
+				continue
+			}
+			hay := strings.ToLower(tool.Name + " " + tool.Description + " " + node.Path + " " + node.Title)
+			score := 0
+			if strings.Contains(hay, query) {
+				score += 8
+			}
+			for _, tok := range tokens {
+				if strings.Contains(strings.ToLower(tool.Name), tok) {
+					score += 4
+				} else if strings.Contains(hay, tok) {
+					score += 1
+				}
+			}
+			if score == 0 {
+				continue
+			}
+			ranked = append(ranked, scored{hit: knowledgeToolHit{Name: tool.Name, Description: tool.Description, Path: node.Path}, score: score})
+		}
+	})
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		if ranked[i].hit.Path != ranked[j].hit.Path {
+			return ranked[i].hit.Path < ranked[j].hit.Path
+		}
+		return ranked[i].hit.Name < ranked[j].hit.Name
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	hits := make([]knowledgeToolHit, len(ranked))
+	for i, item := range ranked {
+		hits[i] = item.hit
+	}
+	return hits
+}
+
+func formatKnowledgeSearchToolsResult(hits []knowledgeToolHit) string {
+	payload := map[string]interface{}{
+		"matches": hits,
+		"hint":    "Open the listed path with open_node (or manage_knowledge action=open) to activate those tools. They are not loaded until that node is opened.",
+	}
+	if len(hits) == 0 {
+		payload["hint"] = "No matching knowledge-tree tools. Try a shorter capability word such as chart, order, news, or browser."
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Sprintf(`{"matches":[],"error":%q}`, err.Error())
+	}
+	return string(raw)
 }

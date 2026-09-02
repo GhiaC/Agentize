@@ -615,6 +615,9 @@ func (s *TaskScheduler) Create(input CreateTaskScheduleInput) (*model.TaskSchedu
 	)
 	dedicatedSession.Title = "Schedule: " + input.Name
 	dedicatedSession.Tags = []string{"schedule", "schedule:" + scheduleID}
+	if len(sourceSession.NodeDigests) > 0 {
+		dedicatedSession.NodeDigests = append([]model.NodeDigest(nil), sourceSession.NodeDigests...)
+	}
 	if err := s.store.Put(dedicatedSession); err != nil {
 		return nil, fmt.Errorf("create dedicated schedule session: %w", err)
 	}

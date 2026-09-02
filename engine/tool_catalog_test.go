@@ -18,24 +18,31 @@ func testTool(name, desc string) openai.Tool {
 	}
 }
 
-func TestToolsForLLMRequest_DeferredLoadsOnlyDiscoveredAndAlwaysOn(t *testing.T) {
+func TestToolsForLLMRequest_DeferredKeepsSessionCatalogAndSearch(t *testing.T) {
 	all := []openai.Tool{
 		testTool("get_price_history", "Price candles"),
 		testTool("open_trade", "Open a position"),
 		testTool("search_news", "Search news"),
 		testTool("update_status", "Progress"),
 		testTool("collect_result", "Read a buffered result"),
+		testTool("open_node", "Open a knowledge node"),
 	}
-	got := toolsForLLMRequest(all, ToolCatalogDeferredSearch, []string{"get_price_history"})
+	got := toolsForLLMRequest(all, ToolCatalogDeferredSearch, nil)
 	names := map[string]bool{}
 	for _, tool := range got {
 		names[toolName(tool)] = true
 	}
-	if !names["search_tools"] || !names["update_status"] || !names["collect_result"] || !names["get_price_history"] {
-		t.Fatalf("deferred catalog missing always-on/discovered tools: %v", names)
+	if !names["search_tools"] || !names["open_node"] || !names["open_trade"] || !names["get_price_history"] {
+		t.Fatalf("deferred catalog missing opened/platform tools: %v", names)
 	}
-	if names["open_trade"] || names["search_news"] {
-		t.Fatalf("deferred catalog leaked unrelated tools: %v", names)
+}
+
+func TestAlwaysOnIncludesKnowledgeTreeTools(t *testing.T) {
+	allow := alwaysOnToolNames()
+	for _, name := range []string{"open_node", "close_node", "manage_knowledge", "search_tools"} {
+		if !allow[name] {
+			t.Errorf("always-on missing %s", name)
+		}
 	}
 }
 

@@ -71,10 +71,19 @@ func (e *Engine) createOpenFileFunction() model.ToolFunction {
 		content, err := e.OpenFile(sessionID, path)
 		metrics.KnowledgeOpen(metrics.Status(err))
 		if err != nil {
-			return fmt.Sprintf("Error opening file: %v", err), nil
+			return fmt.Sprintf("Error opening node: %v", err), nil
 		}
 
-		return fmt.Sprintf("File opened successfully. Content length: %d characters. The file is now available in your context.", len(content)), nil
+		payload := map[string]interface{}{"path": path, "opened": true, "content": content}
+		if e.Repo != nil {
+			if node, loadErr := e.Repo.LoadNode(path); loadErr == nil {
+				payload["title"] = node.Title
+				payload["description"] = node.Description
+				payload["summary"] = node.Summary
+				payload["activated_tools"] = activeNodeToolNames(node)
+			}
+		}
+		return boundedKnowledgeJSON(payload), nil
 	}
 }
 
@@ -94,10 +103,10 @@ func (e *Engine) createCloseFileFunction() model.ToolFunction {
 
 		err = e.CloseFile(sessionID, path)
 		if err != nil {
-			return fmt.Sprintf("Error closing file: %v", err), nil
+			return fmt.Sprintf("Error closing node: %v", err), nil
 		}
 
-		return fmt.Sprintf("File closed successfully: %s", path), nil
+		return boundedKnowledgeJSON(map[string]interface{}{"path": path, "opened": false}), nil
 	}
 }
 
@@ -195,6 +204,40 @@ func GetFileToolDefinitions() []model.Tool {
 			Status: "active",
 		},
 	}
+}
+
+func OpenNodeToolDefinition() openai.Tool {
+	return openai.Tool{Type: openai.ToolTypeFunction, Function: &openai.FunctionDefinition{
+		Name:        "open_node",
+		Description: "Open a knowledge-tree node by path. Returns that node's content and activates only that node's tools for this session. Node content is not injected into the system prompt. This is the knowledge tree, not the user's product memory/journal.",
+		Parameters: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Node path such as root/trading or root/market-data.",
+				},
+			},
+			"required": []string{"path"},
+		},
+	}}
+}
+
+func CloseNodeToolDefinition() openai.Tool {
+	return openai.Tool{Type: openai.ToolTypeFunction, Function: &openai.FunctionDefinition{
+		Name:        "close_node",
+		Description: "Close a previously opened knowledge-tree node and deactivate its node-owned tools. Root cannot be closed.",
+		Parameters: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Node path to close.",
+				},
+			},
+			"required": []string{"path"},
+		},
+	}}
 }
 
 // ============================================================================

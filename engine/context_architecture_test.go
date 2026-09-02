@@ -131,6 +131,56 @@ func TestManageKnowledgeSearchGetAndOpen(t *testing.T) {
 	}
 }
 
+func TestOpenNodeIsRegisteredAndReturnsContent(t *testing.T) {
+	eng, st := contextTestEngine(t)
+	session := model.NewSessionWithID("u1", "s1", model.AgentTypeConversation)
+	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	names := toolNames(eng.GetTools(session))
+	for _, want := range []string{"open_node", "close_node", "manage_knowledge"} {
+		if !names[want] {
+			t.Fatalf("platform knowledge tool %s missing from GetTools: %v", want, names)
+		}
+	}
+	result, err := eng.Functions.Execute("open_node", map[string]interface{}{
+		"path": "root/child", "__session_id__": "s1", "__user_id__": "u1",
+	})
+	if err != nil {
+		t.Fatalf("open_node: %v", err)
+	}
+	if !strings.Contains(result, "child content") || !strings.Contains(result, "child_tool") {
+		t.Fatalf("open_node result missing content/tools: %s", result)
+	}
+	loaded, _ := st.Get("s1")
+	if !toolNames(eng.GetTools(loaded))["child_tool"] {
+		t.Fatal("open_node did not activate child_tool")
+	}
+	if _, err := eng.Functions.Execute("close_node", map[string]interface{}{
+		"path": "root/child", "__session_id__": "s1",
+	}); err != nil {
+		t.Fatalf("close_node: %v", err)
+	}
+}
+
+func TestSearchToolsReturnsNodePathWithoutActivating(t *testing.T) {
+	eng, st := contextTestEngine(t)
+	session := model.NewSessionWithID("u1", "s1", model.AgentTypeConversation)
+	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	result, discovered := eng.executeSearchTools(eng.GetTools(session), `{"query":"child"}`, nil)
+	if !strings.Contains(result, "child_tool") || !strings.Contains(result, "root/child") {
+		t.Fatalf("search_tools: %s", result)
+	}
+	if len(discovered) != 0 {
+		t.Fatalf("search_tools must not load unopened schemas: %v", discovered)
+	}
+	if toolNames(eng.GetTools(session))["child_tool"] {
+		t.Fatal("search_tools activated an unopened node")
+	}
+}
+
 func TestManageContextIsAppendOnlyAndOwnerScoped(t *testing.T) {
 	eng, st := contextTestEngine(t)
 	session := model.NewSessionWithID("u1", "s1", model.AgentTypeConversation)

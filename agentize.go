@@ -222,18 +222,15 @@ func NewWithOptions(path string, opts *Options) (*Agentize, error) {
 		return nil, fmt.Errorf("failed to initialize engine: %w", err)
 	}
 
-	// Register the file-manager tool (manage_files) so the agent can use files.
-	eng.RegisterManageFilesTool()
-
-	// Register the result-inspection tools (collect_result, inspect_result) so the
-	// agent can pull back parts of oversized tool results. These enforce per-user
-	// ownership of buffered output, so they replace any host-provided variants.
-	eng.RegisterTextTools()
+	// Register every platform tool on the host (or default) registry, including
+	// knowledge-tree open_node / close_node / manage_knowledge. Hosts that pass
+	// FunctionRegistry never called UseFunctionRegistry, so those tools were
+	// advertised in schemas but missing from the executor.
+	eng.UseFunctionRegistry(functionRegistry)
 
 	// Create the persistent recurring-task scheduler and expose manage_schedules
 	// as a built-in LLM tool. Its worker starts after UseLLMConfig.
 	eng.InitializeTaskScheduler()
-	eng.RegisterBrowserUseTool()
 
 	// Create Agentize instance
 	ag := &Agentize{
