@@ -15,7 +15,6 @@ type MessageDisplayConfig struct {
 	ShowAgentType   bool
 	ShowContentType bool
 	ShowToolCalls   bool
-	ShowNonsense    bool
 	ShowTime        bool
 	ContentMaxLen   int
 	SessionID       string // Used for tool calls link
@@ -29,7 +28,6 @@ func DefaultMessageDisplayConfig() MessageDisplayConfig {
 		ShowAgentType:   true,
 		ShowContentType: true,
 		ShowToolCalls:   true,
-		ShowNonsense:    true,
 		ShowTime:        true,
 		ContentMaxLen:   200,
 	}
@@ -63,11 +61,6 @@ func MessageCard(msg *model.Message, config MessageDisplayConfig) string {
 		} else {
 			badges += " " + Badge("Has Tool Calls", "danger")
 		}
-	}
-
-	// Nonsense badge
-	if config.ShowNonsense && msg.IsNonsense {
-		badges += " " + BadgeWithIcon("Nonsense", "⚠️", "warning text-dark")
 	}
 
 	// Model badge
@@ -187,10 +180,7 @@ func MessageTableColumns(config MessageRowConfig) []ColumnConfig {
 	if config.ShowUser {
 		columns = append(columns, ColumnConfig{Header: "User", NoWrap: true})
 	}
-	columns = append(columns,
-		ColumnConfig{Header: "Tools", Center: true, NoWrap: true},
-		ColumnConfig{Header: "Nonsense", Center: true, NoWrap: true},
-	)
+	columns = append(columns, ColumnConfig{Header: "Tools", Center: true, NoWrap: true})
 	return columns
 }
 
@@ -213,12 +203,6 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 	if msg.HasToolCalls {
 		toolCallDisplay = fmt.Sprintf(`<a href="%s/tool-calls?session=%s" class="btn btn-sm btn-outline-warning">🔧 View</a>`,
 			config.BaseURL, template.URLQueryEscaper(msg.SessionID))
-	}
-
-	// Nonsense badge
-	nonsenseBadge := Badge("-", "secondary")
-	if msg.IsNonsense {
-		nonsenseBadge = BadgeWithIcon("Nonsense", "⚠️", "warning text-dark")
 	}
 
 	// Format time as "ago"
@@ -261,17 +245,11 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 			TruncatedLink(msg.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(msg.UserID), 15))
 	}
 
-	html += fmt.Sprintf(`
-		<td class="text-center">%s</td>
-		<td class="text-center">%s</td>
-	</tr>`,
-		toolCallDisplay,
-		nonsenseBadge,
-	)
+	html += fmt.Sprintf(`<td class="text-center">%s</td></tr>`, toolCallDisplay)
 
 	// Build the expanded details row (hidden by default)
-	// Base columns: expand button, seq, time, agent, type, role, content, model, tools, nonsense = 10
-	colSpan := 10
+	// Base columns: expand, seq, time, agent, type, role, content, model, tools.
+	colSpan := 9
 	if config.ShowUser {
 		colSpan++
 	}
@@ -303,7 +281,6 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 							<tr><th class="text-muted">Temperature</th><td>%.2f</td></tr>
 							<tr><th class="text-muted">Finish Reason</th><td>%s</td></tr>
 							<tr><th class="text-muted">Has Tool Calls</th><td>%s</td></tr>
-							<tr><th class="text-muted">Is Nonsense</th><td>%s</td></tr>
 						</table>
 					</div>
 				</div>
@@ -332,7 +309,6 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 		msg.Temperature,
 		getFinishReasonDisplay(msg.FinishReason),
 		getBoolBadge(msg.HasToolCalls),
-		getBoolBadge(msg.IsNonsense),
 		template.HTMLEscapeString(msg.Content),
 	)
 

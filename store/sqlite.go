@@ -181,7 +181,6 @@ func (s *SQLiteStore) initSchema() error {
 		temperature REAL,
 		has_tool_calls INTEGER DEFAULT 0,
 		finish_reason TEXT,
-		is_nonsense INTEGER DEFAULT 0,
 		created_at INTEGER NOT NULL
 	);
 	
@@ -342,9 +341,7 @@ func execAll(tx *sql.Tx, stmts ...string) error {
 // sqliteMigrations is the ordered, append-only migration list. NEVER reorder or
 // edit an applied entry — append a new version instead.
 var sqliteMigrations = []sqliteMigration{
-	{1, "messages.is_nonsense", func(tx *sql.Tx) error {
-		return addColumns(tx, "messages", `is_nonsense INTEGER DEFAULT 0`)
-	}},
+	{1, "retired message-quality migration", func(tx *sql.Tx) error { return nil }},
 	{2, "summarization_logs detail columns + status index", func(tx *sql.Tx) error {
 		if err := addColumns(tx, "summarization_logs",
 			`session_title TEXT`, `previous_summary TEXT`, `previous_tags TEXT`,
@@ -728,7 +725,7 @@ func (s *SQLiteStore) Delete(sessionID string) error {
 
 // DeleteUserData deletes all sessions, messages, tool calls, summarization logs,
 // and opened files for a user. Resets user's ActiveSessionIDs and SessionSeqs,
-// and unbans the user (clears BanUntil, BanMessage, NonsenseCount).
+// and unbans the user.
 func (s *SQLiteStore) DeleteUserData(userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1344,10 +1341,6 @@ func messageInsertArgs(message *model.Message) []interface{} {
 	if message.HasToolCalls {
 		hasToolCalls = 1
 	}
-	isNonsense := 0
-	if message.IsNonsense {
-		isNonsense = 1
-	}
 	return []interface{}{
 		message.MessageID,
 		message.SeqID,
@@ -1366,7 +1359,6 @@ func messageInsertArgs(message *model.Message) []interface{} {
 		message.Temperature,
 		hasToolCalls,
 		message.FinishReason,
-		isNonsense,
 		message.CreatedAt.Unix(),
 		messageMetadataJSON(message),
 	}
@@ -1387,8 +1379,8 @@ const messageInsertSQL = `INSERT OR REPLACE INTO messages (
 		message_id, seq_id, user_id, session_id, role, content, model,
 		agent_type, content_type,
 		prompt_tokens, completion_tokens, total_tokens,
-		request_model, max_tokens, temperature, has_tool_calls, finish_reason, is_nonsense, created_at, metadata
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		request_model, max_tokens, temperature, has_tool_calls, finish_reason, created_at, metadata
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // PutMessage stores a message in the database
 func (s *SQLiteStore) PutMessage(message *model.Message) error {
@@ -1468,7 +1460,7 @@ func (s *SQLiteStore) PutMessages(messages []*model.Message) error {
 const messageSelectColumns = `message_id, seq_id, user_id, session_id, role, content, model,
 			agent_type, content_type,
 			prompt_tokens, completion_tokens, total_tokens,
-			request_model, max_tokens, temperature, has_tool_calls, finish_reason, is_nonsense, created_at, metadata`
+			request_model, max_tokens, temperature, has_tool_calls, finish_reason, created_at, metadata`
 
 // scanMessages decodes message rows produced by a messageSelectColumns query.
 func scanMessages(rows *sql.Rows) ([]*model.Message, error) {
@@ -1477,7 +1469,6 @@ func scanMessages(rows *sql.Rows) ([]*model.Message, error) {
 		msg := &model.Message{}
 		var createdAt int64
 		var hasToolCallsInt int
-		var isNonsenseInt int
 		var agentType, contentType string
 		var metadataJSON sql.NullString
 
@@ -1499,7 +1490,6 @@ func scanMessages(rows *sql.Rows) ([]*model.Message, error) {
 			&msg.Temperature,
 			&hasToolCallsInt,
 			&msg.FinishReason,
-			&isNonsenseInt,
 			&createdAt,
 			&metadataJSON,
 		)
@@ -1510,7 +1500,6 @@ func scanMessages(rows *sql.Rows) ([]*model.Message, error) {
 		msg.AgentType = model.AgentType(agentType)
 		msg.ContentType = model.ContentType(contentType)
 		msg.HasToolCalls = hasToolCallsInt != 0
-		msg.IsNonsense = isNonsenseInt != 0
 		msg.CreatedAt = time.Unix(createdAt, 0)
 		if raw := strings.TrimSpace(metadataJSON.String); raw != "" {
 			var meta map[string]any

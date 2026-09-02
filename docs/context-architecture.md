@@ -13,8 +13,8 @@ Durable memory is split by ownership:
 - **User context**: facts and tags that remain useful across conversations.
 - **Session context**: title, append-only summary entries, and tags for one
   session/conversation.
-- **Knowledge context**: a compact node index plus the contents and capabilities
-  of nodes explicitly opened in the session.
+- **Knowledge state**: opened node identities are runtime capability state, not
+  prompt content. Knowledge is discovered and read on demand.
 
 Collections that can grow without bound (files, conversations, historic
 sessions) are queried with tools. They are not copied into every prompt.
@@ -24,12 +24,12 @@ sessions) are queried with tools. They are not copied into every prompt.
 Worker/conversation sessions assemble entries in this deterministic order:
 
 1. `agent_instructions` — the stable worker contract.
-2. `knowledge_tree` — compact metadata for discoverable nodes; no node content.
-3. `opened_nodes` — one entry per explicitly opened node.
-4. `opened_tools` — a compact capability manifest for tools contributed by the
-   opened nodes. The actual JSON schemas travel through the LLM tool channel.
-5. `user_context` — cross-conversation summary entries and tags.
-6. `session_context` — this session's title, summary entries, and tags.
+2. `user_context` — cross-conversation summary entries and tags.
+3. `session_context` — this session's title, summary entries, and tags.
+
+Knowledge, complete position lists, web results, user files, and tool manifests
+never become prompt entries. A compact account state may be written into
+session context by the owning product, but detailed positions remain tool data.
 
 The Core prompt contains only its controller instructions, user context and its
 own session context. Deployment policy, agent catalog prose, registered-tool
@@ -43,10 +43,10 @@ system messages until existing rows are naturally rewritten.
 
 ## Knowledge-tree capability rule
 
-Opening a node grants two independent pieces of context for that session:
-
-- its content may be injected as an opened-node system entry;
-- its active tools may be exposed in the request tool array.
+`manage_knowledge` is the single discovery/read interface: `list` and `search`
+return bounded metadata, `get` reads one node without changing capability
+state, `open` returns its content and activates that exact node's tools, and
+`close` deactivates them.
 
 No descendant, sibling, or unopened node grants tools. Root behaves like every
 other node: its tools are available only when root is explicitly represented in
@@ -116,11 +116,17 @@ allowed when PostgreSQL is configured.
 
 Session detail renders:
 
-- the ordered `Current System Prompts` array with key/title/source/size;
-- Knowledge Tree node count/index;
+- the ordered `Current System Prompts` array as an index plus one independently
+  readable document per entry (key/title/source/size);
+- tool-retrievable dumps (knowledge, web, files, full position lists) in a
+  separate excluded bucket, never labelled current;
 - Opened Nodes;
 - Opened Tools, grouped by contributing node;
-- separate User Context and Session Context cards.
+- separate User Context and Session Context cards, including empty states.
+
+The user detail page shows User Context, the active conversation's Session
+Context, a paginated Conversations list, and the Core prompt array. Nonsense
+counters, Core Agent (Brain), raw session lists, and Open Files are not shown.
 
 The snapshot timestamp makes staleness visible. Archived system messages are
 reported only as legacy debt and never labelled current.
@@ -139,7 +145,7 @@ reported only as legacy debt and never labelled current.
 
 Implemented on 2026-09-02.
 
-- `go test ./...` — passed.
+- Focused engine/Core/dashboard/store unit tests — passed after this revision.
 - Focused context/tool regression tests — passed.
 - PostgreSQL smoke command:
   `AGENTIZE_POSTGRES_CONFIG_FILE=../tradding-planner/crypto-data/configs/config.yaml go test ./store -run '^TestPostgreSQLStoreLiveSchemaAndRoundTrip$' -count=1 -v`

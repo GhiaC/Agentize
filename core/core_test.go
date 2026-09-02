@@ -306,7 +306,6 @@ func TestProcessMessage_RecordsRouteTrace(t *testing.T) {
 	if err := ch.UseLLMConfig(cfg); err != nil {
 		t.Fatalf("UseLLMConfig: %v", err)
 	}
-	ch.userModeration = nil // skip the nonsense check so it doesn't consume a mock response
 
 	resp, err := ch.ProcessMessage(context.Background(), "user1", "hello there")
 	if err != nil {
@@ -507,7 +506,6 @@ func newDispatchableCore(t *testing.T, agentNames ...string) (*CoreHandler, *sto
 	}); err != nil {
 		t.Fatalf("core UseLLMConfig: %v", err)
 	}
-	ch.userModeration = nil // skip the nonsense check so it doesn't consume a mock response
 	return ch, sqliteStore, coreTx, agentTx
 }
 

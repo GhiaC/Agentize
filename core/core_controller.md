@@ -145,6 +145,4 @@ future timer-driven tasks intentionally do not request approval again.
 
 ## Ban Policy
 
-**Auto-ban** detects repeated nonsense via heuristics + LLM verification, with escalating durations for repeat offenders (handled by the framework).
-
 **Manual ban** (`ban_user`): Use for clear abuse, spam, or inappropriate content. Be fair — don't ban legitimate users making mistakes. Unbanning is admin-only (external).

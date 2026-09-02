@@ -68,6 +68,7 @@ func (ch *CoreHandler) assembleSections(userID string, coreSession *model.Sessio
 		case s.content == "":
 			// Empty section: never emitted to the LLM; shown in the UI for context.
 			sec.Included = false
+			sec.Note = emptySectionNote(s.key)
 		case s.required:
 			sec.Included = true
 			used += len(s.content)
@@ -97,6 +98,67 @@ func (ch *CoreHandler) currentCoreSession(userID string) *model.Session {
 	return ch.coreSessions[userID]
 }
 
+type contextResolver interface {
+	GetUser(string) (*model.User, error)
+	GetConversation(string) (*model.Conversation, error)
+	ListConversations(string) ([]*model.Conversation, error)
+}
+
+func emptySectionNote(key string) string {
+	switch key {
+	case SectionUserContext:
+		return "No cross-conversation facts yet. The summarizer appends summary entries and tags after conversations are summarized."
+	case SectionCoreSessionContext:
+		return "No title, summary, or tags on the active conversation yet. Open a conversation or wait for summarization."
+	default:
+		return ""
+	}
+}
+
+// contextSession resolves the active user-facing conversation first, then the
+// newest non-archived conversation. The Core's internal routing session is only
+// a fallback; conversation title/summary/tags are the context users expect.
+func contextSession(store model.SessionStore, userID string, fallback *model.Session) *model.Session {
+	resolver, ok := store.(contextResolver)
+	if !ok {
+		return fallback
+	}
+	user, err := resolver.GetUser(userID)
+	if err == nil && user != nil {
+		if session := ownedConversationSession(store, resolver, userID, user.ActiveConversationID); session != nil {
+			return session
+		}
+	}
+	list, err := resolver.ListConversations(userID)
+	if err == nil {
+		for _, conversation := range list {
+			if conversation == nil || conversation.Archived || conversation.UserID != userID {
+				continue
+			}
+			session, err := store.Get(conversation.SessionID)
+			if err == nil && session != nil && session.UserID == userID {
+				return session
+			}
+		}
+	}
+	return fallback
+}
+
+func ownedConversationSession(store model.SessionStore, resolver contextResolver, userID, conversationID string) *model.Session {
+	if conversationID == "" {
+		return nil
+	}
+	conversation, err := resolver.GetConversation(conversationID)
+	if err != nil || conversation == nil || conversation.UserID != userID {
+		return nil
+	}
+	session, err := store.Get(conversation.SessionID)
+	if err != nil || session == nil || session.UserID != userID {
+		return nil
+	}
+	return session
+}
+
 // SystemPromptSectionsFor returns the live, fully-assembled system-prompt array
 // for a user as labeled sections (including ones dropped by the budget or left
 // empty), for display in the debug UI. It is the exact assembly the Core would
@@ -105,7 +167,7 @@ func (ch *CoreHandler) currentCoreSession(userID string) *model.Session {
 //
 //	ag.SetCoreSystemPromptProvider(coreHandler.SystemPromptSectionsFor)
 func (ch *CoreHandler) SystemPromptSectionsFor(userID string) ([]model.PromptSection, error) {
-	return ch.assembleSections(userID, ch.currentCoreSession(userID))
+	return ch.assembleSections(userID, contextSession(ch.sessionHandler.GetStore(), userID, ch.currentCoreSession(userID)))
 }
 
 // PreviewSystemPromptSections reconstructs the Core's system-prompt array for a
@@ -133,7 +195,7 @@ func PreviewSystemPromptSections(store model.SessionStore, userID string, cfg Co
 		}
 	}
 
-	sections, err := ch.assembleSections(userID, coreSession)
+	sections, err := ch.assembleSections(userID, contextSession(store, userID, coreSession))
 	if err != nil {
 		return nil, err
 	}

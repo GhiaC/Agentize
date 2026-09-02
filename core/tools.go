@@ -42,7 +42,7 @@ func (ch *CoreHandler) getCoreToolsForLLM() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        "ban_user",
-				Description: "Ban the current user for a specified duration. Use this when a user repeatedly sends nonsense messages or violates rules.",
+				Description: "Ban the current user for a specified duration when an explicit policy violation requires it.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{

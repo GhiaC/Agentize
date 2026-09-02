@@ -74,10 +74,8 @@ func (ch *CoreHandler) ProcessMessageWithImage(
 		llmModel = "openai/gpt-5-nano"
 	}
 
-	if ch.userModeration != nil {
-		if isBanned, banMessage := ch.userModeration.CheckBanStatus(userID); isBanned {
-			return banMessage, nil
-		}
+	if user, err := ch.getOrCreateUser(userID); err == nil && user.IsCurrentlyBanned() {
+		return user.BanMessage, nil
 	}
 
 	coreSession, err := ch.getOrCreateCoreSession(userID)

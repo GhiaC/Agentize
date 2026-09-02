@@ -51,7 +51,6 @@ func newTieredCore(t *testing.T, agents map[string]agentmanager.CostTier) (*Core
 	}); err != nil {
 		t.Fatalf("core UseLLMConfig: %v", err)
 	}
-	ch.userModeration = nil // skip the nonsense check so it doesn't consume a mock response
 	return ch, sqliteStore, coreTx, agentTx
 }
 

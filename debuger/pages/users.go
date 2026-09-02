@@ -5,7 +5,6 @@ import (
 	"html/template"
 	"net/url"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/ghiac/agentize/debuger"
@@ -91,7 +90,6 @@ func RenderUsers(handler *debuger.DebugHandler, page int) (string, error) {
 			{Header: "Last Activity", NoWrap: true},
 			{Header: "Created", NoWrap: true},
 			{Header: "Status", Center: true, NoWrap: true},
-			{Header: "Nonsense", Center: true, NoWrap: true},
 			{Header: "Actions", Center: true, NoWrap: true},
 		}
 		content += components.TableStartWithConfig(columns, components.DefaultTableConfig())
@@ -124,24 +122,18 @@ func RenderUsers(handler *debuger.DebugHandler, page int) (string, error) {
 				userCell = fmt.Sprintf(`<span class="text-muted">@%s</span>`, template.HTMLEscapeString(user.Username))
 			}
 
-			// Sessions / Nonsense: only badge when non-zero, otherwise a quiet "0".
+			// Session count is a compact operational indicator.
 			sessionsCell := `<span class="text-muted">0</span>`
 			if sessionCount > 0 {
 				sessionsCell = components.CountBadge(sessionCount, "primary")
 			}
-			nonsenseCell := `<span class="text-muted">0</span>`
-			if user.NonsenseCount > 0 {
-				nonsenseCell = components.CountBadge(user.NonsenseCount, "warning text-dark")
-			}
-
 			content += fmt.Sprintf(`<tr>
                 <td>%s</td>
                 <td>%s</td>
                 <td class="text-center">%s</td>
                 <td class="text-nowrap">%s</td>
                 <td class="text-nowrap">%s</td>
-                <td class="text-center">%s</td>
-                <td class="text-center">%s</td>
+				<td class="text-center">%s</td>
                 <td class="text-center">%s</td>
             </tr>`,
 				components.InlineCode(template.HTMLEscapeString(user.UserID)),
@@ -150,7 +142,6 @@ func RenderUsers(handler *debuger.DebugHandler, page int) (string, error) {
 				relativeTimeCell(userLastActivity(user, userSessions), false),
 				relativeTimeCell(user.CreatedAt, true),
 				banStatus,
-				nonsenseCell,
 				components.ViewDetailsButton("/agentize/debug/users/"+template.URLQueryEscaper(user.UserID)),
 			)
 		}
@@ -167,6 +158,12 @@ func RenderUsers(handler *debuger.DebugHandler, page int) (string, error) {
 // RenderUserDetail generates the user detail HTML page.
 // If showDeletedSuccess is true, shows a success alert for "data deleted".
 func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedSuccess ...bool) (string, error) {
+	showDeleted := len(showDeletedSuccess) > 0 && showDeletedSuccess[0]
+	return RenderUserDetailPage(handler, userID, showDeleted, 1)
+}
+
+// RenderUserDetailPage renders the user view with independently pageable conversations.
+func RenderUserDetailPage(handler *debuger.DebugHandler, userID string, showDeleted bool, conversationsPage int) (string, error) {
 	dp := data.NewDataProvider(handler.GetStore())
 
 	user, err := dp.GetUser(userID)
@@ -188,11 +185,6 @@ func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedS
 		return "", fmt.Errorf("failed to get messages: %w", err)
 	}
 
-	userFiles, err := dp.GetOpenedFilesByUser(userID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get files: %w", err)
-	}
-
 	userDocs, err := dp.GetUserFilesByUser(userID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get documents: %w", err)
@@ -207,7 +199,7 @@ func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedS
 		{Label: userID, Active: true},
 	})
 
-	if len(showDeletedSuccess) > 0 && showDeletedSuccess[0] {
+	if showDeleted {
 		content += components.SuccessAlert("All messages, sessions, quota, consumption and invoices for this user have been deleted successfully.")
 	}
 
@@ -232,24 +224,6 @@ func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedS
 	usernameDisplay := "-"
 	if user.Username != "" {
 		usernameDisplay = template.HTMLEscapeString(user.Username)
-	}
-
-	// Build active sessions display for detail page - show full text without truncation
-	activeSessionsHTML := "-"
-	if len(user.ActiveSessionIDs) > 0 {
-		var parts []string
-		for agentType, sessionID := range user.ActiveSessionIDs {
-			if sessionID != "" {
-				link := fmt.Sprintf(`<a href="/agentize/debug/sessions/%s">%s: %s</a>`,
-					template.URLQueryEscaper(sessionID),
-					template.HTMLEscapeString(string(agentType)),
-					components.InlineCode(template.HTMLEscapeString(sessionID)))
-				parts = append(parts, link)
-			}
-		}
-		if len(parts) > 0 {
-			activeSessionsHTML = strings.Join(parts, "<br>")
-		}
 	}
 
 	// Calculate total MessageSeq and ToolSeq from all user sessions
@@ -343,18 +317,6 @@ func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedS
                             <td class="text-end fw-bold" style="padding: 0.5rem 1rem;">Total Tool Seq:</td>
                             <td style="padding: 0.5rem 1rem;">%s</td>
                         </tr>
-                        <tr>
-                            <td class="text-end fw-bold" style="padding: 0.5rem 1rem;">Nonsense Count:</td>
-                            <td style="padding: 0.5rem 1rem;">%s</td>
-                        </tr>
-                        <tr>
-                            <td class="text-end fw-bold" style="padding: 0.5rem 1rem;">Last Nonsense:</td>
-                            <td style="padding: 0.5rem 1rem;" class="text-muted">%s</td>
-                        </tr>
-                        <tr>
-                            <td class="text-end fw-bold align-top" style="padding: 0.5rem 1rem;">Active Sessions:</td>
-                            <td style="padding: 0.5rem 1rem;">%s</td>
-                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -373,9 +335,6 @@ func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedS
 		debuger.FormatTime(user.UpdatedAt),
 		components.CountBadge(totalMessageSeq, "info"),
 		components.CountBadge(totalToolSeq, "info"),
-		components.CountBadge(user.NonsenseCount, "warning text-dark"),
-		debuger.FormatTime(user.LastNonsenseTime),
-		activeSessionsHTML,
 	)
 
 	// Optional billing/credit summary (when provider is set by the application)
@@ -383,83 +342,37 @@ func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedS
 		content += billingHTML
 	}
 
-	// Core Agent (brain) panel: the long-term memory the Core router operates on
-	// for this user — its Core session's summary/tags/model and known-document count.
-	var coreSession *model.Session
-	for _, s := range userSessions {
-		if s.AgentType == model.AgentTypeCore {
-			coreSession = s
-			break
-		}
+	content += renderUserContextCard(user)
+	activeConversation, activeSession := activeConversationContext(handler.GetStore(), userID)
+	content += renderSessionContextCard(activeSession, activeConversation)
+
+	conversations, err := handler.GetStore().ListConversations(userID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get conversations: %w", err)
 	}
-	content += renderCoreBrainCard(coreSession, len(userDocs))
+	if conversationsPage < 1 {
+		conversationsPage = 1
+	}
+	convStart, convEnd, _ := components.GetPaginationInfo(conversationsPage, len(conversations), components.DefaultItemsPerPage)
+	content += components.CollapsibleCardStartWithCount("Conversations", "chat-left-text", len(conversations), true)
+	if len(conversations) == 0 {
+		content += components.InfoAlert("No conversations found for this user.")
+	} else {
+		columns := []components.ColumnConfig{{Header: "When", NoWrap: true}, {Header: "Conversation", NoWrap: true}, {Header: "Title"}, {Header: "Model", NoWrap: true}, {Header: "Session", NoWrap: true}, {Header: "Archived", NoWrap: true}}
+		content += components.TableStartWithConfig(columns, components.TableConfig{Hover: true, Small: true, Responsive: true, AlignMiddle: true})
+		for _, conv := range conversations[convStart:convEnd] {
+			content += userConversationRow(conv)
+		}
+		content += components.TableEnd(true)
+		content += components.Pagination(components.PaginationConfig{CurrentPage: conversationsPage, TotalItems: len(conversations), ItemsPerPage: components.DefaultItemsPerPage, BaseURL: "/agentize/debug/users/" + url.PathEscape(userID), PageParam: "conversations_page"})
+	}
+	content += components.CollapsibleCardEnd()
 
 	// Core System Prompt card: the live (or store-preview) array of system
 	// messages the Core assembles to route this user. Collapsed by default; each
 	// section is its own collapsible box.
 	promptSections, promptErr := handler.GetCoreSystemPrompt(userID)
 	content += renderCoreSystemPromptCard(promptSections, handler.CoreSystemPromptIsPreview(), promptErr)
-
-	// Sessions card
-	content += components.CollapsibleCardStartWithCount("Sessions", "diagram-3-fill", len(userSessions), false)
-
-	if len(userSessions) == 0 {
-		content += components.InfoAlert("No sessions found for this user.")
-	} else {
-		content += components.ListGroupStart()
-		for _, session := range userSessions {
-			title := session.Title
-			if title == "" {
-				title = "Untitled Session"
-			}
-
-			summaryDisplay := "-"
-			if len(session.Summary) > 0 {
-				summaryDisplay = debuger.TruncateString(session.Summary.Text(), 100)
-			}
-
-			summarizedAtDisplay := "-"
-			if !session.SummarizedAt.IsZero() {
-				summarizedAtDisplay = debuger.FormatTime(session.SummarizedAt)
-			}
-
-			tagsDisplay := "-"
-			if len(session.Tags) > 0 {
-				tagsDisplay = template.HTMLEscapeString(strings.Join(session.Tags, ", "))
-			}
-
-			content += fmt.Sprintf(`
-<a href="/agentize/debug/sessions/%s" class="list-group-item list-group-item-action">
-    <div class="d-flex w-100 justify-content-between align-items-start">
-        <div class="flex-grow-1">
-            <h6 class="mb-2">%s</h6>
-            <small class="text-muted">SessionID: %s | MsgSeq: %d</small>
-            <small class="text-muted d-block">Created: %s | Updated: %s</small>
-            <small class="text-muted d-block">Model: %s</small>
-            <small class="text-muted d-block">Summary: %s</small>
-            <small class="text-muted d-block">Summarized At: %s</small>
-            <small class="text-muted d-block">Tags: %s</small>
-        </div>
-        %s
-    </div>
-</a>`,
-				template.URLQueryEscaper(session.SessionID),
-				template.HTMLEscapeString(title),
-				components.InlineCode(session.SessionID),
-				session.MessageSeq,
-				debuger.FormatDuration(session.CreatedAt),
-				debuger.FormatDuration(session.UpdatedAt),
-				components.InlineCode(debuger.GetModelDisplay(session.Model)),
-				template.HTMLEscapeString(summaryDisplay),
-				summarizedAtDisplay,
-				tagsDisplay,
-				components.Badge(string(session.AgentType), "secondary"),
-			)
-		}
-		content += components.ListGroupEnd()
-	}
-
-	content += components.CollapsibleCardEnd()
 
 	// Messages card
 	content += components.CollapsibleCardStartWithCount("Messages", "chat-dots-fill", len(messages), false)
@@ -491,50 +404,6 @@ func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedS
 
 		content += components.TableEnd(true)
 		content += components.MessageTableScript()
-	}
-
-	content += components.CollapsibleCardEnd()
-
-	// Files card
-	content += components.CollapsibleCardStartWithCount("Opened Files", "folder-fill", len(userFiles), false)
-
-	if len(userFiles) == 0 {
-		content += components.InfoAlert("No opened files found for this user.")
-	} else {
-		columns := []components.ColumnConfig{
-			{Header: "File Path"},
-			{Header: "Status", Center: true, NoWrap: true},
-			{Header: "Opened At", NoWrap: true},
-			{Header: "Session", NoWrap: true},
-		}
-		content += components.TableStartWithConfig(columns, components.TableConfig{
-			Striped:     false,
-			Hover:       true,
-			Small:       true,
-			Responsive:  true,
-			AlignMiddle: true,
-		})
-
-		for _, f := range userFiles {
-			status := components.BadgeWithIcon("Open", "✅", "success")
-			if !f.IsOpen {
-				status = components.BadgeWithIcon("Closed", "❌", "secondary")
-			}
-
-			content += fmt.Sprintf(`<tr>
-                <td>%s</td>
-                <td class="text-center">%s</td>
-                <td class="text-nowrap">%s</td>
-                <td class="text-nowrap">%s</td>
-            </tr>`,
-				components.InlineCode(template.HTMLEscapeString(f.FilePath)),
-				status,
-				debuger.FormatTime(f.OpenedAt),
-				components.TruncatedLink(f.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(f.SessionID), 8),
-			)
-		}
-
-		content += components.TableEnd(true)
 	}
 
 	content += components.CollapsibleCardEnd()
@@ -587,55 +456,17 @@ func RenderUserDetail(handler *debuger.DebugHandler, userID string, showDeletedS
 	return ui.Header("Agentize Debug - User: "+template.HTMLEscapeString(userID)) + ui.NavbarAndBody("/agentize/debug/users", content) + ui.Footer(), nil
 }
 
-// renderCoreBrainCard renders the "Core Agent (Brain)" card on the user detail
-// page: the long-term memory the Core router uses to decide where to send this
-// user's messages. coreSession is the user's AgentType==core session (may be nil);
-// docCount is how many real user files (documents) the Core can reference when
-// delegating to an agent.
-func renderCoreBrainCard(coreSession *model.Session, docCount int) string {
-	out := components.CollapsibleCardStart("Core Agent (Brain)", "cpu-fill", "", false)
-	if coreSession == nil {
-		out += components.InfoAlert("No Core session yet — the Core builds memory after the user's first messages.")
-		out += components.CollapsibleCardEnd()
-		return out
+func userConversationRow(conv *model.Conversation) string {
+	title := conv.Title
+	if title == "" {
+		title = "Untitled"
 	}
-
-	summary := `<span class="text-muted">No summary yet</span>`
-	if len(coreSession.Summary) > 0 {
-		summary = template.HTMLEscapeString(coreSession.Summary.Text())
+	archived := ""
+	if conv.Archived {
+		archived = components.Badge("yes", "secondary")
 	}
-	tags := `<span class="text-muted">-</span>`
-	if len(coreSession.Tags) > 0 {
-		tags = template.HTMLEscapeString(strings.Join(coreSession.Tags, ", "))
-	}
-	summarizedAt := "Never"
-	if !coreSession.SummarizedAt.IsZero() {
-		summarizedAt = debuger.FormatTime(coreSession.SummarizedAt)
-	}
-
-	out += fmt.Sprintf(`
-    <p class="text-muted mb-3">The long-term memory the Core router uses to route this user's messages. Updated in the background by summarization.</p>
-    <table class="table table-sm table-borderless mb-0">
-        <tbody>
-            <tr><td class="text-end fw-bold align-top" style="width: 170px; padding: 0.5rem 1rem;">Core Session:</td><td style="padding: 0.5rem 1rem;">%s</td></tr>
-            <tr><td class="text-end fw-bold" style="padding: 0.5rem 1rem;">Model:</td><td style="padding: 0.5rem 1rem;">%s</td></tr>
-            <tr><td class="text-end fw-bold align-top" style="padding: 0.5rem 1rem;">Memory (Summary):</td><td style="padding: 0.5rem 1rem;">%s</td></tr>
-            <tr><td class="text-end fw-bold align-top" style="padding: 0.5rem 1rem;">Topics (Tags):</td><td style="padding: 0.5rem 1rem;">%s</td></tr>
-            <tr><td class="text-end fw-bold" style="padding: 0.5rem 1rem;">Last Summarized:</td><td class="text-muted" style="padding: 0.5rem 1rem;">%s</td></tr>
-            <tr><td class="text-end fw-bold" style="padding: 0.5rem 1rem;">Messages:</td><td style="padding: 0.5rem 1rem;">%s</td></tr>
-            <tr><td class="text-end fw-bold" style="padding: 0.5rem 1rem;">Known Documents:</td><td style="padding: 0.5rem 1rem;">%s</td></tr>
-        </tbody>
-    </table>`,
-		components.InlineCode(coreSession.SessionID),
-		components.InlineCode(debuger.GetModelDisplay(coreSession.Model)),
-		summary,
-		tags,
-		summarizedAt,
-		components.CountBadge(coreSession.MessageSeq, "info"),
-		components.CountBadge(docCount, "secondary"),
-	)
-	out += components.CollapsibleCardEnd()
-	return out
+	return fmt.Sprintf(`<tr><td class="text-nowrap">%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td><a href="/agentize/debug/sessions/%s"><code>%s</code></a></td><td>%s</td></tr>`,
+		template.HTMLEscapeString(formatTimeAgo(conv.UpdatedAt)), template.HTMLEscapeString(conv.ConversationID), template.HTMLEscapeString(title), template.HTMLEscapeString(conv.Model), url.PathEscape(conv.SessionID), template.HTMLEscapeString(conv.SessionID), archived)
 }
 
 // renderCoreSystemPromptCard renders the "Core System Prompt" card: the ordered
@@ -661,12 +492,12 @@ func renderCoreSystemPromptCard(sections []model.PromptSection, isPreview bool, 
 		meta += " " + components.Badge("PREVIEW", "warning text-dark")
 	}
 
-	out := components.CollapsibleCardStart("Core System Prompt", "braces-asterisk", meta, false)
+	out := components.CollapsibleCardStart("Core System Prompt", "braces-asterisk", meta, true)
 
 	if isPreview {
-		out += components.WarningAlert("Store-only preview — no live Core is wired. The controller rules and this user's memory, files and sessions are real; agent-dependent sections appear only with a live Core (wire SetCoreSystemPromptProvider).")
+		out += components.WarningAlert("Store-only preview — no live Core is wired. It uses the same controller, persisted user context, and active conversation context as the live prompt builder.")
 	} else {
-		out += `<p class="text-muted mb-3">The ordered array of system messages the Core sends to its routing LLM for this user, assembled live. Static sections (controller, agents) cache provider-side; dynamic sections are this user's memory.</p>`
+		out += `<p class="text-muted mb-3">The ordered array of system messages the Core sends for this user. Each prompt is a separate document. Knowledge, web results, files, and full position lists stay behind tools.</p>`
 	}
 
 	switch {
@@ -675,48 +506,9 @@ func renderCoreSystemPromptCard(sections []model.PromptSection, isPreview bool, 
 	case len(sections) == 0:
 		out += components.InfoAlert("No system-prompt sections to show.")
 	default:
-		for i, s := range sections {
-			out += renderPromptSection(i+1, s)
-		}
+		out += components.RenderPromptArray(components.PromptEntriesFromSections(sections))
 	}
 
 	out += components.CollapsibleCardEnd()
 	return out
-}
-
-// renderPromptSection renders one prompt section as a collapsed nested box with
-// classification badges (Required/Optional, Static/Dynamic, size, dropped/empty)
-// and its raw content.
-func renderPromptSection(idx int, s model.PromptSection) string {
-	var badges []string
-	if s.Required {
-		badges = append(badges, components.Badge("Required", "danger"))
-	} else {
-		badges = append(badges, components.Badge("Optional", "secondary"))
-	}
-	if s.Dynamic {
-		badges = append(badges, components.Badge("Dynamic", "info"))
-	} else {
-		badges = append(badges, components.Badge("Static", "success"))
-	}
-	badges = append(badges, components.Badge(formatBytes(int64(s.Bytes)), "secondary"))
-	switch {
-	case s.Content == "":
-		badges = append(badges, components.Badge("Empty", "secondary"))
-	case !s.Included:
-		badges = append(badges, components.Badge("Dropped (budget)", "warning text-dark"))
-	}
-
-	var body string
-	if s.Note != "" {
-		body += components.InfoAlert(s.Note)
-	}
-	if s.Content != "" {
-		body += fmt.Sprintf("<pre>%s</pre>", template.HTMLEscapeString(s.Content))
-	} else if s.Note == "" {
-		body += `<p class="text-muted mb-0"><em>(empty)</em></p>`
-	}
-
-	title := fmt.Sprintf("%d. %s", idx, s.Title)
-	return components.CollapsibleSection(title, strings.Join(badges, " "), body, false)
 }

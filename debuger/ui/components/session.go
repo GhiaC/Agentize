@@ -178,7 +178,7 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 							<tr><th class="text-muted">Archived Messages</th><td>%s</td></tr>
 							<tr><th class="text-muted">Message Seq</th><td>%d</td></tr>
 							<tr><th class="text-muted">Tool Seq</th><td>%d</td></tr>
-							<tr><th class="text-muted">Opened Files</th><td>%s</td></tr>
+							<tr><th class="text-muted">Opened Nodes</th><td>%s</td></tr>
 						</table>
 					</div>
 					<div class="col-md-6">

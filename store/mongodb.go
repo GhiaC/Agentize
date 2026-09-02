@@ -763,7 +763,7 @@ func (s *MongoDBStore) Delete(sessionID string) error {
 
 // DeleteUserData deletes all sessions, messages, tool calls, summarization logs,
 // and opened files for a user. Resets user's ActiveSessionIDs and SessionSeqs,
-// and unbans the user (clears BanUntil, BanMessage, NonsenseCount).
+// and unbans the user.
 func (s *MongoDBStore) DeleteUserData(userID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*s.opTimeout)
 	defer cancel()

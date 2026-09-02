@@ -452,7 +452,7 @@ CREATE TABLE IF NOT EXISTS messages (
  role TEXT NOT NULL, content TEXT NOT NULL, model TEXT, agent_type TEXT DEFAULT '', content_type TEXT DEFAULT '',
  prompt_tokens BIGINT DEFAULT 0, completion_tokens BIGINT DEFAULT 0, total_tokens BIGINT DEFAULT 0,
  request_model TEXT, max_tokens BIGINT, temperature DOUBLE PRECISION, has_tool_calls BIGINT DEFAULT 0,
- finish_reason TEXT, is_nonsense BIGINT DEFAULT 0, created_at BIGINT NOT NULL, metadata TEXT DEFAULT '');
+ finish_reason TEXT, created_at BIGINT NOT NULL, metadata TEXT DEFAULT '');
 CREATE INDEX IF NOT EXISTS idx_messages_session_page ON messages(session_id, created_at DESC, seq_id DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_user_created ON messages(user_id, created_at DESC);
 

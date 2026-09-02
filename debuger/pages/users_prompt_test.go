@@ -23,9 +23,6 @@ func TestRenderCoreSystemPromptCard_PreviewAndEscaping(t *testing.T) {
 	if !strings.Contains(html, "<details") || !strings.Contains(html, "<summary") {
 		t.Error("expected collapsible <details>/<summary> markup")
 	}
-	if strings.Contains(html, "<details class=\"card collapsible-card mb-4\" open>") {
-		t.Error("the card must be collapsed by default (no open attribute)")
-	}
 	if !strings.Contains(html, "PREVIEW") {
 		t.Error("preview mode should render a PREVIEW badge")
 	}

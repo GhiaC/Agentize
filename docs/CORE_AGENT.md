@@ -50,7 +50,7 @@ the store's `GetCoreSession`, then creates a fresh one.
 `ProcessMessage` → `processOneMessageCore` ([core/core.go:233](../core/core.go)):
 
 1. Per-user mutex + progress guard (busy → queue) ([core/core.go:213-221](../core/core.go)).
-2. Status `Received → Analyzing`; moderation (ban + nonsense) ([core/core.go:256-282](../core/core.go)).
+2. Status `Received → Analyzing` ([core/core.go:256-282](../core/core.go)).
 3. Get/create the **Core session**, append the user message, persist it
    ([core/core.go:284-316](../core/core.go)).
 4. **Build the system prompts** via `buildSystemPrompts(userID)`
@@ -76,22 +76,15 @@ The array, in build order:
 | # | Section | Source | Varies by | Stability |
 |---|---------|--------|-----------|-----------|
 | 1 | **Core Controller** (rules, hard constraints, decision flow) | `core_controller.md`, embedded ([core/core.go:21](../core/core.go)) | nothing | **static** |
-| 2 | **Available Agents** (table: name, desc, cost tier, capabilities, knowledge) | `agents.BuildAgentsDescriptionPrompt()` ([agentmanager/prompt.go:29](../agentmanager/prompt.go)) | registered agents | static per deployment |
-| 3 | **Registered Agent Tools** (union of all agent tools with routing guidance for capabilities such as `browser_use`) | `agents.BuildAgentToolsPrompt()` ([agentmanager/prompt.go:89](../agentmanager/prompt.go)) | registered agents | static per deployment |
-| 4 | **Core Session Context** (Summary + Tags of *this user's* Core session) | `buildCoreSessionContext()` ([core/session.go:109](../core/session.go)) | user, summarization | **dynamic** |
-| 5 | **Agent Session Contexts** (Summary + Tags of each agent's active session) | `agents.BuildAllSessionContextsPrompt()` ([agentmanager/prompt.go:335](../agentmanager/prompt.go)) | user, summarization | **dynamic** |
-| 6 | **User Files** (compact table of the user's uploaded/generated files) | `buildUserFilesPrompt()` ([core/llm.go](../core/llm.go)) | user, file uploads | **dynamic** |
-| 7 | **Current Active Sessions** (which session is active per agent) | `agents.BuildActiveSessionsPrompt()` ([agentmanager/prompt.go:230](../agentmanager/prompt.go)) | user, session changes | **dynamic** |
-| 8 | **Sessions list** (for `change_session`) | `sessionHandler.GetSessionsPrompt(userID)` ([model/session_handler.go:474](../model/session_handler.go)) | user, session changes | **dynamic** |
+| 2 | **User Context** (cross-conversation summary entries and tags) | `buildUserContext()` ([core/session.go](../core/session.go)) | user, summarization | **dynamic** |
+| 3 | **Session Context** (title, summary entries, and tags of the active conversation) | `buildCoreSessionContext()` over `contextSession()` ([core/prompt_sections.go](../core/prompt_sections.go)) | user, conversation | **dynamic** |
+
+Knowledge, complete position lists, web results, user files, agent catalogs, and conversation lists are **not** prompt sections. They remain tools. A host may add a compact **account-status** summary; full positions stay behind account tools.
+
 Two important properties:
 
-- **Static-first ordering is deliberate.** Sections 1–3 are byte-stable
-  across messages for a given deployment, so provider-side **prompt caching**
-  (OpenAI/Anthropic) can cache that prefix; the per-user dynamic sections (4–8) come
-  later and change without invalidating the cached prefix. `callLLM`
-  ([core/llm.go:18](../core/llm.go)) logs `cache=` tokens so you can confirm hits.
-- **Sections 4–8 are the Core's memory of the user**, and assembling them is the
-  hottest read path in the Core. The array is **memoized per user** by
+- **Static-first ordering is deliberate.** The controller is byte-stable across messages for a given deployment, so provider-side **prompt caching** (OpenAI/Anthropic) can cache that prefix; the per-user dynamic sections come later. `callLLM` ([core/llm.go:18](../core/llm.go)) logs `cache=` tokens so you can confirm hits.
+- **User and session context are the Core's memory of the user.** Session context prefers the active conversation, then the newest non-archived conversation, and only then the internal Core session. The array is **memoized per user** by
   `generateSystemPrompt` ([core/llm.go](../core/llm.go)) for
   `CoreHandlerConfig.SystemPromptCacheTTL` (default **10 minutes**), wrapping the
   uncached `buildSystemPrompts` builder. The cache is rebuilt when it expires, when
@@ -101,30 +94,18 @@ Two important properties:
   and via the exported `InvalidateSystemPromptCache` (wired to summarization, §5).
   Cache lookups are observable via `agentize_system_prompt_cache_total{result=hit|miss|stale}`.
 - **Size budget.** `assembleSections` enforces a running size budget capped at
-  `CoreHandlerConfig.MaxSystemPromptSize` (default **120000 chars**). Sections 1–3
-  (controller, agent descriptions, agent tools) are required; the per-user sections
-  are optional and marked *not included* — logged and counted in
-  `agentize_system_prompt_sections_dropped_total{section}` — when they would push
-  the total past the cap, so one user's huge history cannot inflate every message's
-  token cost. `buildSystemPrompts` ships only the included sections; the debug view
-  still lists the dropped ones (flagged "Dropped") so an operator can see what was cut.
+  `CoreHandlerConfig.MaxSystemPromptSize` (default **120000 chars**). The controller
+  is required; optional sections that would push the total past the cap are marked
+  *not included* — logged and counted in
+  `agentize_system_prompt_sections_dropped_total{section}`. `buildSystemPrompts`
+  ships only the included sections; the debug view still lists empty and dropped
+  ones so an operator can see what was omitted.
 
-### Section 6 — User Files (handing files to a worker agent)
+### User files (tool, not prompt)
 
-`buildUserFilesPrompt` ([core/llm.go](../core/llm.go)) type-asserts the store to
-`GetUserFilesByUser(userID)` and renders a compact table (File ID, Name, Type, Size,
-Source) of the user's uploaded/generated files, capped at
-`CoreHandlerConfig.MaxUserFilesInPrompt` (default 50). It is **metadata-only** — no extra LLM calls — and includes a file's existing
-`Summary` when present. The Core is instructed (in `core_controller.md`) to pass a
-file's **ID and name** in the `call_agent_*` message rather than pasting bytes; the
-worker agent then reads it on demand via its own file tool. Files are user-scoped, so
-any of the user's agents can resolve the ID.
-
-Configure one shared per-user file manager after registering the agents:
-
-```go
-ag.ShareFileManagerWithCore(coreHandler)
-```
+User files are listed, searched, and edited with `manage_files`. The Core no
+longer injects a file table into the system-prompt array. Worker agents receive
+file identity through tool results and conversation messages.
 
 For a chatbot that must attach screenshots or other generated files, use
 `CoreHandler.ProcessMessageWithGeneratedFiles` instead of parsing `file_id`
@@ -133,7 +114,7 @@ sessions during the turn. Attachment transport remains the host bot's
 responsibility; `Agentize.DeliverGeneratedFiles` provides the owner-checked
 delivery callback. See [FILE_MANAGER.md](FILE_MANAGER.md).
 
-### How a section is built (example: Core Session Context)
+### How a section is built (example: Session Context)
 
 `buildCoreSessionContext` ([core/session.go:109](../core/session.go)) returns empty
 when the session has neither a summary nor tags; otherwise it emits:
@@ -190,9 +171,9 @@ The detailed invariants, compatibility decoder and debug-page behavior live in
 
 ## 6. Where the Core surfaces in the debug UI
 
-- **Sessions / Users**: each user's sessions (including the `core` session) are
-  listed with title, summary, tags, model on the user detail page
-  ([debuger/pages/users.go:386](../debuger/pages/users.go)).
+- **Users**: the user detail page lists User Context, the active conversation's
+  Session Context, paginated Conversations, and the Core prompt array. Nonsense
+  counters, Core Agent (Brain), raw session lists, and Open Files are omitted.
 - **Route traces**: the per-message routing DAG at `/agentize/debug/routes`.
 - **Workflow DAGs**: exact Core-tool state machines and task results at
   `/agentize/debug/workflows`; scheduled runs link back to their schedule and
@@ -202,12 +183,7 @@ The detailed invariants, compatibility decoder and debug-page behavior live in
 - **Summarization logs**: every summarization run is logged with before/after state.
 - **System Info**: backend + counts panel on the dashboard ([systeminfo.go](../systeminfo.go)).
 
-- **Core Agent (Brain) panel**: the user detail page shows a dedicated card with the
-  memory the Core operates on for that user — its Core session, model, summary, tags,
-  last-summarized time, message count, and known-document count
-  (`renderCoreBrainCard` [debuger/pages/users.go](../debuger/pages/users.go)).
-
-- **Core System Prompt panel**: directly below the Brain card, a collapsed card shows
+- **Core System Prompt panel**: a collapsed card shows
   the *exact ordered array of system messages* the Core assembles to route this user —
   one collapsible box per section, each tagged **Required/Optional**, **Static/Dynamic**,
   its byte size, and whether it was **Dropped** by the budget
@@ -215,12 +191,12 @@ The detailed invariants, compatibility decoder and debug-page behavior live in
   It is fed via the `Agentize.SetCoreSystemPromptProvider` hook by
   `CoreHandler.SystemPromptSectionsFor` (the live array); when no Core is wired,
   Agentize installs `core.PreviewSystemPromptSections` as the default — a store-only
-  reconstruction (real controller + the user's memory/files/sessions, with
-  agent-dependent sections flagged "available with a live Core"), badged **PREVIEW**.
+  reconstruction of the controller plus persisted user context and the active
+  conversation's session context, badged **PREVIEW**.
   See §7 for the one-line wiring.
 
-  The page also makes the secondary cards (Brain, Core System Prompt, Sessions,
-  Messages, Opened Files, Documents) **collapsible and collapsed by default** via the
+  The page also makes the secondary cards (Core System Prompt, Conversations,
+  Messages, Documents) collapsible via the
   native-`<details>` `Collapsible*` components ([debuger/ui/components/collapsible.go](../debuger/ui/components/collapsible.go)).
 
 ## 7. Extending the Core — where changes land
@@ -252,13 +228,11 @@ schedulerConfig.OnSessionSummarized = func(userID, _ string) {
 Without this, worker-agent summary changes still appear, but only once the 10-minute
 TTL expires. Two invariants worth preserving:
 
-- Keep the static prefix (sections 1–3) byte-identical regardless of cache state, so
+- Keep the static controller prefix byte-identical regardless of cache state, so
   provider-side prompt caching keeps working independently of the app cache.
 - Any new dynamic section added to `assembleSections` is covered by the cache for
   free, but if it can change *without* a summarization or session event, add an
-  `invalidateSystemPrompt(userID)` call at its mutation point — as the Core's image
-  upload path does ([core/vision.go](../core/vision.go)) so a just-received file
-  appears in the User Files section on the same message rather than after the TTL.
+  `invalidateSystemPrompt(userID)` call at its mutation point.
 
 ### Wiring the live system-prompt debug view (host responsibility)
 

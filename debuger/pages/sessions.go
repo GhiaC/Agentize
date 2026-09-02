@@ -125,7 +125,6 @@ func convertExMsgToMessage(chatMsg openai.ChatCompletionMessage, sessionID, user
 		Model:        sessionModel,
 		RequestModel: sessionModel,
 		HasToolCalls: len(chatMsg.ToolCalls) > 0,
-		IsNonsense:   false,
 		CreatedAt:    createdAt,
 	}
 }
@@ -359,45 +358,28 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 		}
 	}
 
-	if len(systemPrompts) > 0 {
-		content += collapsibleCardStart("Current System Prompts", "gear-fill", len(systemPrompts), pages.Prompts > 1)
-		if legacyPromptFallback {
-			content += components.WarningAlert("Legacy fallback — this session has no typed prompt snapshot yet; these entries came from transcript system messages.")
-		} else if !session.SystemPromptsUpdatedAt.IsZero() {
-			content += components.NoteAlert("Last assembled", debuger.FormatTime(session.SystemPromptsUpdatedAt)+" ("+debuger.FormatDuration(session.SystemPromptsUpdatedAt)+")")
+	currentPromptCount := 0
+	for _, prompt := range systemPrompts {
+		if excluded, _ := components.ToolRetrievablePrompt(prompt.Key, prompt.Title); !excluded {
+			currentPromptCount++
 		}
-		if archivedSystemPromptCount > 0 {
-			content += components.NoteAlert("Historical snapshots hidden", fmt.Sprintf("%d stale system-prompt snapshots were archived by an older summarization flow. They are not current prompts and will be purged on the next summary cycle.", archivedSystemPromptCount))
-		}
-		promptPage := detailPageSlice(systemPrompts, pages.Prompts)
-		for i, prompt := range promptPage {
-			content += fmt.Sprintf(`
-<div class="mb-3">
-    <div class="d-flex align-items-center gap-2 mb-2"><strong>System Prompt #%d — %s</strong>%s%s</div>
-    %s
-</div>`, (pages.Prompts-1)*sessionDetailItemsPerPage+i+1,
-				template.HTMLEscapeString(prompt.Title), components.Badge(prompt.Key, "secondary"), components.Badge(fmt.Sprintf("%d bytes", len(prompt.Content)), "info"),
-				components.ExpandableWithPreview(prompt.Content, 500))
-		}
-		content += detailPagination(sessionID, "prompts_page", pages.Prompts, len(systemPrompts), pages)
-		content += collapsibleCardEnd()
 	}
+	content += collapsibleCardStart("Current System Prompts", "gear-fill", currentPromptCount, true)
+	content += `<p class="text-muted mb-3">Ordered prompt array actually sent to the model. Each row is a separate document you can open on its own. Knowledge, web results, files, and full position lists are tool data and are not part of this list — only a short account-status summary belongs here.</p>`
+	if legacyPromptFallback {
+		content += components.WarningAlert("Legacy fallback — this session has no typed prompt snapshot yet; these entries came from transcript system messages.")
+	} else if !session.SystemPromptsUpdatedAt.IsZero() {
+		content += components.NoteAlert("Last assembled", debuger.FormatTime(session.SystemPromptsUpdatedAt)+" ("+debuger.FormatDuration(session.SystemPromptsUpdatedAt)+")")
+	}
+	if archivedSystemPromptCount > 0 {
+		content += components.NoteAlert("Historical snapshots hidden", fmt.Sprintf("%d stale system-prompt snapshots were archived by an older summarization flow. They are not current prompts and will be purged on the next summary cycle.", archivedSystemPromptCount))
+	}
+	content += components.RenderPromptArray(components.PromptEntriesFromSnapshot(systemPrompts))
+	content += collapsibleCardEnd()
 
 	user, _ := dp.GetUser(session.UserID)
-	if user != nil && (len(user.ContextSummary) > 0 || len(user.ContextTags) > 0) {
-		content += collapsibleCardStart("User Context", "person-lines-fill", len(user.ContextSummary)+len(user.ContextTags), false)
-		if len(user.ContextSummary) > 0 {
-			content += `<h6>Summary</h6><ol>`
-			for _, entry := range user.ContextSummary {
-				content += `<li>` + template.HTMLEscapeString(entry) + `</li>`
-			}
-			content += `</ol>`
-		}
-		if len(user.ContextTags) > 0 {
-			content += `<h6>Tags</h6>` + components.TagBadges(user.ContextTags)
-		}
-		content += collapsibleCardEnd()
-	}
+	content += renderUserContextCard(user)
+	content += renderSessionContextCard(session, nil)
 
 	// Messages card
 	content += collapsibleCardStart("Active Messages", "chat-dots-fill", len(messages), true)
@@ -650,6 +632,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 	}
 
 	content += collapsibleCardEnd()
+	content += renderOpenedToolsCard(handler, session, files)
 	content += ui.ContainerEnd()
 	return ui.Header("Agentize Debug - Session: "+template.HTMLEscapeString(sessionID)) + ui.NavbarAndBody("/agentize/debug", content) + ui.Footer(), nil
 }

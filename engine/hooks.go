@@ -12,7 +12,7 @@ type StatusPhase string
 
 const (
 	StatusReceived      StatusPhase = "received"       // message received
-	StatusAnalyzing     StatusPhase = "analyzing"      // checking nonsense, building prompts
+	StatusAnalyzing     StatusPhase = "analyzing"      // building prompts and routing
 	StatusRouting       StatusPhase = "routing"        // Core deciding high/low agent
 	StatusThinking      StatusPhase = "thinking"       // waiting for LLM response
 	StatusToolApproval  StatusPhase = "tool_approval"  // waiting for a human approve/reject decision

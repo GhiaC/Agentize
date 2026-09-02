@@ -25,7 +25,11 @@ type DebugHandler struct {
 	// coreSystemPromptIsPreview marks the wired provider as a store-only
 	// reconstruction (no live Core), so the page can flag it as a preview.
 	coreSystemPromptIsPreview bool
+	nodeToolsLookup           NodeToolsLookup
 }
+
+// NodeToolsLookup returns the active tool names granted by one opened knowledge node.
+type NodeToolsLookup func(path string) []string
 
 // NewDebugHandler creates a new debug handler for a SessionStore
 func NewDebugHandler(store model.SessionStore) (*DebugHandler, error) {
@@ -100,4 +104,17 @@ func (h *DebugHandler) GetStore() DebugStore {
 // GetSessionStore returns the underlying model.SessionStore
 func (h *DebugHandler) GetSessionStore() model.SessionStore {
 	return h.store
+}
+
+// SetNodeToolsLookup wires knowledge-tree tool names for the session Opened Tools card.
+func (h *DebugHandler) SetNodeToolsLookup(fn NodeToolsLookup) {
+	h.nodeToolsLookup = fn
+}
+
+// ToolsForNode returns active tool names for an opened node path.
+func (h *DebugHandler) ToolsForNode(path string) []string {
+	if h == nil || h.nodeToolsLookup == nil || path == "" {
+		return nil
+	}
+	return h.nodeToolsLookup(path)
 }

@@ -42,7 +42,7 @@ func TestRewritePostgreSQLQueryExistsAsInteger(t *testing.T) {
 func TestRewritePostgreSQLQueryMessageInsert(t *testing.T) {
 	got := rewritePostgreSQLQuery(messageInsertSQL)
 	for _, fragment := range []string{
-		`INSERT INTO messages`, `ON CONFLICT (message_id) DO UPDATE SET`, `VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+		`INSERT INTO messages`, `ON CONFLICT (message_id) DO UPDATE SET`, `VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("message insert rewrite %q missing %q", got, fragment)

@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghiac/agentize/agentmanager"
 	"github.com/ghiac/agentize/engine"
-	"github.com/ghiac/agentize/llmutils"
 	"github.com/ghiac/agentize/log"
 	"github.com/ghiac/agentize/metrics"
 	"github.com/ghiac/agentize/model"
@@ -154,8 +153,6 @@ type CoreHandler struct {
 	// Persistent recurring-task scheduler scoped to Core sessions.
 	taskScheduler *engine.TaskScheduler
 
-	userModeration *engine.UserModeration
-
 	backups *engine.BackupChain
 
 	Callback engine.Callback
@@ -289,15 +286,6 @@ func (ch *CoreHandler) UseLLMConfig(config engine.LLMConfig) error {
 	} else {
 		ch.backups = engine.NewBackupChain(config.BackupProviders)
 	}
-
-	ch.userModeration = engine.NewUserModeration(
-		engine.IsNonsenseMessageFast,
-		func(ctx context.Context, msg string) (bool, error) {
-			return llmutils.IsNonsenseMessageLLM(ctx, ch.llmClient, ch.llmConfig.Model, msg)
-		},
-		ch.getOrCreateUser,
-		ch.saveUser,
-	)
 
 	if ch.taskScheduler != nil {
 		ch.taskScheduler.Start(context.Background())
@@ -464,30 +452,8 @@ func (ch *CoreHandler) processOneMessageCore(
 
 	engine.NotifyStatus(ctx, userID, "", engine.StatusAnalyzing, "")
 
-	var isNonsense bool
-	if ch.userModeration != nil {
-		if isBanned, banMessage := ch.userModeration.CheckBanStatus(userID); isBanned {
-			metrics.Moderation("banned")
-			return banMessage, nil
-		}
-		ctx = model.WithUserID(ctx, userID)
-		shouldBan, banMessage, err := ch.userModeration.ProcessNonsenseCheck(ctx, userID, userMessage)
-		if err != nil {
-			metrics.Moderation("error")
-			log.Log.Warnf("[CoreHandler] ⚠️  Failed to process nonsense check, proceeding anyway | UserID: %s | Error: %v", userID, err)
-		} else {
-			isNonsense = banMessage != "" || shouldBan
-			if shouldBan {
-				metrics.Moderation("banned")
-				metrics.Ban("nonsense")
-				return banMessage, nil
-			}
-			if banMessage != "" {
-				metrics.Moderation("nonsense")
-				return banMessage, nil
-			}
-			metrics.Moderation("ok")
-		}
+	if user, err := ch.getOrCreateUser(userID); err == nil && user.IsCurrentlyBanned() {
+		return user.BanMessage, nil
 	}
 
 	coreSession, err := ch.getOrCreateCoreSession(userID)
@@ -533,7 +499,6 @@ func (ch *CoreHandler) processOneMessageCore(
 	)
 	userMsgID, userSeqID := coreSession.GenerateMessageIDWithSeq()
 	userMsg := model.NewUserMessage(userMsgID, userSeqID, userID, coreSession.SessionID, userMessage, contentType)
-	userMsg.IsNonsense = isNonsense
 	ch.saveMessage(userMsg)
 	rec.SetUserMessageID(userMsgID)
 	ctx = engine.WithUserMessageID(ctx, userMsgID)

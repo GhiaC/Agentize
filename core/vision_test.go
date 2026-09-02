@@ -173,7 +173,6 @@ func TestProcessMessageWithImage_RecordsRouteTrace(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UseVisionLLMConfig: %v", err)
 	}
-	ch.userModeration = nil // skip the nonsense check so it doesn't consume a mock response
 
 	resp, err := ch.ProcessMessageWithImage(context.Background(), "user1", "what is this?", []byte("img"), "image/png")
 	if err != nil {

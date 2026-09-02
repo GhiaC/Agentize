@@ -33,18 +33,29 @@ func TestUserDetailPage_CoreSystemPromptCard(t *testing.T) {
 	}
 
 	const userID = "user-1"
-	if _, err := dbStore.GetOrCreateUser(userID); err != nil {
+	user, err := dbStore.GetOrCreateUser(userID)
+	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	// Seed a Core session so the preview renders the Core Session Context section.
+	user.ContextSummary = model.SummaryEntries{"prefers concise answers"}
+	user.ContextTags = []string{"concise"}
+	user.ActiveConversationID = "user-1-c0001"
+	if err := dbStore.PutUser(user); err != nil {
+		t.Fatalf("save user: %v", err)
+	}
+	// Seed the active conversation. Its session—not the internal Core session—is
+	// the source of Session Context in the prompt preview.
 	if err := dbStore.Put(&model.Session{
-		SessionID: "core-s1",
+		SessionID: "conv-s1",
 		UserID:    userID,
-		AgentType: model.AgentTypeCore,
+		AgentType: model.AgentTypeConversation,
 		Summary:   model.SummaryEntries{"remembers the user prefers Go"},
 		Tags:      []string{"golang"},
 	}); err != nil {
-		t.Fatalf("seed core session: %v", err)
+		t.Fatalf("seed conversation session: %v", err)
+	}
+	if err := dbStore.PutConversation(model.NewConversation(userID, "user-1-c0001", "conv-s1", "Go work", "test-model", 1)); err != nil {
+		t.Fatalf("seed conversation: %v", err)
 	}
 
 	t.Setenv("AGENTIZE_DEBUG_UNSAFE", "1") // no creds in test: register dashboard in dev mode
@@ -69,16 +80,19 @@ func TestUserDetailPage_CoreSystemPromptCard(t *testing.T) {
 		"Required",                      // section classification badges
 		"Static",                        //   "
 		"remembers the user prefers Go", // the seeded Core summary surfaced
-		"Sessions",                      // existing secondary cards still present
+		"prefers concise answers",       // persisted User Context surfaced
+		"Conversations",                 // user-facing list replaces raw sessions
 		"<details",                      // native collapsible markup
+		"Cross-conversation facts",      // dedicated User Context card
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("user detail page should contain %q", want)
 		}
 	}
 
-	// Every collapsible card must be collapsed by default (no open attribute).
-	if strings.Contains(body, `collapsible-card mb-4" open`) {
-		t.Error("collapsible cards must be collapsed by default")
+	for _, removed := range []string{"Core Agent (Brain)", "Opened Files", "Nonsense" + " Count", "Last " + "Nonsense"} {
+		if strings.Contains(body, removed) {
+			t.Errorf("removed user-page section leaked: %q", removed)
+		}
 	}
 }

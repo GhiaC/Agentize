@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ghiac/agentize/model"
+	"github.com/ghiac/agentize/store"
 )
 
 // TestSystemPromptSectionsFor_KeysAndClassification checks that the structured
@@ -62,6 +63,79 @@ func TestSystemPromptSectionsFor_KeysAndClassification(t *testing.T) {
 
 	if _, ok := byKey["agents"]; ok {
 		t.Error("agent catalog must be a tool concern, not prompt content")
+	}
+}
+
+func TestPreviewSystemPromptUsesPersistedUserAndActiveConversationContext(t *testing.T) {
+	st, err := store.NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, _ := st.GetOrCreateUser("u1")
+	user.ContextSummary = model.SummaryEntries{"stable user fact"}
+	user.ContextTags = []string{"user-tag"}
+	user.ActiveConversationID = "u1-c0001"
+	if err := st.PutUser(user); err != nil {
+		t.Fatal(err)
+	}
+	session := model.NewSessionWithID("u1", "conv-s1", model.AgentTypeConversation)
+	session.Title = "Active work"
+	session.Summary = model.SummaryEntries{"conversation fact"}
+	session.Tags = []string{"session-tag"}
+	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutConversation(model.NewConversation("u1", "u1-c0001", session.SessionID, session.Title, "m", 1)); err != nil {
+		t.Fatal(err)
+	}
+	sections, err := PreviewSystemPromptSections(st, "u1", DefaultCoreHandlerConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]string{}
+	for _, section := range sections {
+		byKey[section.Key] = section.Content
+	}
+	if !strings.Contains(byKey[SectionUserContext], "stable user fact") {
+		t.Fatal("persisted user context is empty")
+	}
+	if !strings.Contains(byKey[SectionCoreSessionContext], "conversation fact") {
+		t.Fatal("active conversation context is empty")
+	}
+}
+
+func TestPreviewSystemPromptFallsBackToLatestConversationWhenNoneActive(t *testing.T) {
+	st, err := store.NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, _ := st.GetOrCreateUser("u1")
+	user.ContextSummary = model.SummaryEntries{"stable user fact"}
+	if err := st.PutUser(user); err != nil {
+		t.Fatal(err)
+	}
+	session := model.NewSessionWithID("u1", "conv-s1", model.AgentTypeConversation)
+	session.Title = "Latest work"
+	session.Summary = model.SummaryEntries{"conversation fact"}
+	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutConversation(model.NewConversation("u1", "u1-c0001", session.SessionID, session.Title, "m", 1)); err != nil {
+		t.Fatal(err)
+	}
+	sections, err := PreviewSystemPromptSections(st, "u1", DefaultCoreHandlerConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]string{}
+	for _, section := range sections {
+		byKey[section.Key] = section.Content
+	}
+	if !strings.Contains(byKey[SectionUserContext], "stable user fact") {
+		t.Fatal("persisted user context is empty")
+	}
+	if !strings.Contains(byKey[SectionCoreSessionContext], "conversation fact") {
+		t.Fatal("latest conversation context should fill session context when none is marked active")
 	}
 }
 

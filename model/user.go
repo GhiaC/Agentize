@@ -16,10 +16,6 @@ type User struct {
 	BanUntil   time.Time // When the ban expires (zero time means permanent ban)
 	BanMessage string    // Message to show to banned users
 
-	// Nonsense message tracking
-	NonsenseCount    int       // Number of consecutive nonsense messages
-	LastNonsenseTime time.Time // Time of last nonsense message
-
 	// Active session IDs per agent type
 	// Key: AgentType (core, high, low), Value: SessionID
 	// This is persisted to database and loaded on startup
@@ -52,7 +48,6 @@ func NewUser(userID string) *User {
 		IsBanned:         false,
 		BanUntil:         time.Time{},
 		BanMessage:       "",
-		NonsenseCount:    0,
 		ActiveSessionIDs: make(map[AgentType]string),
 		SessionSeqs:      make(map[AgentType]int),
 		ContextSummary:   SummaryEntries{},
@@ -93,20 +88,6 @@ func (u *User) Unban() {
 	u.IsBanned = false
 	u.BanUntil = time.Time{}
 	u.BanMessage = ""
-	u.NonsenseCount = 0
-	u.UpdatedAt = time.Now()
-}
-
-// IncrementNonsenseCount increments the nonsense message count
-func (u *User) IncrementNonsenseCount() {
-	u.NonsenseCount++
-	u.LastNonsenseTime = time.Now()
-	u.UpdatedAt = time.Now()
-}
-
-// ResetNonsenseCount resets the nonsense message count
-func (u *User) ResetNonsenseCount() {
-	u.NonsenseCount = 0
 	u.UpdatedAt = time.Now()
 }
 

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -232,6 +231,7 @@ func (e *Engine) UseFunctionRegistry(registry *model.FunctionRegistry) {
 	e.Functions = registry
 	e.RegisterManageFilesTool()
 	e.RegisterManageContextTool()
+	e.RegisterManageKnowledgeTool()
 	e.RegisterTextTools()
 	e.RegisterTaskSchedulerTool()
 	e.RegisterBrowserUseTool()
@@ -994,13 +994,13 @@ func summarizeNode(node *model.Node) model.NodeDigest {
 	}
 }
 
-// GetSystemPrompts returns an array of system prompts in the following order:
-// 1. Base prompt (engine.md) - Architecture overview and instructions
-// 2. Session context - Summary and tags from previous conversations (if summarized)
-// 3. File index - List of all knowledge files with metadata
-// 4. Opened files - Content of currently opened nodes
+// GetSystemPromptEntries returns the typed prompt array in this order:
+//  1. Agent instructions (engine.md)
+//  2. User context — cross-conversation summary entries and tags
+//  3. Session context — this session's title, summary entries, and tags
 //
-// The order is deterministic to enable AI prompt caching.
+// Knowledge, web results, files, positions, and tool manifests are retrieved
+// on demand. The order is deterministic to enable prompt caching.
 func (e *Engine) GetSystemPromptEntries(session *model.Session) []model.SystemPromptEntry {
 	var prompts []model.SystemPromptEntry
 	add := func(key, title, content, source string) {
@@ -1014,15 +1014,9 @@ func (e *Engine) GetSystemPromptEntries(session *model.Session) []model.SystemPr
 		add("agent_instructions", "Agent Instructions", basePrompt, "engine/user_agent.md")
 	}
 
-	// Knowledge is discoverable as compact metadata. Content and node-owned tools
-	// are injected only for nodes explicitly opened in this session.
-	fileIndex := e.buildFileIndex(session)
-	add("knowledge_tree", "Knowledge Tree Nodes", fileIndex, "knowledge-tree")
-
-	for i, opened := range e.getOpenedNodePrompts(session) {
-		add(fmt.Sprintf("opened_node_%d", i+1), "Opened Node", opened, "opened-node")
-	}
-	add("opened_tools", "Opened Tools", e.buildOpenedToolsPrompt(session), "opened-nodes")
+	// Knowledge, web results, files, positions, and tool manifests are deliberately
+	// omitted. They are retrieved on demand through tools. NodeDigests only control
+	// which node-owned tools are active; they never inject node content here.
 	add("user_context", "User Context", e.buildUserContext(session.UserID), "user")
 	add("session_context", "Session Context", e.buildSessionContext(session), "session")
 
@@ -1091,157 +1085,6 @@ func (e *Engine) buildSessionContext(session *model.Session) string {
 	return sb.String()
 }
 
-// buildFileIndex generates a compact file index for LLM context.
-// Format: Path | Description | Summary | IsOpen | Length
-func (e *Engine) buildFileIndex(session *model.Session) string {
-	// Build set of opened paths for quick lookup
-	openedPaths := make(map[string]bool)
-	for _, digest := range session.NodeDigests {
-		openedPaths[digest.Path] = true
-	}
-
-	// Collect all nodes recursively
-	var entries []string
-	e.collectFileIndexEntries("root", openedPaths, &entries)
-
-	if len(entries) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("# Knowledge Tree Nodes\n\n")
-	sb.WriteString("| Path | Description | Summary | Open | Len |\n")
-	sb.WriteString("|------|-------------|---------|------|-----|\n")
-	for _, entry := range entries {
-		sb.WriteString(entry)
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
-}
-
-func (e *Engine) buildOpenedToolsPrompt(session *model.Session) string {
-	if session == nil {
-		return ""
-	}
-	var sb strings.Builder
-	seen := map[string]bool{}
-	for _, digest := range session.NodeDigests {
-		node, err := e.Repo.LoadNode(digest.Path)
-		if err != nil {
-			continue
-		}
-		for _, tool := range node.Tools {
-			name := tool.Name
-			if name == "open_file" {
-				name = "open_node"
-			}
-			if name == "close_file" {
-				name = "close_node"
-			}
-			if tool.Status != model.ToolStatusActive || seen[name] {
-				continue
-			}
-			if sb.Len() == 0 {
-				sb.WriteString("# Opened Tools\n\nOnly tools contributed by explicitly opened knowledge nodes are available.\n\n")
-			}
-			seen[name] = true
-			fmt.Fprintf(&sb, "- `%s` (node `%s`): %s\n", name, digest.Path, tool.Description)
-		}
-	}
-	return sb.String()
-}
-
-// collectFileIndexEntries recursively collects file index entries
-func (e *Engine) collectFileIndexEntries(path string, openedPaths map[string]bool, entries *[]string) {
-	node, err := e.Repo.LoadNode(path)
-	if err != nil {
-		return
-	}
-
-	// Build entry: | Path | Description | Summary | Open | Len |
-	isOpen := "no"
-	if openedPaths[path] {
-		isOpen = "yes"
-	}
-
-	// Truncate description and summary for compact display
-	desc := truncateString(node.Description, 50)
-	summary := truncateString(node.Summary, 80)
-	contentLen := len(node.Content)
-
-	entry := fmt.Sprintf("| %s | %s | %s | %s | %d |", path, desc, summary, isOpen, contentLen)
-	*entries = append(*entries, entry)
-
-	// Recurse into children
-	children, err := e.Repo.GetChildren(path)
-	if err != nil {
-		return
-	}
-
-	for _, childPath := range children {
-		e.collectFileIndexEntries(childPath, openedPaths, entries)
-	}
-}
-
-func truncateString(s string, maxLen int) string {
-	s = strings.ReplaceAll(s, "|", "/")
-	s = strings.ReplaceAll(s, "\n", " ")
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen-3]) + "..."
-}
-
-// getOpenedNodePrompts returns prompts for opened nodes in deterministic order
-func (e *Engine) getOpenedNodePrompts(session *model.Session) []string {
-	if len(session.NodeDigests) == 0 {
-		return nil
-	}
-
-	// Extract node paths from NodeDigests
-	nodePaths := make([]string, 0, len(session.NodeDigests))
-	for _, digest := range session.NodeDigests {
-		nodePaths = append(nodePaths, digest.Path)
-	}
-
-	// Sort paths in tree order (by depth, then lexicographically)
-	// This ensures consistent ordering for AI prompt caching
-	sort.Slice(nodePaths, func(i, j int) bool {
-		depthI := strings.Count(nodePaths[i], "/")
-		depthJ := strings.Count(nodePaths[j], "/")
-		if depthI != depthJ {
-			return depthI < depthJ
-		}
-		return nodePaths[i] < nodePaths[j]
-	})
-
-	// Build prompts array - one per node
-	var prompts []string
-	for _, path := range nodePaths {
-		node, err := e.Repo.LoadNode(path)
-		if err != nil {
-			continue // Skip nodes that can't be loaded
-		}
-
-		// Add node content if available
-		if node.Content != "" {
-			// Always include path as header, optionally with title
-			var header string
-			if node.Title != "" {
-				header = fmt.Sprintf("# %s\n**Path:** `%s`\n\n", node.Title, path)
-			} else {
-				header = fmt.Sprintf("**Path:** `%s`\n\n", path)
-			}
-
-			prompts = append(prompts, header+node.Content)
-		}
-	}
-
-	return prompts
-}
-
 // GetTools returns knowledge tools contributed by this session's explicitly
 // opened nodes, plus configured platform tools. Unopened nodes never grant a
 // capability.
@@ -1292,6 +1135,9 @@ func (e *Engine) GetTools(session *model.Session) []openai.Tool {
 	// were buffered on its session (see processToolResult / text_tools.go).
 	if e.Sessions != nil {
 		tools = append(tools, ManageContextToolDefinition(), CollectResultToolDefinition(), InspectResultToolDefinition())
+	}
+	if e.Repo != nil {
+		tools = append(tools, ManageKnowledgeToolDefinition())
 	}
 	// Persistent recurring tasks are a built-in capability, so the LLM receives
 	// this schema without requiring a repository tools.json entry.

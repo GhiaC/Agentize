@@ -233,6 +233,21 @@ func (ag *Agentize) createDebugHandler() (*debuger.DebugHandler, error) {
 			return core.PreviewSystemPromptSections(sessionStore, userID, core.CoreHandlerConfig{})
 		}, true)
 	}
+	if repo := ag.GetRepository(); repo != nil {
+		handler.SetNodeToolsLookup(func(path string) []string {
+			node, err := repo.LoadNode(path)
+			if err != nil || node == nil {
+				return nil
+			}
+			names := make([]string, 0, len(node.Tools))
+			for _, tool := range node.Tools {
+				if tool.Status == model.ToolStatusActive {
+					names = append(names, tool.Name)
+				}
+			}
+			return names
+		})
+	}
 
 	return handler, nil
 }
@@ -474,7 +489,7 @@ func (ag *Agentize) handleDebugUserDetail(c *gin.Context) {
 	}
 
 	showDeleted := c.Query("deleted") == "1"
-	html, err := pages.RenderUserDetail(handler, userID, showDeleted)
+	html, err := pages.RenderUserDetailPage(handler, userID, showDeleted, getNamedPageParam(c, "conversations_page"))
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate user detail page: %v", err)})
 		return

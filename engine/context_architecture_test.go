@@ -85,19 +85,49 @@ func TestSystemPromptEntriesExposeTypedContext(t *testing.T) {
 	for _, entry := range entries {
 		byKey[entry.Key] = entry.Content
 	}
-	for _, key := range []string{"agent_instructions", "knowledge_tree", "opened_node_1", "opened_tools", "user_context", "session_context"} {
+	for _, key := range []string{"agent_instructions", "user_context", "session_context"} {
 		if byKey[key] == "" {
 			t.Errorf("missing prompt entry %s", key)
 		}
 	}
-	if !strings.Contains(byKey["opened_tools"], "child_tool") || strings.Contains(byKey["opened_tools"], "root_tool") {
-		t.Fatalf("wrong opened tool manifest: %s", byKey["opened_tools"])
+	for _, forbidden := range []string{"knowledge_tree", "opened_node_1", "opened_tools", "positions", "web_results", "user_files"} {
+		if _, ok := byKey[forbidden]; ok {
+			t.Fatalf("tool-retrievable data leaked into prompt: %s", forbidden)
+		}
 	}
 	if !strings.Contains(byKey["user_context"], "prefers concise") {
 		t.Fatal("user context missing")
 	}
 	if !strings.Contains(byKey["session_context"], "Plan") {
 		t.Fatal("session title missing")
+	}
+}
+
+func TestManageKnowledgeSearchGetAndOpen(t *testing.T) {
+	eng, st := contextTestEngine(t)
+	session := model.NewSessionWithID("u1", "s1", model.AgentTypeConversation)
+	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	base := map[string]interface{}{"__user_id__": "u1", "__session_id__": "s1"}
+	base["action"], base["query"] = "search", "child"
+	result, err := eng.Functions.Execute("manage_knowledge", base)
+	if err != nil || !strings.Contains(result, "root/child") {
+		t.Fatalf("search: %q %v", result, err)
+	}
+	base["action"], base["path"] = "get", "root/child"
+	result, err = eng.Functions.Execute("manage_knowledge", base)
+	if err != nil || !strings.Contains(result, "child content") {
+		t.Fatalf("get: %q %v", result, err)
+	}
+	base["action"] = "open"
+	result, err = eng.Functions.Execute("manage_knowledge", base)
+	if err != nil || !strings.Contains(result, "child content") {
+		t.Fatalf("open: %q %v", result, err)
+	}
+	loaded, _ := st.Get("s1")
+	if !toolNames(eng.GetTools(loaded))["child_tool"] {
+		t.Fatal("opening node did not activate its tool")
 	}
 }
 

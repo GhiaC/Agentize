@@ -47,6 +47,8 @@ type DebugStore interface {
 	// ActiveSessionIDs and SessionSeqs.
 	DeleteUserData(userID string) error
 
+	// ListConversations returns one user's conversations, newest UpdatedAt first.
+	ListConversations(userID string) ([]*model.Conversation, error)
 	// ListAllConversations returns every conversation, newest UpdatedAt first.
 	ListAllConversations() ([]*model.Conversation, error)
 }

@@ -20,7 +20,10 @@ func TestRenderSessionDetailPaginatesAndCollapsesCollections(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	session := model.NewSessionWithID("alice", "alice-conv-s0001", model.AgentTypeConversation)
 	session.Summary = model.SummaryEntries{"first immutable fact", "second immutable fact"}
-	session.SystemPrompts = []model.SystemPromptEntry{{Key: "knowledge_tree", Title: "Knowledge Tree Nodes", Content: "current context", Source: "knowledge-tree"}}
+	session.SystemPrompts = []model.SystemPromptEntry{
+		{Key: "agent_instructions", Title: "Agent Instructions", Content: "current instructions", Source: "engine/user_agent.md"},
+		{Key: "positions", Title: "Open Positions", Content: "BTC long dump", Source: "legacy"},
+	}
 	session.SystemPromptsUpdatedAt = time.Now()
 	session.ArchivedMsgs = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: "stale context one"}}
 	for i := 1; i <= 26; i++ {
@@ -61,11 +64,15 @@ func TestRenderSessionDetailPaginatesAndCollapsesCollections(t *testing.T) {
 		`<details class="card mb-4 debug-section"`, "Archived Messages (Debug Only)",
 		"Historical snapshots hidden", "26</span>", "archived_page=1", "tools_page=1",
 		"first immutable fact", "second immutable fact",
-		"Knowledge Tree Nodes", "knowledge_tree", "User Context", "prefers concise answers",
+		"Agent Instructions", "agent_instructions", "User Context", "prefers concise answers",
+		"Session Context", "Opened Tools",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("missing %q in rendered session page", want)
 		}
+	}
+	if !strings.Contains(html, "Excluded from current prompt") {
+		t.Fatal("position dumps must be bucketed out of the current prompt list")
 	}
 	if strings.Contains(html, "stale context one") || strings.Contains(html, "stale context two") {
 		t.Fatal("historical system prompt contents must not be rendered as current prompts")

@@ -347,12 +347,12 @@ var (
 
 	moderationChecks = factory.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace, Subsystem: "moderation", Name: "checks_total",
-		Help: "Moderation checks by result (ok|nonsense|banned|error).",
+		Help: "Policy moderation checks by result.",
 	}, []string{"result"})
 
 	bans = factory.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace, Subsystem: "moderation", Name: "bans_total",
-		Help: "User bans applied by reason (nonsense|offensive|manual).",
+		Help: "User bans applied by policy reason (offensive|manual).",
 	}, []string{"reason"})
 )
 
@@ -362,7 +362,7 @@ func KnowledgeOpen(status string) { knowledgeOpens.WithLabelValues(status).Inc()
 // Moderation records a moderation check result.
 func Moderation(result string) { moderationChecks.WithLabelValues(result).Inc() }
 
-// Ban records a user ban with its reason (nonsense|offensive).
+// Ban records a user ban with its policy reason.
 func Ban(reason string) {
 	if reason == "" {
 		reason = "unknown"

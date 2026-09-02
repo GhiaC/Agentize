@@ -60,9 +60,6 @@ type Message struct {
 	// Response information
 	FinishReason string // Finish reason from LLM (stop, tool_calls, length, etc.)
 
-	// Nonsense detection
-	IsNonsense bool // Whether this message was detected as nonsense
-
 	// Metadata is the durable, host-visible payload for compact/widget
 	// messages (schedule, alert, chart, position, ...). Content stays a
 	// short summary; extra fields grow here without a column per widget.

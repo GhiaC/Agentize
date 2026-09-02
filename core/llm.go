@@ -117,7 +117,7 @@ func (ch *CoreHandler) InvalidateSystemPromptCache(userID string) {
 // for the debug UI, so the live array and the debug view never drift.
 func (ch *CoreHandler) buildSystemPrompts(userID string) ([]string, error) {
 	coreSession := ch.currentCoreSession(userID)
-	sections, err := ch.assembleSections(userID, coreSession)
+	sections, err := ch.assembleSections(userID, contextSession(ch.sessionHandler.GetStore(), userID, coreSession))
 	if err != nil {
 		return nil, err
 	}
