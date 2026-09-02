@@ -84,6 +84,8 @@ func TestRenderBrowserDebugShowsJobsLoadsAndScreenshot(t *testing.T) {
 		"Example",
 		"https://example.com",
 		"Kill browser",
+		"Queued",
+		"Running",
 		"Live sessions",
 	} {
 		if !strings.Contains(html, want) {

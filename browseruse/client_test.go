@@ -272,6 +272,7 @@ func TestClientDebugRequestsBoundedMetadata(t *testing.T) {
 		return jsonResponse(http.StatusOK, `{
 			"total_jobs":1,
 			"running_jobs":0,
+			"queued_jobs":0,
 			"max_jobs":1000,
 			"max_concurrent_jobs":2,
 			"jobs":[{
@@ -297,7 +298,7 @@ func TestClientDebugRequestsBoundedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.TotalJobs != 1 || len(snapshot.Jobs) != 1 || snapshot.Jobs[0].LoadCount != 1 {
+	if snapshot.TotalJobs != 1 || snapshot.QueuedJobs != 0 || len(snapshot.Jobs) != 1 || snapshot.Jobs[0].LoadCount != 1 {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 }
@@ -338,5 +339,17 @@ func TestClientRejectsUnsafeDownloadName(t *testing.T) {
 	}
 	if _, err := client.Download(context.Background(), "session-42", "job-1", "../secret"); err == nil {
 		t.Fatal("expected invalid download name error")
+	}
+}
+
+func TestAPIErrorBusy(t *testing.T) {
+	t.Parallel()
+	busy := &APIError{StatusCode: http.StatusServiceUnavailable, Message: "browser session busy: autonomous job abc queued"}
+	if !busy.Busy() || !IsBusy(busy) {
+		t.Fatal("503 busy must match")
+	}
+	capacity := &APIError{StatusCode: http.StatusServiceUnavailable, Message: "browser job capacity reached"}
+	if capacity.Busy() || IsBusy(capacity) {
+		t.Fatal("capacity 503 is not session busy")
 	}
 }

@@ -805,6 +805,7 @@ func (ag *Agentize) handleDebugBrowserLive(c *gin.Context) {
 		"total_tabs":    snapshot.TotalTabs,
 		"sessions":      snapshot.Sessions,
 		"running_jobs":  snapshot.RunningJobs,
+		"queued_jobs":   snapshot.QueuedJobs,
 	})
 }
 

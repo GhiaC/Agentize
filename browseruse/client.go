@@ -64,6 +64,21 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("browser-use service returned HTTP %d: %s", e.StatusCode, e.Message)
 }
 
+// Busy reports a sidecar 503 that means the Chromium session is already owned
+// by an autonomous job. Callers should retry with status, not start another run.
+func (e *APIError) Busy() bool {
+	if e == nil || e.StatusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	return strings.Contains(strings.ToLower(e.Message), "busy")
+}
+
+// IsBusy reports whether err is a sidecar session-busy rejection.
+func IsBusy(err error) bool {
+	var api *APIError
+	return errors.As(err, &api) && api.Busy()
+}
+
 // NewClient validates config and creates a sidecar client.
 func NewClient(config Config) (*Client, error) {
 	baseURL, err := url.Parse(strings.TrimSpace(config.BaseURL))

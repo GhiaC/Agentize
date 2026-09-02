@@ -105,6 +105,9 @@ class JobManager:
 	async def create(self, session_id: str, request: StartJobRequest) -> JobResponse:
 		async with self._jobs_lock:
 			self._prune_locked()
+			inflight = self._inflight_job_locked(session_id)
+			if inflight is not None:
+				raise self._session_busy_error(session_id, inflight, operation="create")
 			if len(self._jobs) >= self.settings.max_jobs:
 				raise HTTPException(
 					status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -114,7 +117,15 @@ class JobManager:
 			self._jobs[job.id] = job
 			self._session_locks.setdefault(session_id, asyncio.Lock())
 			self._persist_job(job)
-			self._log(job, "info", f"job queued for session {session_id}")
+			running, queued = self._count_jobs_locked()
+			self._log(job, "info", f"job queued running={running} queued={queued}")
+			LOGGER.info(
+				"job_queued session=%s running=%d queued=%d max_concurrent=%d",
+				_session_ref(session_id),
+				running,
+				queued,
+				self.settings.max_concurrent_jobs,
+			)
 			job.task = asyncio.create_task(self._execute(job), name=f"browser-use:{job.id}")
 			return job.response()
 
@@ -305,7 +316,7 @@ class JobManager:
 		async with self._jobs_lock:
 			jobs = sorted(self._jobs.values(), key=lambda item: item.created_at, reverse=True)[:job_limit]
 			total_jobs = len(self._jobs)
-			running_jobs = sum(1 for item in self._jobs.values() if not item.status.terminal)
+			running_jobs, queued_jobs = self._count_jobs_locked()
 
 		debug_jobs: list[DebugJobResponse] = []
 		load_reader = getattr(self.runner, "network_loads", None)
@@ -325,9 +336,18 @@ class JobManager:
 		sessions = await self._debug_sessions(session_limit)
 		live_sessions = sum(1 for item in sessions if item.persistent)
 		total_tabs = sum(item.tab_count for item in sessions)
+		LOGGER.info(
+			"debug_snapshot total=%d running=%d queued=%d live_sessions=%d tabs=%d",
+			total_jobs,
+			running_jobs,
+			queued_jobs,
+			live_sessions,
+			total_tabs,
+		)
 		return BrowserDebugResponse(
 			total_jobs=total_jobs,
 			running_jobs=running_jobs,
+			queued_jobs=queued_jobs,
 			max_jobs=self.settings.max_jobs,
 			max_concurrent_jobs=self.settings.max_concurrent_jobs,
 			live_sessions=live_sessions,
@@ -510,7 +530,14 @@ class JobManager:
 				self._active_job_ids[job.session_id] = job.id
 				try:
 					await self._transition(job, JobStatus.RUNNING)
-					self._log(job, "info", "job started")
+					queued_s = max(0.0, (datetime.now(UTC) - job.created_at).total_seconds())
+					self._log(job, "info", f"job started after {queued_s:.1f}s in queue")
+					LOGGER.info(
+						"job_started session=%s queued_s=%.1f timeout_s=%d",
+						_session_ref(job.session_id),
+						queued_s,
+						self.settings.job_timeout_seconds,
+					)
 					job.result = await asyncio.wait_for(
 						self.runner.run(job.session_id, job.id, job.request),
 						timeout=self.settings.job_timeout_seconds,
@@ -566,13 +593,7 @@ class JobManager:
 			await asyncio.wait_for(lock.acquire(), timeout=TAB_LOCK_TIMEOUT_SECONDS)
 		except TimeoutError as exc:
 			job_id = self._active_job_ids.get(session_id, "")
-			LOGGER.warning("tab_lock_busy operation=%s session=%s active_job=%s", operation_name, _session_ref(session_id), job_id or "none")
-			detail = f"browser session busy: autonomous job {job_id} running" if job_id else "browser session busy"
-			raise HTTPException(
-				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-				detail=detail,
-				headers={"X-Browser-Session-Busy": "1"},
-			) from exc
+			raise self._session_busy_error(session_id, job_id=job_id, operation=operation_name) from exc
 		try:
 			return await asyncio.wait_for(operation(), timeout=TAB_OP_TIMEOUT_SECONDS)
 		except TimeoutError as exc:
@@ -590,6 +611,44 @@ class JobManager:
 		if checker is not None:
 			response.screenshot_available = bool(checker(job.id))
 		return response
+
+	def _inflight_job_locked(self, session_id: str) -> _Job | None:
+		for job in self._jobs.values():
+			if job.session_id == session_id and not job.status.terminal:
+				return job
+		return None
+
+	def _count_jobs_locked(self) -> tuple[int, int]:
+		running = 0
+		queued = 0
+		for job in self._jobs.values():
+			if job.status == JobStatus.RUNNING:
+				running += 1
+			elif job.status == JobStatus.QUEUED:
+				queued += 1
+		return running, queued
+
+	def _session_busy_error(self, session_id: str, job: _Job | None = None, job_id: str = "", operation: str = "") -> HTTPException:
+		if job is not None:
+			job_id = job.id
+			phase = "queued" if job.status == JobStatus.QUEUED else "running"
+		else:
+			phase = "running" if job_id else "busy"
+		LOGGER.warning(
+			"session_busy operation=%s session=%s job=%s phase=%s",
+			operation or "unknown",
+			_session_ref(session_id),
+			job_id or "none",
+			phase,
+		)
+		detail = "browser session busy"
+		if job_id:
+			detail = f"browser session busy: autonomous job {job_id} {phase}"
+		return HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail=detail,
+			headers={"X-Browser-Session-Busy": "1"},
+		)
 
 	def _prune_locked(self) -> None:
 		cutoff = datetime.now(UTC) - timedelta(seconds=self.settings.job_ttl_seconds)

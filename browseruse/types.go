@@ -210,6 +210,7 @@ type DebugSession struct {
 type DebugSnapshot struct {
 	TotalJobs         int            `json:"total_jobs"`
 	RunningJobs       int            `json:"running_jobs"`
+	QueuedJobs        int            `json:"queued_jobs"`
 	MaxJobs           int            `json:"max_jobs"`
 	MaxConcurrentJobs int            `json:"max_concurrent_jobs"`
 	LiveSessions      int            `json:"live_sessions"`

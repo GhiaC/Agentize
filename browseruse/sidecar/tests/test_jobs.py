@@ -5,6 +5,7 @@ import json
 import sys
 import types
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -342,6 +343,35 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
 		self.assertEqual(manager.session_busy("session-2"), (False, ""))
 		await manager.cancel("session-1", created.id)
 		self.assertEqual(manager.session_busy("session-1"), (False, ""))
+		await manager.shutdown()
+
+	async def test_create_rejects_second_job_on_busy_session(self):
+		runner = BlockingRunner()
+		manager = JobManager(settings(), runner)
+		first = await manager.create("session-1", StartJobRequest(task="hold"))
+		with self.assertRaises(HTTPException) as caught:
+			await manager.create("session-1", StartJobRequest(task="also hold"))
+		self.assertEqual(caught.exception.status_code, 503)
+		self.assertEqual(caught.exception.headers.get("X-Browser-Session-Busy"), "1")
+		self.assertIn(first.id, str(caught.exception.detail))
+		other = await manager.create("session-2", StartJobRequest(task="other session"))
+		self.assertEqual(other.status, JobStatus.QUEUED)
+		await manager.cancel("session-1", first.id)
+		await manager.cancel("session-2", other.id)
+		await manager.shutdown()
+
+	async def test_debug_counts_running_and_queued_separately(self):
+		runner = BlockingRunner()
+		manager = JobManager(replace(settings(), max_concurrent_jobs=1), runner)
+		first = await manager.create("session-1", StartJobRequest(task="hold-1"))
+		await asyncio.wait_for(runner.started.wait(), timeout=1)
+		second = await manager.create("session-2", StartJobRequest(task="hold-2"))
+		snapshot = await manager.debug(job_limit=10, load_limit=0)
+		self.assertEqual(snapshot.running_jobs, 1)
+		self.assertEqual(snapshot.queued_jobs, 1)
+		self.assertEqual(snapshot.total_jobs, 2)
+		await manager.cancel("session-1", first.id)
+		await manager.cancel("session-2", second.id)
 		await manager.shutdown()
 
 	async def test_running_job_makes_tab_actions_fail_fast_but_job_screenshot_remains_available(self):

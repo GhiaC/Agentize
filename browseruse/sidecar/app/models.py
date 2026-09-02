@@ -264,6 +264,7 @@ class DebugSessionResponse(BaseModel):
 class BrowserDebugResponse(BaseModel):
 	total_jobs: int
 	running_jobs: int
+	queued_jobs: int = 0
 	max_jobs: int
 	max_concurrent_jobs: int
 	live_sessions: int = 0

@@ -154,28 +154,32 @@ func browserToolOverview(configured bool, fetchErr error) string {
 func browserStats(snapshot *browseruse.DebugSnapshot) string {
 	loads, failures, bytes := browserLoadTotals(snapshot.Jobs)
 	return fmt.Sprintf(`<div class="row g-3 mb-3">
-		<div class="col-6 col-lg-2"><div class="card h-100"><div class="card-body">
+		<div class="col-6 col-lg"><div class="card h-100"><div class="card-body">
 			<div class="text-muted small">Jobs retained</div><div class="fs-4 fw-semibold">%d / %d</div>
 		</div></div></div>
-		<div class="col-6 col-lg-2"><div class="card h-100"><div class="card-body">
-			<div class="text-muted small">Active jobs</div><div class="fs-4 fw-semibold">%d</div>
+		<div class="col-6 col-lg"><div class="card h-100"><div class="card-body">
+			<div class="text-muted small">Running</div><div class="fs-4 fw-semibold" id="browser-running-jobs">%d</div>
 		</div></div></div>
-		<div class="col-6 col-lg-2"><div class="card h-100"><div class="card-body">
+		<div class="col-6 col-lg"><div class="card h-100"><div class="card-body">
+			<div class="text-muted small">Queued</div><div class="fs-4 fw-semibold" id="browser-queued-jobs">%d</div>
+		</div></div></div>
+		<div class="col-6 col-lg"><div class="card h-100"><div class="card-body">
 			<div class="text-muted small">Live sessions</div><div class="fs-4 fw-semibold" id="browser-live-sessions">%d</div>
 		</div></div></div>
-		<div class="col-6 col-lg-2"><div class="card h-100"><div class="card-body">
+		<div class="col-6 col-lg"><div class="card h-100"><div class="card-body">
 			<div class="text-muted small">Open tabs</div><div class="fs-4 fw-semibold" id="browser-live-tabs">%d</div>
 		</div></div></div>
-		<div class="col-6 col-lg-2"><div class="card h-100"><div class="card-body">
+		<div class="col-6 col-lg"><div class="card h-100"><div class="card-body">
 			<div class="text-muted small">Concurrency</div><div class="fs-4 fw-semibold">%d</div>
 		</div></div></div>
-		<div class="col-6 col-lg-2"><div class="card h-100"><div class="card-body">
+		<div class="col-6 col-lg"><div class="card h-100"><div class="card-body">
 			<div class="text-muted small">Network shown</div><div class="fs-5 fw-semibold">%d</div><div class="small text-muted">%s · %d failed</div>
 		</div></div></div>
 	</div>`,
 		snapshot.TotalJobs,
 		snapshot.MaxJobs,
 		snapshot.RunningJobs,
+		snapshot.QueuedJobs,
 		snapshot.LiveSessions,
 		snapshot.TotalTabs,
 		snapshot.MaxConcurrentJobs,
@@ -213,6 +217,7 @@ func browserControls(jobs []browseruse.DebugJob) string {
 		</div>
 		<div class="d-flex flex-wrap gap-2 align-items-center mb-2">` +
 		button("All", "", len(jobs), true) +
+		button("Queued", browseruse.JobQueued, counts[browseruse.JobQueued], false) +
 		button("Running", browseruse.JobRunning, counts[browseruse.JobRunning], false) +
 		button("Failed", browseruse.JobFailed, counts[browseruse.JobFailed], false) +
 		button("Succeeded", browseruse.JobSucceeded, counts[browseruse.JobSucceeded], false) +
@@ -687,7 +692,7 @@ function renderBrowserTabPill(tab, sessionID, persistent) {
 }
 function renderBrowserSessionCard(session) {
 	var status = session.persistent ? '<span class="badge text-bg-success">Live</span>' : '<span class="badge text-bg-secondary">Idle</span>';
-	if (session.active_jobs > 0) status += ' <span class="badge text-bg-primary">' + session.active_jobs + ' running</span>';
+	if (session.active_jobs > 0) status += ' <span class="badge text-bg-primary">' + session.active_jobs + ' active</span>';
 	var tabs = (session.tabs || []).map(function (tab) { return renderBrowserTabPill(tab, session.session_id, session.persistent); }).join('');
 	if (!tabs) tabs = '<span class="text-muted small">No open tabs</span>';
 	var kill = session.persistent ? '<form method="post" action="' + browserDebugPath + '/sessions/' + encodeURIComponent(session.session_id) + '/kill" class="d-inline" onsubmit="return confirm(\'Kill Chromium for this session?\');"><button type="submit" class="btn btn-sm btn-outline-danger">Kill browser</button></form>' : '';
@@ -706,6 +711,10 @@ function pollBrowserLive() {
 			if (liveSessions && payload.live_sessions !== undefined) liveSessions.textContent = payload.live_sessions;
 			var liveTabs = document.getElementById('browser-live-tabs');
 			if (liveTabs && payload.total_tabs !== undefined) liveTabs.textContent = payload.total_tabs;
+			var runningJobs = document.getElementById('browser-running-jobs');
+			if (runningJobs && payload.running_jobs !== undefined) runningJobs.textContent = payload.running_jobs;
+			var queuedJobs = document.getElementById('browser-queued-jobs');
+			if (queuedJobs && payload.queued_jobs !== undefined) queuedJobs.textContent = payload.queued_jobs;
 		})
 		.catch(function () {});
 }
