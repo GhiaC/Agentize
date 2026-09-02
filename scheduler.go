@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ghiac/agentize/engine"
@@ -140,6 +141,19 @@ func loadSchedulerConfig() engine.SessionSchedulerConfig {
 	}
 	if v := os.Getenv("AGENTIZE_SCHEDULER_SUMMARY_MODEL"); v != "" {
 		config.SummaryModel = v
+	}
+	if v := os.Getenv("AGENTIZE_SCHEDULER_SUMMARY_MAX_COMPLETION_TOKENS"); v != "" {
+		if tokens, err := strconv.Atoi(v); err == nil && tokens > 0 {
+			config.SummaryMaxCompletionTokens = tokens
+		}
+	}
+	if v := os.Getenv("AGENTIZE_SCHEDULER_METADATA_MAX_COMPLETION_TOKENS"); v != "" {
+		if tokens, err := strconv.Atoi(v); err == nil && tokens > 0 {
+			config.MetadataMaxCompletionTokens = tokens
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("AGENTIZE_SCHEDULER_REASONING_EFFORT")); v != "" {
+		config.SummaryReasoningEffort = v
 	}
 
 	return config

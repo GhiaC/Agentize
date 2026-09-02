@@ -48,6 +48,19 @@ type SessionSchedulerConfig struct {
 	// SummaryModel is the LLM model to use for summarization (default: gpt-4o-mini)
 	SummaryModel string
 
+	// SummaryMaxCompletionTokens includes both hidden reasoning and visible
+	// output tokens. Reasoning models can otherwise consume the whole budget
+	// and return an empty Content field.
+	SummaryMaxCompletionTokens int
+
+	// MetadataMaxCompletionTokens is the corresponding budget for short tag and
+	// title generations.
+	MetadataMaxCompletionTokens int
+
+	// SummaryReasoningEffort is sent to reasoning-capable OpenAI-compatible
+	// providers. "minimal" preserves budget for the small structured result.
+	SummaryReasoningEffort string
+
 	// DisableLogs if true, SessionScheduler does not emit any logs
 	DisableLogs bool
 
@@ -94,6 +107,9 @@ func DefaultSessionSchedulerConfig() SessionSchedulerConfig {
 		LastActivityThreshold:           1 * time.Hour, // Session must be active within last hour
 		ImmediateSummarizationThreshold: 50,            // Immediate summarization when messages exceed 50
 		RetainRecentMessages:            10,            // Keep the last 10 messages active (rolling window)
+		SummaryMaxCompletionTokens:      2048,
+		MetadataMaxCompletionTokens:     256,
+		SummaryReasoningEffort:          "minimal",
 		SummarizationPrompts:            DefaultSummarizationPrompts(),
 	}
 }
@@ -315,10 +331,13 @@ func (ss *SessionScheduler) chatCompletion(ctx context.Context, request openai.C
 		log.Log.Infof("[SessionScheduler] 🔄 BACKUP CHAIN >> Attempting backup chain for summarization | BackupProviders: %d | RequestModel: %s",
 			len(ss.backups.providers), request.Model)
 		resp, ok := ss.backups.TryBackup(ctx, request.Messages, nil, "SessionScheduler")
-		if ok {
+		if ok && len(resp.Choices) > 0 && getMessageContentString(resp.Choices[0].Message) != "" {
 			log.Log.Infof("[SessionScheduler] ✅ BACKUP CHAIN >> Success | UsedModel: %s | ResponseTokens: %d",
 				resp.Model, resp.Usage.TotalTokens)
 			return resp, nil
+		}
+		if ok {
+			log.Log.Warnf("[SessionScheduler] ⚠️ BACKUP CHAIN >> Provider returned no visible output; falling back to main LLM")
 		}
 		log.Log.Warnf("[SessionScheduler] ⚠️ BACKUP CHAIN >> All backup providers failed, falling back to main LLM: %s", ss.config.SummaryModel)
 	} else {
@@ -735,6 +754,14 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	}
 	rawSummary, summaryResp, promptSent, err := ss.generateImprovedSummaryWithResponse(ctx, session.SessionID, session.UserID, previousSummaryPrompt, conversationText)
 	summLog.PromptSent = promptSent // Store prompt for debug/DB (even on failure)
+	if summaryResp != nil {
+		summLog.PromptTokens = summaryResp.Usage.PromptTokens
+		summLog.CompletionTokens = summaryResp.Usage.CompletionTokens
+		summLog.TotalTokens = summaryResp.Usage.TotalTokens
+		if summaryResp.Model != "" {
+			summLog.ModelUsed = summaryResp.Model
+		}
+	}
 	if err != nil {
 		if !ss.config.DisableLogs {
 			log.Log.Warnf("[SessionScheduler] ⚠️  Failed to generate summary for session %s: %v", session.SessionID, err)
@@ -782,14 +809,6 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	previousSummaryInitialized := session.SummaryInitialized
 	session.SummaryInitialized = true
 	generatedSummary = strings.Join(newEntries, "\n")
-	if summaryResp != nil {
-		summLog.PromptTokens = summaryResp.Usage.PromptTokens
-		summLog.CompletionTokens = summaryResp.Usage.CompletionTokens
-		summLog.TotalTokens = summaryResp.Usage.TotalTokens
-		if summaryResp.Model != "" {
-			summLog.ModelUsed = summaryResp.Model
-		}
-	}
 
 	// Generate and merge tags
 	existingTags := session.Tags
@@ -957,13 +976,22 @@ func (ss *SessionScheduler) generateImprovedSummaryWithResponse(ctx context.Cont
 	// Build prompt string for DB/debug (same format as sent to LLM)
 	promptSent := formatPromptForLog(systemPrompt, userPrompt)
 
+	maxCompletionTokens := ss.config.SummaryMaxCompletionTokens
+	if maxCompletionTokens <= 0 {
+		maxCompletionTokens = 2048
+	}
+	reasoningEffort := strings.TrimSpace(ss.config.SummaryReasoningEffort)
+	if reasoningEffort == "" {
+		reasoningEffort = "minimal"
+	}
 	request := openai.ChatCompletionRequest{
 		Model: ss.config.SummaryModel,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 			{Role: openai.ChatMessageRoleUser, Content: userPrompt},
 		},
-		MaxTokens: 1000,
+		MaxCompletionTokens: maxCompletionTokens,
+		ReasoningEffort:     reasoningEffort,
 	}
 
 	if !ss.config.DisableLogs {
@@ -979,7 +1007,29 @@ func (ss *SessionScheduler) generateImprovedSummaryWithResponse(ctx context.Cont
 		return "", nil, promptSent, fmt.Errorf("no response from LLM")
 	}
 
-	summary := getMessageContentString(resp.Choices[0].Message)
+	summary := getSummaryMessageContent(resp.Choices[0].Message)
+	if summary == "" {
+		// A reasoning model can consume the full completion budget without
+		// producing visible output. Retry once with a larger budget; fail closed
+		// if the second response is still empty.
+		retryRequest := request
+		retryRequest.MaxCompletionTokens = max(maxCompletionTokens*2, 4096)
+		retryResp, retryErr := ss.chatCompletion(ctx, retryRequest)
+		if retryErr != nil {
+			return "", &resp, promptSent, fmt.Errorf("empty visible summary response; retry failed: %w", retryErr)
+		}
+		retryResp.Usage.PromptTokens += resp.Usage.PromptTokens
+		retryResp.Usage.CompletionTokens += resp.Usage.CompletionTokens
+		retryResp.Usage.TotalTokens += resp.Usage.TotalTokens
+		resp = retryResp
+		if len(resp.Choices) == 0 {
+			return "", &resp, promptSent, fmt.Errorf("empty visible summary response after retry: no choices")
+		}
+		summary = getSummaryMessageContent(resp.Choices[0].Message)
+		if summary == "" {
+			return "", &resp, promptSent, fmt.Errorf("empty visible summary response after retry (finish_reason=%s, completion_tokens=%d)", resp.Choices[0].FinishReason, resp.Usage.CompletionTokens)
+		}
+	}
 
 	if !ss.config.DisableLogs {
 		log.Log.Infof("[SessionScheduler] 📊 TOKEN USAGE >> total=%d (improved summary)", resp.Usage.TotalTokens)
@@ -1020,13 +1070,18 @@ func (ss *SessionScheduler) generateAndMergeTags(ctx context.Context, existingTa
 	}
 	userPrompt = strings.Replace(userPrompt, "{{.ConversationText}}", conversationText, 1)
 
+	metadataMaxTokens := ss.config.MetadataMaxCompletionTokens
+	if metadataMaxTokens <= 0 {
+		metadataMaxTokens = 256
+	}
 	request := openai.ChatCompletionRequest{
 		Model: ss.config.SummaryModel,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 			{Role: openai.ChatMessageRoleUser, Content: userPrompt},
 		},
-		MaxTokens: 50,
+		MaxCompletionTokens: metadataMaxTokens,
+		ReasoningEffort:     ss.summaryReasoningEffort(),
 	}
 
 	resp, err := ss.chatCompletion(ctx, request)
@@ -1040,6 +1095,18 @@ func (ss *SessionScheduler) generateAndMergeTags(ctx context.Context, existingTa
 
 	// Existing tags are immutable. Parse only the delta, then append in order.
 	tagsStr := getMessageContentString(resp.Choices[0].Message)
+	if tagsStr == "" {
+		retryRequest := request
+		retryRequest.MaxCompletionTokens = max(metadataMaxTokens*2, 512)
+		resp, err = ss.chatCompletion(ctx, retryRequest)
+		if err != nil {
+			return nil, fmt.Errorf("empty visible tag response; retry failed: %w", err)
+		}
+		if len(resp.Choices) == 0 || getMessageContentString(resp.Choices[0].Message) == "" {
+			return nil, fmt.Errorf("empty visible tag response after retry")
+		}
+		tagsStr = getMessageContentString(resp.Choices[0].Message)
+	}
 	tagsStr = strings.Trim(tagsStr, "\"'")
 	rawTags := strings.Split(tagsStr, ",")
 
@@ -1063,6 +1130,14 @@ func parseSummaryEntries(raw string) ([]string, error) {
 		return nil, fmt.Errorf("expected JSON string array: %w", err)
 	}
 	return []string(model.AppendSummaryEntries(nil, entries...)), nil
+}
+
+func (ss *SessionScheduler) summaryReasoningEffort() string {
+	effort := strings.TrimSpace(ss.config.SummaryReasoningEffort)
+	if effort == "" {
+		return "minimal"
+	}
+	return effort
 }
 
 func withoutSystemMessages(messages []openai.ChatCompletionMessage) (nonSystem, system []openai.ChatCompletionMessage) {
@@ -1099,13 +1174,18 @@ func (ss *SessionScheduler) generateTitle(ctx context.Context, conversationText 
 
 	conversationText = truncateRunesForSummary(conversationText, 300)
 
+	metadataMaxTokens := ss.config.MetadataMaxCompletionTokens
+	if metadataMaxTokens <= 0 {
+		metadataMaxTokens = 256
+	}
 	request := openai.ChatCompletionRequest{
 		Model: ss.config.SummaryModel,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 			{Role: openai.ChatMessageRoleUser, Content: "Generate a title for this conversation:\n\n" + conversationText},
 		},
-		MaxTokens: 20,
+		MaxCompletionTokens: metadataMaxTokens,
+		ReasoningEffort:     ss.summaryReasoningEffort(),
 	}
 
 	resp, err := ss.chatCompletion(ctx, request)
@@ -1116,15 +1196,56 @@ func (ss *SessionScheduler) generateTitle(ctx context.Context, conversationText 
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("no response from LLM")
 	}
-
-	return getMessageContentString(resp.Choices[0].Message), nil
+	title := getMessageContentString(resp.Choices[0].Message)
+	if title == "" {
+		retryRequest := request
+		retryRequest.MaxCompletionTokens = max(metadataMaxTokens*2, 512)
+		resp, err = ss.chatCompletion(ctx, retryRequest)
+		if err != nil {
+			return "", fmt.Errorf("empty visible title response; retry failed: %w", err)
+		}
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("empty visible title response after retry: no choices")
+		}
+		title = getMessageContentString(resp.Choices[0].Message)
+		if title == "" {
+			return "", fmt.Errorf("empty visible title response after retry")
+		}
+	}
+	return title, nil
 }
 
 // getMessageContentString returns the text content of a chat message as a trimmed string.
 // Use this when reading summary/tags/title from LLM responses so parsing can be extended
 // if the SDK or provider uses content parts (e.g. array) instead of a plain string.
 func getMessageContentString(msg openai.ChatCompletionMessage) string {
-	return strings.TrimSpace(msg.Content)
+	if content := strings.TrimSpace(msg.Content); content != "" {
+		return content
+	}
+	parts := make([]string, 0, len(msg.MultiContent))
+	for _, part := range msg.MultiContent {
+		if text := strings.TrimSpace(part.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// getSummaryMessageContent accepts reasoning_content only when it is itself a
+// complete strict payload. Arbitrary chain-of-thought is never persisted.
+func getSummaryMessageContent(msg openai.ChatCompletionMessage) string {
+	if content := getMessageContentString(msg); content != "" {
+		return content
+	}
+	candidate := strings.TrimSpace(msg.ReasoningContent)
+	if candidate == SummaryOffensiveContentSignal {
+		return candidate
+	}
+	var entries []string
+	if candidate != "" && json.Unmarshal([]byte(candidate), &entries) == nil {
+		return candidate
+	}
+	return ""
 }
 
 // formatMessagesForSummary converts messages to a readable format for summarization

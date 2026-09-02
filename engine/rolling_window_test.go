@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -221,5 +222,63 @@ func TestSummarizeSessionAppendsMetadataAndSyncsConversation(t *testing.T) {
 func TestParseSummaryEntriesRejectsEmptyProviderContent(t *testing.T) {
 	if _, err := parseSummaryEntries(""); err == nil {
 		t.Fatal("empty provider content must fail closed")
+	}
+}
+
+func TestSummaryContentExtractionSupportsMultipartAndStrictReasoningPayload(t *testing.T) {
+	multipart := openai.ChatCompletionMessage{MultiContent: []openai.ChatMessagePart{
+		{Type: openai.ChatMessagePartTypeText, Text: " first "},
+		{Type: openai.ChatMessagePartTypeText, Text: "second"},
+	}}
+	if got := getMessageContentString(multipart); got != "first\nsecond" {
+		t.Fatalf("multipart content = %q", got)
+	}
+	if got := getSummaryMessageContent(openai.ChatCompletionMessage{ReasoningContent: `["fact"]`}); got != `["fact"]` {
+		t.Fatalf("strict reasoning payload = %q", got)
+	}
+	if got := getSummaryMessageContent(openai.ChatCompletionMessage{ReasoningContent: `thinking... ["fact"]`}); got != "" {
+		t.Fatalf("chain-of-thought must not be persisted: %q", got)
+	}
+}
+
+func TestSummaryGenerationRetriesReasoningBudgetExhaustion(t *testing.T) {
+	var requests []openai.ChatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request openai.ChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, request)
+		w.Header().Set("Content-Type", "application/json")
+		if len(requests) == 1 {
+			fmt.Fprint(w, `{"id":"first","model":"openai/gpt-5-nano","choices":[{"finish_reason":"length","message":{"role":"assistant","content":"","reasoning_content":"unfinished reasoning"}}],"usage":{"prompt_tokens":100,"completion_tokens":2048,"total_tokens":2148}}`)
+			return
+		}
+		fmt.Fprint(w, `{"id":"retry","model":"openai/gpt-5-nano","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"[\"new fact\"]"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`)
+	}))
+	defer server.Close()
+
+	config := openai.DefaultConfig("test")
+	config.BaseURL = server.URL
+	schedulerConfig := DefaultSessionSchedulerConfig()
+	schedulerConfig.SummaryModel = "openai/gpt-5-nano"
+	schedulerConfig.DisableLogs = true
+	scheduler := NewSessionScheduler(nil, openai.NewClientWithConfig(config), schedulerConfig)
+
+	content, resp, _, err := scheduler.generateImprovedSummaryWithResponse(context.Background(), "s1", "u1", "", "user: remember this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != `["new fact"]` || len(requests) != 2 {
+		t.Fatalf("content=%q requests=%d", content, len(requests))
+	}
+	if requests[0].MaxTokens != 0 || requests[0].MaxCompletionTokens != 2048 || requests[0].ReasoningEffort != "minimal" {
+		t.Fatalf("first request budget = %+v", requests[0])
+	}
+	if requests[1].MaxCompletionTokens != 4096 {
+		t.Fatalf("retry max_completion_tokens = %d", requests[1].MaxCompletionTokens)
+	}
+	if resp == nil || resp.Usage.TotalTokens != 2268 {
+		t.Fatalf("combined retry usage = %+v", resp)
 	}
 }

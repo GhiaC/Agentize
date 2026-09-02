@@ -32,6 +32,22 @@ window. The session is persisted before the linked conversation is synchronized.
 Conversation sync is retried naturally by every later cycle and a failure is
 logged without discarding the already durable session memory.
 
+### Reasoning-model output budgets
+
+`max_completion_tokens` includes hidden reasoning tokens and visible output.
+The production `openai/gpt-5-nano` incident on 2026-09-02 exhausted the old
+1,000-token completion budget in reasoning and returned an empty `content`.
+Old releases incorrectly marked those calls successful; the fail-closed parser
+correctly exposed the latent issue. Summary requests now use minimal reasoning
+with a 2,048-token budget and retry once at least 4,096 tokens when no strict
+visible payload is returned. Tag/title requests use 256 tokens and one 512-token
+retry. Usage/model metadata is recorded before validation so failed cycles are
+diagnosable.
+
+Multipart text responses are joined. `reasoning_content` is accepted only when
+the entire field is already a strict JSON string array (or the exact offensive
+content sentinel); arbitrary chain-of-thought is never stored.
+
 Rows with `SummarizedAt` but no summary and no `SummaryInitialized` are legacy
 incomplete rows. They use first-cycle eligibility and can recover from archived
 messages even when the active window is empty.

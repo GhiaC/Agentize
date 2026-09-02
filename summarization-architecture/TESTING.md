@@ -8,7 +8,8 @@ GOCACHE=/tmp/agentize-go-cache go test ./model ./engine ./debuger/pages ./debuge
 
 Coverage includes legacy scalar-to-array decoding, immutable append semantics,
 tag ordering, title synchronization, invalid empty responses, system-prompt
-retention/cleanup, and independent detail-page pagination.
+retention/cleanup, reasoning-budget exhaustion with retry, multipart response
+extraction, and independent detail-page pagination.
 
 ## Full suite
 
