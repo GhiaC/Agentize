@@ -746,6 +746,35 @@ func testVisitedNodes(t *testing.T, st Store) {
 func testDeleteUserData(t *testing.T, st Store) {
 	s := newSession("user-del", model.AgentTypeLow)
 	mustPutSession(t, st, s)
+
+	user := model.NewUser("user-del")
+	user.ContextSummary = model.SummaryEntries{"durable fact that must vanish"}
+	user.ContextTags = []string{"keep-me"}
+	user.ActiveConversationID = "1"
+	user.SessionSeq = 9
+	user.FileSeq = 3
+	user.SetActiveSessionID(model.AgentTypeLow, s.SessionID)
+	if err := st.PutUser(user); err != nil {
+		t.Fatalf("PutUser: %v", err)
+	}
+
+	lg := model.NewSummarizationLog(s)
+	lg.GeneratedSummary = "session summary that must vanish"
+	lg.PreviousSummary = "old summary"
+	lg.MarkCompleted("success")
+	if err := st.PutSummarizationLog(lg); err != nil {
+		t.Fatalf("PutSummarizationLog: %v", err)
+	}
+	orphanLog := model.NewSummarizationLog(s)
+	orphanLog.UserID = ""
+	orphanLog.GeneratedSummary = "orphan log with empty user_id"
+	if err := st.PutSummarizationLog(orphanLog); err != nil {
+		t.Fatalf("PutSummarizationLog (orphan): %v", err)
+	}
+	if err := st.PutConversation(model.NewConversation("user-del", "1", s.SessionID, "t", "m", 1)); err != nil {
+		t.Fatalf("PutConversation: %v", err)
+	}
+
 	m := model.NewUserMessage(s.SessionID+"-m0001", 1, "user-del", s.SessionID, "hi", model.ContentTypeText)
 	if err := st.PutMessage(m); err != nil {
 		t.Fatalf("PutMessage: %v", err)
@@ -811,6 +840,36 @@ func testDeleteUserData(t *testing.T, st Store) {
 	}
 	if workflows, _ := st.ListWorkflowRuns("user-del", 10); len(workflows) != 0 {
 		t.Errorf("workflow runs remain after DeleteUserData: %d", len(workflows))
+	}
+	if convs, _ := st.ListConversations("user-del"); len(convs) != 0 {
+		t.Errorf("conversations remain after DeleteUserData: %d", len(convs))
+	}
+	if logs, _ := st.GetSummarizationLogsBySession(s.SessionID); len(logs) != 0 {
+		t.Errorf("summarization logs remain for session after DeleteUserData: %d", len(logs))
+	}
+	if all, _ := st.GetAllSummarizationLogs(); true {
+		for _, remaining := range all {
+			if remaining.UserID == "user-del" || remaining.SessionID == s.SessionID {
+				t.Errorf("summarization log remains after DeleteUserData: %+v", remaining)
+			}
+		}
+	}
+
+	got, err := st.GetUser("user-del")
+	if err != nil || got == nil {
+		t.Fatalf("user row should remain after DeleteUserData: got=%v err=%v", got, err)
+	}
+	if len(got.ContextSummary) != 0 {
+		t.Errorf("user context summary remains after DeleteUserData: %v", got.ContextSummary)
+	}
+	if len(got.ContextTags) != 0 {
+		t.Errorf("user context tags remain after DeleteUserData: %v", got.ContextTags)
+	}
+	if got.ActiveConversationID != "" || got.SessionSeq != 0 || got.FileSeq != 0 {
+		t.Errorf("user counters/pointers remain after DeleteUserData: conv=%q sessionSeq=%d fileSeq=%d", got.ActiveConversationID, got.SessionSeq, got.FileSeq)
+	}
+	if got.GetActiveSessionID(model.AgentTypeLow) != "" {
+		t.Errorf("active session remains after DeleteUserData: %q", got.GetActiveSessionID(model.AgentTypeLow))
 	}
 }
 

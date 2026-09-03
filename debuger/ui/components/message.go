@@ -78,7 +78,7 @@ func MessageCard(msg *model.Message, config MessageDisplayConfig) string {
 	// Message ID
 	messageIDDisplay := ""
 	if config.ShowMessageID {
-		messageIDDisplay = fmt.Sprintf(`<small class="text-muted">Message ID: %s</small>`, InlineCode(msg.MessageID))
+		messageIDDisplay = fmt.Sprintf(`<small class="text-muted">Message ID: %s</small>`, EntityID(msg.MessageID))
 	}
 
 	return fmt.Sprintf(`
@@ -169,7 +169,7 @@ func DefaultMessageRowConfig() MessageRowConfig {
 func MessageTableColumns(config MessageRowConfig) []ColumnConfig {
 	columns := []ColumnConfig{
 		{Header: "", Center: true, NoWrap: true}, // Expand button
-		{Header: "Seq", Center: true, NoWrap: true},
+		{Header: "ID", Center: true, NoWrap: true},
 		{Header: "Time", NoWrap: true},
 		{Header: "Agent", Center: true, NoWrap: true},
 		{Header: "Type", Center: true, NoWrap: true},
@@ -212,9 +212,6 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 	rowID := fmt.Sprintf("msg-row-%d", rowIndex)
 	expandBtnID := fmt.Sprintf("msg-expand-%d", rowIndex)
 
-	// SeqID display
-	seqDisplay := fmt.Sprintf("%d", msg.SeqID)
-
 	html := fmt.Sprintf(`<tr id="%s">
 		<td class="text-center">
 			<button class="btn btn-sm btn-outline-secondary" type="button" onclick="toggleMessageRow('%s', '%s')" id="%s">
@@ -230,7 +227,7 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 		<td class="text-center">%s</td>`,
 		rowID,
 		rowID, expandBtnID, expandBtnID,
-		seqDisplay,
+		EntityID(msg.MessageID),
 		timeAgo,
 		agentBadge,
 		contentTypeBadge,
@@ -292,9 +289,9 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 		</td>
 	</tr>`,
 		rowID, colSpan,
-		InlineCode(msg.MessageID),
+		EntityID(msg.MessageID),
 		msg.SeqID,
-		TruncatedLink(msg.SessionID, config.BaseURL+"/sessions/"+template.URLQueryEscaper(msg.SessionID), 40),
+		EntityIDLink(msg.SessionID, config.BaseURL+"/sessions/"+template.URLQueryEscaper(msg.SessionID)),
 		TruncatedLink(msg.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(msg.UserID), 40),
 		msg.CreatedAt.Format("2006-01-02 15:04:05"),
 		agentBadge,

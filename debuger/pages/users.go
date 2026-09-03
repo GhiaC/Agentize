@@ -200,7 +200,7 @@ func RenderUserDetailPage(handler *debuger.DebugHandler, userID string, showDele
 	})
 
 	if showDeleted {
-		content += components.SuccessAlert("All messages, sessions, quota, consumption and invoices for this user have been deleted successfully.")
+		content += components.SuccessAlert("All Agentize data for this user has been deleted, including sessions, conversations, messages, summarization logs, user context, files, traces, workflows, schedules, reviews, and billing/quota when configured.")
 	}
 
 	// User info card
@@ -253,13 +253,21 @@ func RenderUserDetailPage(handler *debuger.DebugHandler, userID string, showDele
 	// Delete user data button (form with confirmation). The ?confirm=<userID>
 	// param satisfies the server-side typed-confirmation guard on the endpoint.
 	deleteFormAction := "/agentize/debug/users/" + url.PathEscape(userID) + "/delete-data?confirm=" + url.QueryEscape(userID)
+	deleteConfirm := fmt.Sprintf("Delete ALL Agentize data for user %q?\n\nThis cannot be undone. It permanently removes:\n"+
+		"- sessions and conversations (including session summaries)\n"+
+		"- messages and tool calls\n"+
+		"- summarization logs\n"+
+		"- user context (cross-conversation summary and tags)\n"+
+		"- files, route traces, workflows, schedules, and reviews\n"+
+		"- billing, quota, consumption, and invoices (when configured)\n\n"+
+		"The user account is kept. Counters and memory are reset.", userID)
 
 	content += fmt.Sprintf(`
 <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h4 class="mb-0"><i class="bi bi-person-fill me-2"></i>User Information</h4>
-        <form method="POST" action="%s" onsubmit="return confirm('Are you sure? All messages, sessions, quota, consumption and invoices for this user will be deleted.');" class="d-inline">
-            <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash me-1"></i>Delete all user data (messages, sessions, quota, consumption, invoices)</button>
+        <form method="POST" action="%s" onsubmit="return confirm('%s');" class="d-inline">
+            <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" style="font-size:0.75rem" title="Delete all Agentize data for this user"><i class="bi bi-trash me-1"></i>Delete all</button>
         </form>
     </div>
     <div class="card-body p-0">
@@ -324,6 +332,7 @@ func RenderUserDetailPage(handler *debuger.DebugHandler, userID string, showDele
     </div>
 </div>`,
 		deleteFormAction,
+		template.JSEscapeString(deleteConfirm),
 		components.CodeBlock(template.HTMLEscapeString(user.UserID)),
 		nameDisplay,
 		usernameDisplay,
@@ -444,7 +453,7 @@ func RenderUserDetailPage(handler *debuger.DebugHandler, userID string, showDele
 				components.InlineCode(template.HTMLEscapeString(f.MIMEType)),
 				formatBytes(f.Size),
 				debuger.FormatTime(f.CreatedAt),
-				components.TruncatedLink(f.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(f.SessionID), 8),
+				components.EntityIDLink(f.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(f.SessionID)),
 			)
 		}
 
@@ -465,8 +474,8 @@ func userConversationRow(conv *model.Conversation) string {
 	if conv.Archived {
 		archived = components.Badge("yes", "secondary")
 	}
-	return fmt.Sprintf(`<tr><td class="text-nowrap">%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td><a href="/agentize/debug/sessions/%s"><code>%s</code></a></td><td>%s</td></tr>`,
-		template.HTMLEscapeString(formatTimeAgo(conv.UpdatedAt)), template.HTMLEscapeString(conv.ConversationID), template.HTMLEscapeString(title), template.HTMLEscapeString(conv.Model), url.PathEscape(conv.SessionID), template.HTMLEscapeString(conv.SessionID), archived)
+	return fmt.Sprintf(`<tr><td class="text-nowrap">%s</td><td>%s</td><td>%s</td><td>%s</td><td><a href="/agentize/debug/sessions/%s">%s</a></td><td>%s</td></tr>`,
+		template.HTMLEscapeString(formatTimeAgo(conv.UpdatedAt)), components.EntityID(conv.ConversationID), template.HTMLEscapeString(title), template.HTMLEscapeString(conv.Model), url.PathEscape(conv.SessionID), components.EntityID(conv.SessionID), archived)
 }
 
 // renderCoreSystemPromptCard renders the "Core System Prompt" card: the ordered

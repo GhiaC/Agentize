@@ -113,6 +113,22 @@ func (u *User) Unban() {
 	u.UpdatedAt = time.Now()
 }
 
+// ResetAfterDataDelete clears session pointers, ID counters, and
+// cross-conversation memory. The user row itself is kept. Unbans the user.
+func (u *User) ResetAfterDataDelete() {
+	u.ActiveSessionIDs = make(map[AgentType]string)
+	u.SessionSeqs = make(map[AgentType]int)
+	u.ActiveConversationID = ""
+	u.ContextSummary = SummaryEntries{}
+	u.ContextTags = []string{}
+	u.SessionSeq = 0
+	u.FileSeq = 0
+	u.WorkflowSeq = 0
+	u.ScheduleSeq = 0
+	u.ReviewSeq = 0
+	u.Unban()
+}
+
 // GetActiveSessionID returns the active session ID for a given agent type
 // Returns empty string if no active session exists
 func (u *User) GetActiveSessionID(agentType AgentType) string {

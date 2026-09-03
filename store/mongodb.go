@@ -751,9 +751,10 @@ func (s *MongoDBStore) Delete(sessionID string) error {
 	return nil
 }
 
-// DeleteUserData deletes all sessions, messages, tool calls, summarization logs,
-// and opened files for a user. Resets user's ActiveSessionIDs and SessionSeqs,
-// and unbans the user.
+// DeleteUserData deletes all Agentize data for a user (sessions, conversations,
+// messages, tool calls, summarization logs, files, traces, workflows, schedules,
+// reviews) and resets the kept user row: session pointers, ID counters, and
+// cross-conversation context. Unbans the user.
 func (s *MongoDBStore) DeleteUserData(userID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*s.opTimeout)
 	defer cancel()
@@ -843,15 +844,13 @@ func (s *MongoDBStore) DeleteUserData(userID string) error {
 		return fmt.Errorf("failed to delete sessions: %w", err)
 	}
 
-	// Reset user's ActiveSessionIDs and SessionSeqs
+	// Keep the user row (identity) but wipe runtime + durable memory.
 	var doc userDocument
 	err = s.usersCollection.FindOne(ctx, bson.M{"_id": userID}).Decode(&doc)
 	if err == nil {
 		user := &model.User{}
 		if json.Unmarshal([]byte(doc.Data), user) == nil {
-			user.ActiveSessionIDs = make(map[model.AgentType]string)
-			user.SessionSeqs = make(map[model.AgentType]int)
-			user.Unban() // remove ban so user is no longer banned after full data delete
+			user.ResetAfterDataDelete()
 			if userData, err := json.Marshal(user); err == nil {
 				opts := options.Replace().SetUpsert(true)
 				doc.Data = string(userData)
@@ -861,6 +860,7 @@ func (s *MongoDBStore) DeleteUserData(userID string) error {
 		}
 	}
 
+	s.userNodes.Delete(userID)
 	auditDeletion("user_data", userID, userID)
 	return nil
 }

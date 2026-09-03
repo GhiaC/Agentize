@@ -24,7 +24,7 @@ func RenderToolCalls(handler *debuger.DebugHandler, page int, sessionID string) 
 	// Apply filter based on session query param
 	if sessionID != "" {
 		dbToolCalls, err = dp.GetToolCallsBySession(sessionID)
-		title = "Tool Calls for Session: " + sessionID
+		title = "Tool Calls for Session: " + model.DisplayID(sessionID)
 		baseURL = "/agentize/debug/tool-calls?session=" + template.URLQueryEscaper(sessionID)
 	} else {
 		dbToolCalls, err = dp.GetAllToolCalls()
@@ -49,7 +49,7 @@ func RenderToolCalls(handler *debuger.DebugHandler, page int, sessionID string) 
 		content += components.Breadcrumb([]components.BreadcrumbItem{
 			{Label: "Dashboard", URL: "/agentize/debug"},
 			{Label: "Sessions", URL: "/agentize/debug/sessions"},
-			{Label: sessionID, URL: "/agentize/debug/sessions/" + template.URLQueryEscaper(sessionID)},
+			{Label: model.DisplayID(sessionID), URL: "/agentize/debug/sessions/" + template.URLQueryEscaper(sessionID)},
 			{Label: "Tool Calls", Active: true},
 		})
 	}
@@ -126,8 +126,8 @@ func RenderToolCallDetail(handler *debuger.DebugHandler, toolID string) (string,
 	if displayName == "" {
 		displayName = tc.FunctionName
 	}
-	content += fmt.Sprintf(`<tr><th class="w-25">Tool ID</th><td>%s</td></tr>`, components.InlineCode(tc.ToolID))
-	content += fmt.Sprintf(`<tr><th>Tool Call ID</th><td>%s</td></tr>`, components.InlineCode(tc.ToolCallID))
+	content += fmt.Sprintf(`<tr><th class="w-25">Tool ID</th><td>%s</td></tr>`, components.EntityID(tc.ToolID))
+	content += fmt.Sprintf(`<tr><th>Tool Call ID</th><td>%s</td></tr>`, components.EntityID(tc.ToolCallID))
 	content += fmt.Sprintf(`<tr><th>Function</th><td>%s</td></tr>`, components.InlineCode(tc.FunctionName))
 	content += fmt.Sprintf(`<tr><th>Label</th><td>%s</td></tr>`, template.HTMLEscapeString(displayName))
 	content += fmt.Sprintf(`<tr><th>Agent Type</th><td>%s</td></tr>`, agentBadge)
@@ -147,8 +147,8 @@ func RenderToolCallDetail(handler *debuger.DebugHandler, toolID string) (string,
 	content += fmt.Sprintf(`<tr><th class="w-25">User</th><td>%s</td></tr>`,
 		components.TruncatedLink(tc.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(tc.UserID), 30))
 	content += fmt.Sprintf(`<tr><th>Session</th><td>%s</td></tr>`,
-		components.OpenButton("/agentize/debug/sessions/"+template.URLQueryEscaper(tc.SessionID)))
-	content += fmt.Sprintf(`<tr><th>Message ID</th><td>%s</td></tr>`, components.InlineCode(tc.MessageID))
+		components.EntityIDLink(tc.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(tc.SessionID)))
+	content += fmt.Sprintf(`<tr><th>Message ID</th><td>%s</td></tr>`, components.EntityID(tc.MessageID))
 	content += `</table>`
 	content += `</div>`
 

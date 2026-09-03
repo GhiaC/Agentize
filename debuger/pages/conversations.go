@@ -67,19 +67,19 @@ func conversationRow(conv *model.Conversation) string {
 		`<tr>
 			<td class="text-nowrap">%s</td>
 			<td class="text-nowrap">%s</td>
-			<td class="text-nowrap"><code>%s</code></td>
+			<td class="text-nowrap">%s</td>
 			<td>%s</td>
 			<td class="text-nowrap">%s</td>
-			<td class="text-nowrap"><a href="%s"><code>%s</code></a></td>
+			<td class="text-nowrap"><a href="%s">%s</a></td>
 			<td>%s</td>
 		</tr>`,
 		html.EscapeString(formatTimeAgo(conv.UpdatedAt)),
 		html.EscapeString(conv.UserID),
-		html.EscapeString(conv.ConversationID),
+		components.EntityID(conv.ConversationID),
 		html.EscapeString(title),
 		html.EscapeString(conv.Model),
 		sessionLink,
-		html.EscapeString(conv.SessionID),
+		components.EntityID(conv.SessionID),
 		archived,
 	)
 }

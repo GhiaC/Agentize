@@ -66,7 +66,7 @@ func renderScheduleCreateForm() string {
 			</div>
 			<div class="col-md-4">
 				<label class="form-label">Source worker session ID</label>
-				<input class="form-control" name="session_id" required placeholder="user-123-researcher-s0001">
+				<input class="form-control" name="session_id" required placeholder="1">
 				<div class="form-text">A new dedicated session of the same agent type is created automatically.</div>
 			</div>
 			<div class="col-md-3">
@@ -190,8 +190,8 @@ func renderScheduleRow(schedule *model.TaskSchedule) string {
 		<td>%s</td>
 		<td>%s</td>
 	</tr>`,
-		esc(schedule.Name), esc(schedule.ScheduleID),
-		esc(schedule.UserID), esc(schedule.SessionID),
+		esc(schedule.Name), components.EntityIDText(schedule.ScheduleID),
+		esc(schedule.UserID), components.EntityIDText(schedule.SessionID),
 		esc(kind),
 		statusColor, esc(string(schedule.Status)),
 		esc(schedule.Interval().String()),
@@ -223,11 +223,11 @@ func RenderTaskScheduleDetail(schedule *model.TaskSchedule, runs []*model.TaskSc
 	})
 	content += ui.CardStart("Schedule Configuration", "calendar3")
 	content += `<div class="row"><div class="col-md-6"><table class="table table-sm"><tbody>`
-	content += scheduleMetaRow("Schedule ID", components.InlineCode(schedule.ScheduleID))
+	content += scheduleMetaRow("Schedule ID", components.EntityID(schedule.ScheduleID))
 	content += scheduleMetaRow("Name", esc(schedule.Name))
 	content += scheduleMetaRow("User", esc(schedule.UserID))
-	content += scheduleMetaRow("Dedicated session", components.TruncatedLink(schedule.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(schedule.SessionID), 30))
-	content += scheduleMetaRow("Source session", esc(schedule.SourceSessionID))
+	content += scheduleMetaRow("Dedicated session", components.EntityIDLink(schedule.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(schedule.SessionID)))
+	content += scheduleMetaRow("Source session", components.EntityID(schedule.SourceSessionID))
 	content += scheduleMetaRow("Agent type", esc(string(schedule.AgentType)))
 	content += scheduleMetaRow("Status", esc(string(schedule.Status)))
 	content += `</tbody></table></div><div class="col-md-6"><table class="table table-sm"><tbody>`
@@ -330,8 +330,8 @@ func scheduleWorkflowLink(workflowID string) string {
 	if workflowID == "" {
 		return `<span class="text-muted">—</span>`
 	}
-	return fmt.Sprintf(`<a href="/agentize/debug/workflows/%s"><code>%s</code></a>`,
-		template.URLQueryEscaper(workflowID), template.HTMLEscapeString(workflowID))
+	return fmt.Sprintf(`<a href="/agentize/debug/workflows/%s">%s</a>`,
+		template.URLQueryEscaper(workflowID), components.EntityID(workflowID))
 }
 
 func scheduleMetaRow(label, value string) string {

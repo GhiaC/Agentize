@@ -43,7 +43,7 @@ func renderSessionContextCard(session *model.Session, conversation *model.Conver
 	out := components.CollapsibleCardStartWithCount("Session Context", "journal-text", count, true)
 	out += `<p class="text-muted mb-3">Title, summary entries, and tags for the active conversation. Detailed history stays in messages and tools.</p>`
 	if conversation != nil {
-		out += fmt.Sprintf(`<p class="mb-2"><strong>Conversation:</strong> %s</p>`, components.InlineCode(conversation.ConversationID))
+		out += fmt.Sprintf(`<p class="mb-2"><strong>Conversation:</strong> %s</p>`, components.EntityID(conversation.ConversationID))
 	}
 	if session == nil || (session.Title == "" && len(session.Summary) == 0 && len(session.Tags) == 0) {
 		out += components.InfoAlert("No title, summary, or tags on the active conversation yet.")

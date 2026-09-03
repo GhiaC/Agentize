@@ -41,8 +41,17 @@ func TestRenderConversations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	if !strings.Contains(html, "alice-c0001") || !strings.Contains(html, "BTC plan") {
-		t.Fatalf("missing conversation fields: %s", html)
+	if !strings.Contains(html, "BTC plan") {
+		t.Fatalf("missing conversation title: %s", html)
+	}
+	if !strings.Contains(html, ">1</code>") {
+		t.Fatalf("visible ids should be numeric, got %s", html)
+	}
+	if strings.Contains(html, ">alice-c0001</code>") || strings.Contains(html, ">alice-conv-s0001</code>") {
+		t.Fatal("legacy concat must not be the visible id")
+	}
+	if !strings.Contains(html, "/sessions/alice-conv-s0001") {
+		t.Fatal("href must keep the stored session id")
 	}
 	if strings.Contains(html, "alice-c-btc") {
 		t.Fatal("page must not invent slug ids")

@@ -118,6 +118,28 @@ func IsGeneratedUserID(id string) bool {
 	return ok && n >= userIDMin && n <= userIDMax
 }
 
+// DisplayID is the operator-visible form of an Agentize entity id.
+// Numeric ids are shown as-is (zero-padding stripped). Deprecated concatenated
+// ids show only their sequence so the old `{parent}-{kind}{seq}` form is unused
+// in dashboards. Host user ids, OpenAI tool_call ids, and other non-concat
+// values are unchanged. Stored ids are not rewritten; lookups still use the
+// raw value.
+func DisplayID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	if IsNumericID(id) {
+		return FormatID(SeqFromID(id))
+	}
+	if IsLegacyConcatID(id) {
+		if n := SeqFromID(id); n > 0 {
+			return FormatID(n)
+		}
+	}
+	return id
+}
+
 // EnsureID returns id when set, otherwise FormatID(seq). Used to fill empty
 // identifiers on persist without rewriting legacy concatenated values.
 func EnsureID(id string, seq int) string {

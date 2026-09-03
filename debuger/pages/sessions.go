@@ -321,7 +321,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
         </div>
     </div>
 </div>`,
-		components.CodeBlock(template.HTMLEscapeString(session.SessionID)),
+		components.EntityIDCodeBlock(session.SessionID),
 		template.HTMLEscapeString(title),
 		inProgressBadge,
 		agentTypeBadge,
@@ -523,7 +523,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 			content += fmt.Sprintf(`
     <small class="text-muted">Log ID: %s</small>
 </div>`,
-				components.InlineCode(log.LogID),
+				components.EntityID(log.LogID),
 			)
 		}
 		content += components.ListGroupEnd()
@@ -540,6 +540,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 		content += components.InfoAlert("No tool calls found for this session.")
 	} else {
 		columns := []components.ColumnConfig{
+			{Header: "ID", Center: true, NoWrap: true},
 			{Header: "Agent", Center: true, NoWrap: true},
 			{Header: "Function", NoWrap: true},
 			{Header: "Arguments"},
@@ -562,12 +563,14 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 
 			content += fmt.Sprintf(`<tr>
                 <td class="text-center">%s</td>
+                <td class="text-center">%s</td>
                 <td class="text-nowrap">%s</td>
                 <td><div class="mb-0" style="max-width: 300px; white-space: pre-wrap; word-wrap: break-word;">%s</div></td>
                 <td><div class="mb-0" style="max-width: 300px; white-space: pre-wrap; word-wrap: break-word;">%s</div></td>
                 <td class="text-nowrap">%s</td>
                 <td class="text-center">%s</td>
             </tr>`,
+				components.EntityID(tc.ToolID),
 				agentBadge,
 				components.InlineCode(tc.FunctionName),
 				argsDisplay,
@@ -636,5 +639,5 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 	content += collapsibleCardEnd()
 	content += renderOpenedToolsCard(handler, session, files)
 	content += ui.ContainerEnd()
-	return ui.Header("Agentize Debug - Session: "+template.HTMLEscapeString(sessionID)) + ui.NavbarAndBody("/agentize/debug", content) + ui.Footer(), nil
+	return ui.Header("Agentize Debug - Session: "+template.HTMLEscapeString(model.DisplayID(sessionID))) + ui.NavbarAndBody("/agentize/debug", content) + ui.Footer(), nil
 }

@@ -557,7 +557,8 @@ func (ag *Agentize) handleDebugReviewResolve(c *gin.Context) {
 	c.Redirect(302, "/agentize/debug/reviews")
 }
 
-// handleDebugUserDeleteData deletes all sessions and messages for a user
+// handleDebugUserDeleteData wipes all Agentize data for a user, including
+// summarization logs and user context. The user row is kept with counters reset.
 func (ag *Agentize) handleDebugUserDeleteData(c *gin.Context) {
 	userID := c.Param("userID")
 	if userID == "" {

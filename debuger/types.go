@@ -42,9 +42,10 @@ type DebugStore interface {
 	GetWorkflowRun(workflowID string) (*model.WorkflowRun, error)
 	ListWorkflowRuns(userID string, limit int) ([]*model.WorkflowRun, error)
 
-	// DeleteUserData deletes all sessions, messages, tool calls, summarization logs,
-	// route traces, workflows, conversations, and opened files for a user. Resets user's
-	// ActiveSessionIDs and SessionSeqs.
+	// DeleteUserData deletes all Agentize data for a user: sessions, conversations,
+	// messages, tool calls, summarization logs, route traces, workflows, schedules,
+	// reviews, and files. The user row is kept with session pointers, ID counters,
+	// and cross-conversation context (summary/tags) reset.
 	DeleteUserData(userID string) error
 
 	// ListConversations returns one user's conversations, newest UpdatedAt first.
@@ -70,7 +71,7 @@ type ToolCallInfo struct {
 	SessionID    string
 	UserID       string
 	MessageID    string
-	ToolID       string // Sequential tool ID (e.g., user123-core-s0001-t0001)
+	ToolID       string // Sequential tool ID (numeric; leftover concat rows display as seq)
 	ToolCallID   string // OpenAI's tool call ID
 	AgentType    string
 	FunctionName string

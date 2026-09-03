@@ -771,9 +771,10 @@ func (s *SQLiteStore) Delete(sessionID string) error {
 	return nil
 }
 
-// DeleteUserData deletes all sessions, messages, tool calls, summarization logs,
-// and opened files for a user. Resets user's ActiveSessionIDs and SessionSeqs,
-// and unbans the user.
+// DeleteUserData deletes all Agentize data for a user (sessions, conversations,
+// messages, tool calls, summarization logs, files, traces, workflows, schedules,
+// reviews) and resets the kept user row: session pointers, ID counters, and
+// cross-conversation context. Unbans the user.
 func (s *SQLiteStore) DeleteUserData(userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -786,17 +787,28 @@ func (s *SQLiteStore) DeleteUserData(userID string) error {
 	}
 	defer tx.Rollback()
 
-	// Delete in order (child tables first, then sessions, then update user)
+	// Delete in order (child tables first, then sessions, then update user).
+	// summarization_logs / tool_calls / opened_files also match by session_id so
+	// older rows with an empty user_id still go away.
 	if _, err := tx.Exec("DELETE FROM messages WHERE user_id = ?", userID); err != nil {
 		return fmt.Errorf("failed to delete messages: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM tool_calls WHERE user_id = ?", userID); err != nil {
+	if _, err := tx.Exec(
+		"DELETE FROM tool_calls WHERE user_id = ? OR session_id IN (SELECT session_id FROM sessions WHERE user_id = ?)",
+		userID, userID,
+	); err != nil {
 		return fmt.Errorf("failed to delete tool_calls: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM summarization_logs WHERE user_id = ?", userID); err != nil {
+	if _, err := tx.Exec(
+		"DELETE FROM summarization_logs WHERE user_id = ? OR session_id IN (SELECT session_id FROM sessions WHERE user_id = ?)",
+		userID, userID,
+	); err != nil {
 		return fmt.Errorf("failed to delete summarization_logs: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM opened_files WHERE user_id = ?", userID); err != nil {
+	if _, err := tx.Exec(
+		"DELETE FROM opened_files WHERE user_id = ? OR session_id IN (SELECT session_id FROM sessions WHERE user_id = ?)",
+		userID, userID,
+	); err != nil {
 		return fmt.Errorf("failed to delete opened_files: %w", err)
 	}
 	if _, err := tx.Exec("DELETE FROM user_files WHERE user_id = ?", userID); err != nil {
@@ -827,7 +839,7 @@ func (s *SQLiteStore) DeleteUserData(userID string) error {
 		return fmt.Errorf("failed to delete sessions: %w", err)
 	}
 
-	// Reset user's ActiveSessionIDs and SessionSeqs
+	// Keep the user row (identity) but wipe runtime + durable memory.
 	var data string
 	var createdAt, updatedAt int64
 	scanErr := tx.QueryRow(
@@ -837,11 +849,9 @@ func (s *SQLiteStore) DeleteUserData(userID string) error {
 	if scanErr == nil {
 		user := &model.User{}
 		if json.Unmarshal([]byte(data), user) == nil {
-			user.ActiveSessionIDs = make(map[model.AgentType]string)
-			user.SessionSeqs = make(map[model.AgentType]int)
-			user.Unban() // remove ban so user is no longer banned after full data delete
+			user.ResetAfterDataDelete()
 			if userData, err := json.Marshal(user); err == nil {
-				now := user.UpdatedAt.Unix() // Unban() already set UpdatedAt
+				now := user.UpdatedAt.Unix()
 				_, _ = tx.Exec(
 					`INSERT OR REPLACE INTO users (user_id, data, created_at, updated_at) VALUES (?, ?, ?, ?)`,
 					userID, string(userData), createdAt, now,
@@ -854,6 +864,7 @@ func (s *SQLiteStore) DeleteUserData(userID string) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.userNodes.Delete(userID)
 	auditDeletion("user_data", userID, userID)
 	return nil
 }

@@ -36,17 +36,17 @@ func TestParseID(t *testing.T) {
 
 func TestSeqFromID_LegacyAndNumeric(t *testing.T) {
 	cases := map[string]int{
-		"1":                        1,
-		"12":                       12,
-		"alice-c0001":              1,
-		"alice-core-s0002":         2,
-		"alice-core-s0001-m0003":   3,
-		"alice-core-s0001-t0004":   4,
-		"alice-core-s0001-f0005":   5,
-		"alice-core-s0001-uf0006":  6,
-		"alice-core-s0001-l0007":   7,
-		"alice-core-s0001-rt0008":  8,
-		"not-an-id":                0,
+		"1":                       1,
+		"12":                      12,
+		"alice-c0001":             1,
+		"alice-core-s0002":        2,
+		"alice-core-s0001-m0003":  3,
+		"alice-core-s0001-t0004":  4,
+		"alice-core-s0001-f0005":  5,
+		"alice-core-s0001-uf0006": 6,
+		"alice-core-s0001-l0007":  7,
+		"alice-core-s0001-rt0008": 8,
+		"not-an-id":               0,
 	}
 	for id, want := range cases {
 		if got := SeqFromID(id); got != want {
@@ -73,6 +73,29 @@ func TestGenerateUserID(t *testing.T) {
 	}
 	if len(seen) < 2 {
 		t.Fatal("GenerateUserID should not collapse to a constant")
+	}
+}
+
+func TestDisplayID(t *testing.T) {
+	cases := map[string]string{
+		"1":                       "1",
+		"01":                      "1",
+		"12":                      "12",
+		"alice-c0001":             "1",
+		"alice-core-s0002":        "2",
+		"alice-core-s0001-m0003":  "3",
+		"alice-core-s0001-t0004":  "4",
+		"alice-core-s0001-uf0006": "6",
+		"call_abc":                "call_abc",
+		"alice":                   "alice",
+		"user-1":                  "user-1",
+		"48291037":                "48291037",
+		"":                        "",
+	}
+	for id, want := range cases {
+		if got := DisplayID(id); got != want {
+			t.Errorf("DisplayID(%q) = %q, want %q", id, got, want)
+		}
 	}
 }
 

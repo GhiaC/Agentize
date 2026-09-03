@@ -35,6 +35,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 	} else {
 		columns := []components.ColumnConfig{
 			{Header: "Preview", Center: true, NoWrap: true},
+			{Header: "ID", NoWrap: true},
 			{Header: "Path"},
 			{Header: "Source", Center: true, NoWrap: true},
 			{Header: "Type", NoWrap: true},
@@ -50,7 +51,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 		for _, f := range paginatedFiles {
 			derived := "-"
 			if f.ParentFileID != "" {
-				derived = components.InlineCode(template.HTMLEscapeString(f.ParentFileID))
+				derived = components.EntityID(f.ParentFileID)
 			}
 
 			rawURL := "/agentize/debug/documents/" + template.URLQueryEscaper(f.FileID) + "/raw"
@@ -78,6 +79,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 
 			content += fmt.Sprintf(`<tr>
                 <td class="text-center">%s</td>
+                <td class="text-nowrap">%s</td>
                 <td>%s</td>
                 <td class="text-center">%s</td>
                 <td class="text-nowrap">%s</td>
@@ -89,6 +91,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
                 <td class="text-center text-nowrap">%s</td>
             </tr>`,
 				preview,
+				components.EntityID(f.FileID),
 				nameCell,
 				fileSourceBadge(f.Source),
 				components.InlineCode(template.HTMLEscapeString(f.MIMEType)),
@@ -96,7 +99,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 				derived,
 				debuger.FormatTime(f.CreatedAt),
 				components.TruncatedLink(f.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(f.UserID), 20),
-				components.TruncatedLink(f.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(f.SessionID), 20),
+				components.EntityIDLink(f.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(f.SessionID)),
 				actions,
 			)
 		}

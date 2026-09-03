@@ -179,7 +179,7 @@ func RenderSummarized(handler *debuger.DebugHandler, page int) (string, error) {
 			// Session title display
 			sessionDisplay := log.SessionTitle
 			if sessionDisplay == "" {
-				sessionDisplay = debuger.TruncateString(log.SessionID, 15)
+				sessionDisplay = model.DisplayID(log.SessionID)
 			} else {
 				sessionDisplay = debuger.TruncateString(sessionDisplay, 20)
 			}
@@ -500,10 +500,10 @@ func RenderSummarizationLogDetail(handler *debuger.DebugHandler, logID string) (
         </div>
     </div>
 </div>`,
-		components.CodeBlock(log.LogID),
+		components.EntityIDCodeBlock(log.LogID),
 		statusBadge,
 		typeBadge,
-		components.Link(debuger.TruncateString(log.SessionID, 30), "/agentize/debug/sessions/"+template.URLQueryEscaper(log.SessionID)),
+		components.EntityIDLink(log.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(log.SessionID)),
 		template.HTMLEscapeString(log.SessionTitle),
 		components.Link(log.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(log.UserID)),
 		components.InlineCode(log.ModelUsed),
@@ -705,5 +705,5 @@ func RenderSummarizationLogDetail(handler *debuger.DebugHandler, logID string) (
 	}
 
 	content += ui.ContainerEnd()
-	return ui.Header("Agentize Debug - Summarization Log: "+logID) + ui.NavbarAndBody("/agentize/debug/summarized", content) + ui.Footer(), nil
+	return ui.Header("Agentize Debug - Summarization Log: "+model.DisplayID(logID)) + ui.NavbarAndBody("/agentize/debug/summarized", content) + ui.Footer(), nil
 }

@@ -48,10 +48,10 @@ func RenderWorkflows(handler *debuger.DebugHandler, page int) (string, error) {
 				<td><a class="btn btn-sm btn-outline-primary" href="%s/%s">View DAG</a></td>
 			</tr>`,
 				template.HTMLEscapeString(workflow.Name),
-				template.HTMLEscapeString(workflow.WorkflowID),
+				components.EntityIDText(workflow.WorkflowID),
 				template.URLQueryEscaper(workflow.UserID),
 				template.HTMLEscapeString(workflow.UserID),
-				template.HTMLEscapeString(workflow.SessionID),
+				components.EntityIDText(workflow.SessionID),
 				source, len(workflow.Tasks), workflowStatusBadge(workflow.Status),
 				template.HTMLEscapeString(debuger.FormatTime(workflow.CreatedAt)),
 				template.HTMLEscapeString(debuger.FormatTimeAgo(workflow.CreatedAt)),
@@ -86,10 +86,10 @@ func RenderWorkflowDetail(handler *debuger.DebugHandler, workflowID string) (str
 	})
 	content += ui.CardStart("Workflow", "diagram-3-fill")
 	content += `<div class="row"><div class="col-md-6"><table class="table table-sm"><tbody>`
-	content += workflowMetaRow("Workflow ID", components.InlineCode(workflow.WorkflowID))
+	content += workflowMetaRow("Workflow ID", components.EntityID(workflow.WorkflowID))
 	content += workflowMetaRow("Name", template.HTMLEscapeString(workflow.Name))
 	content += workflowMetaRow("User", components.TruncatedLink(workflow.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(workflow.UserID), 30))
-	content += workflowMetaRow("Session", components.TruncatedLink(workflow.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(workflow.SessionID), 30))
+	content += workflowMetaRow("Session", components.EntityIDLink(workflow.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(workflow.SessionID)))
 	content += `</tbody></table></div><div class="col-md-6"><table class="table table-sm"><tbody>`
 	content += workflowMetaRow("Status", workflowStatusBadge(workflow.Status))
 	content += workflowMetaRow("Tasks", fmt.Sprintf("%d", len(workflow.Tasks)))
@@ -189,7 +189,7 @@ func workflowScheduleLink(scheduleID string) string {
 		return `<span class="text-muted">immediate</span>`
 	}
 	return fmt.Sprintf(`<a href="/agentize/debug/schedules/%s">%s</a>`,
-		template.URLQueryEscaper(scheduleID), template.HTMLEscapeString(scheduleID))
+		template.URLQueryEscaper(scheduleID), components.EntityID(scheduleID))
 }
 
 func workflowDuration(workflow *model.WorkflowRun) string {

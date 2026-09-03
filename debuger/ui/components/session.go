@@ -27,8 +27,9 @@ func DefaultSessionRowConfig() SessionRowConfig {
 // SessionTableColumns returns the column configuration for session table
 func SessionTableColumns(config SessionRowConfig) []ColumnConfig {
 	columns := []ColumnConfig{
-		{Header: "", Center: true, NoWrap: true},      // Expand button
-		{Header: "Time", NoWrap: true},                // Updated time (ago format)
+		{Header: "", Center: true, NoWrap: true}, // Expand button
+		{Header: "Time", NoWrap: true},           // Updated time (ago format)
+		{Header: "ID", Center: true, NoWrap: true},
 		{Header: "Agent", Center: true, NoWrap: true}, // Agent type badge
 		{Header: "Title"},                             // Session title
 		{Header: "Model", Center: true, NoWrap: true}, // Model name
@@ -96,12 +97,14 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 		</td>
 		<td class="text-nowrap">%s</td>
 		<td class="text-center">%s</td>
+		<td class="text-center">%s</td>
 		<td class="text-break" style="max-width: 250px;">%s</td>
 		<td class="text-center">%s</td>
 		<td class="text-center">%s</td>`,
 		rowID, rowClass,
 		rowID, expandBtnID, expandBtnID,
 		timeAgo,
+		EntityID(session.SessionID),
 		agentBadge,
 		template.HTMLEscapeString(title),
 		InlineCode(modelDisplay),
@@ -123,8 +126,8 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 	)
 
 	// Build the expanded details row (hidden by default)
-	// Base columns: expand, time, agent, title, model, msgs, status, open = 8
-	colSpan := 8
+	// Base columns: expand, time, id, agent, title, model, msgs, status, open = 9
+	colSpan := 9
 	if config.ShowUser {
 		colSpan++
 	}
@@ -204,7 +207,7 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 		</td>
 	</tr>`,
 		rowID, colSpan,
-		InlineCode(session.SessionID),
+		EntityID(session.SessionID),
 		TruncatedLink(session.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(session.UserID), 40),
 		agentBadge,
 		InlineCode(session.Model),

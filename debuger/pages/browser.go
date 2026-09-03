@@ -12,6 +12,7 @@ import (
 	"github.com/ghiac/agentize/debuger"
 	"github.com/ghiac/agentize/debuger/ui"
 	"github.com/ghiac/agentize/debuger/ui/components"
+	"github.com/ghiac/agentize/model"
 )
 
 const browserDebugPath = "/agentize/debug/browser"
@@ -93,7 +94,7 @@ func RenderBrowserSessionDetail(session *browseruse.DebugSession, jobs []browser
 	content += components.Breadcrumb([]components.BreadcrumbItem{
 		{Label: "Dashboard", URL: "/agentize/debug"},
 		{Label: "Browser", URL: browserDebugPath},
-		{Label: session.SessionID, Active: true},
+		{Label: model.DisplayID(session.SessionID), Active: true},
 	})
 	content += browserSessionCard(session, true)
 	if len(jobs) > 0 {
@@ -288,7 +289,7 @@ func browserSessionCard(session *browseruse.DebugSession, expanded bool) string 
 		<div class="browser-tab-bar px-2 py-2 border-bottom bg-white">%s</div>
 	</article>`,
 		template.HTMLEscapeString(session.SessionID),
-		components.InlineCode(template.HTMLEscapeString(session.SessionID)),
+		components.EntityID(session.SessionID),
 		statusBadge,
 		session.TabCount,
 		session.TotalJobs,
@@ -453,7 +454,7 @@ func browserJobCard(job *browseruse.DebugJob) string {
 		template.HTMLEscapeString(job.Task),
 		browserDebugPath,
 		template.URLQueryEscaper(job.SessionID),
-		template.HTMLEscapeString(job.SessionID),
+		components.EntityIDText(job.SessionID),
 		debuger.FormatTime(job.CreatedAt),
 		duration,
 		job.LoadCount,

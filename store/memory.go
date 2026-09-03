@@ -107,16 +107,19 @@ func (s *DBStore) getOrCreateLock(userID string) *sync.Mutex {
 // Get retrieves a session by ID
 // First checks cache, then falls back to database
 func (s *DBStore) GetUserSession(userID, sessionID string) (*model.Session, error) {
-	if session, ok := s.sessionsCache.Get(userID + "/" + sessionID); ok {
+	if session, ok := s.sessionsCache.Get(userSessionCacheKey(userID, sessionID)); ok {
 		if session.UserID == userID {
 			return session.Clone(), nil
 		}
+	}
+	if session, ok := s.sessionsCache.Get(sessionID); ok && session.UserID == userID {
+		return session.Clone(), nil
 	}
 	session, err := s.sqliteStore.GetUserSession(userID, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	s.sessionsCache.Add(userID+"/"+sessionID, session.Clone())
+	s.cacheSession(session)
 	return session, nil
 }
 
@@ -134,7 +137,7 @@ func (s *DBStore) Get(sessionID string) (*model.Session, error) {
 	}
 
 	// Add to cache
-	s.sessionsCache.Add(sessionID, session.Clone())
+	s.cacheSession(session)
 
 	return session, nil
 }
@@ -147,23 +150,40 @@ func (s *DBStore) Put(session *model.Session) error {
 		return err
 	}
 
-	// Update cache (using Clone to avoid copylocks)
-	s.sessionsCache.Add(session.SessionID, session.Clone())
+	s.cacheSession(session)
 
 	return nil
+}
+
+func userSessionCacheKey(userID, sessionID string) string {
+	return userID + "/" + sessionID
+}
+
+func (s *DBStore) cacheSession(session *model.Session) {
+	if session == nil {
+		return
+	}
+	clone := session.Clone()
+	s.sessionsCache.Add(session.SessionID, clone)
+	if session.UserID != "" {
+		s.sessionsCache.Add(userSessionCacheKey(session.UserID, session.SessionID), clone)
+	}
 }
 
 // Delete removes a session
 // Removes from both cache and database
 func (s *DBStore) Delete(sessionID string) error {
-	// Delete from database
+	userID := ""
+	if session, ok := s.sessionsCache.Get(sessionID); ok && session != nil {
+		userID = session.UserID
+	}
 	if err := s.sqliteStore.Delete(sessionID); err != nil {
 		return err
 	}
-
-	// Remove from cache
 	s.sessionsCache.Remove(sessionID)
-
+	if userID != "" {
+		s.sessionsCache.Remove(userSessionCacheKey(userID, sessionID))
+	}
 	return nil
 }
 
@@ -174,7 +194,7 @@ func (s *DBStore) GetCoreSession(userID string) (*model.Session, error) {
 	if err != nil || session == nil {
 		return session, err
 	}
-	s.sessionsCache.Add(session.SessionID, session.Clone())
+	s.cacheSession(session)
 	return session, nil
 }
 
@@ -183,7 +203,7 @@ func (s *DBStore) PutCoreSession(session *model.Session) error {
 	if err := s.sqliteStore.PutCoreSession(session); err != nil {
 		return err
 	}
-	s.sessionsCache.Add(session.SessionID, session.Clone())
+	s.cacheSession(session)
 	return nil
 }
 
@@ -624,8 +644,8 @@ func (s *DBStore) UpdateToolCallResponse(toolID string, response string, execErr
 	return s.sqliteStore.UpdateToolCallResponse(toolID, response, execErr)
 }
 
-// DeleteUserData deletes all sessions, messages, tool calls, summarization logs,
-// and opened files for a user (delegates to SQLiteStore and clears caches)
+// DeleteUserData deletes all Agentize data for a user (delegates to SQLiteStore
+// and clears caches plus in-memory visited nodes)
 func (s *DBStore) DeleteUserData(userID string) error {
 	// Get sessions before delete to clear cache
 	sessions, _ := s.sqliteStore.List(userID)
@@ -637,10 +657,14 @@ func (s *DBStore) DeleteUserData(userID string) error {
 	// Clear session cache for deleted sessions
 	for _, sess := range sessions {
 		s.sessionsCache.Remove(sess.SessionID)
+		if sess.UserID != "" {
+			s.sessionsCache.Remove(userSessionCacheKey(sess.UserID, sess.SessionID))
+		}
 	}
 
 	// Clear user cache
 	s.usersCache.Remove(userID)
+	s.ClearVisitedNodes(userID)
 
 	return nil
 }

@@ -84,10 +84,17 @@ func TestUserDetailPage_CoreSystemPromptCard(t *testing.T) {
 		"Conversations",                 // user-facing list replaces raw sessions
 		"<details",                      // native collapsible markup
 		"Cross-conversation facts",      // dedicated User Context card
+		">Delete all</button>",          // compact wipe control; details live in confirm
+		"summarization logs",            // confirm lists logs + user context
+		"user context (cross-conversation summary and tags)",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("user detail page should contain %q", want)
 		}
+	}
+
+	if strings.Contains(body, "Delete all user data (messages, sessions, quota, consumption, invoices)") {
+		t.Error("delete button label should be short; the long explanation belongs in the confirm dialog")
 	}
 
 	for _, removed := range []string{"Core Agent (Brain)", "Opened Files", "Nonsense" + " Count", "Last " + "Nonsense"} {

@@ -28,8 +28,9 @@ func DefaultToolCallRowConfig() ToolCallRowConfig {
 // ToolCallTableColumns returns the column configuration for tool call table
 func ToolCallTableColumns(config ToolCallRowConfig) []ColumnConfig {
 	columns := []ColumnConfig{
-		{Header: "", Center: true, NoWrap: true},         // Expand button
-		{Header: "Time", NoWrap: true},                   // Created time (ago format)
+		{Header: "", Center: true, NoWrap: true}, // Expand button
+		{Header: "Time", NoWrap: true},           // Created time (ago format)
+		{Header: "ID", Center: true, NoWrap: true},
 		{Header: "Agent", Center: true, NoWrap: true},    // Agent type badge
 		{Header: "Function", NoWrap: true},               // Function name
 		{Header: "Arguments"},                            // Arguments preview
@@ -104,6 +105,7 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 		</td>
 		<td class="text-nowrap">%s</td>
 		<td class="text-center">%s</td>
+		<td class="text-center">%s</td>
 		<td class="text-nowrap">%s</td>
 		<td class="text-break" style="max-width: 200px; font-size: 0.9em;">%s</td>
 		<td class="text-break" style="max-width: 200px; font-size: 0.9em;">%s</td>
@@ -112,6 +114,7 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 		rowID,
 		rowID, expandBtnID, expandBtnID,
 		timeAgo,
+		EntityID(tc.ToolID),
 		agentBadge,
 		InlineCode(displayName),
 		argsPreview,
@@ -129,7 +132,7 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 	// Add session column if configured
 	if config.ShowSession {
 		html += fmt.Sprintf(`<td class="text-nowrap">%s</td>`,
-			TruncatedLink(tc.SessionID, config.BaseURL+"/sessions/"+template.URLQueryEscaper(tc.SessionID), 20))
+			EntityIDLink(tc.SessionID, config.BaseURL+"/sessions/"+template.URLQueryEscaper(tc.SessionID)))
 	}
 
 	html += fmt.Sprintf(`
@@ -139,8 +142,8 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 	)
 
 	// Build the expanded details row (hidden by default)
-	// Base columns: expand, time, agent, function, arguments, result, duration, status = 8
-	colSpan := 8
+	// Base columns: expand, time, id, agent, function, arguments, result, duration, status = 9
+	colSpan := 9
 	if config.ShowUser {
 		colSpan++
 	}
@@ -203,14 +206,14 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 		</td>
 	</tr>`,
 		rowID, colSpan,
-		InlineCode(tc.ToolID),
-		InlineCode(tc.ToolCallID),
+		EntityID(tc.ToolID),
+		EntityID(tc.ToolCallID),
 		InlineCode(tc.FunctionName),
 		InlineCode(displayName),
 		agentBadge,
 		TruncatedLink(tc.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(tc.UserID), 40),
-		TruncatedLink(tc.SessionID, config.BaseURL+"/sessions/"+template.URLQueryEscaper(tc.SessionID), 40),
-		InlineCode(tc.MessageID),
+		EntityIDLink(tc.SessionID, config.BaseURL+"/sessions/"+template.URLQueryEscaper(tc.SessionID)),
+		EntityID(tc.MessageID),
 		createdAtDisplay,
 		durationDisplay,
 		resultLenDisplay,

@@ -41,6 +41,7 @@ func RenderRoutes(handler *debuger.DebugHandler, page int) (string, error) {
 	} else {
 		columns := []components.ColumnConfig{
 			{Header: "When", NoWrap: true},
+			{Header: "ID", NoWrap: true},
 			{Header: "User", NoWrap: true},
 			{Header: "Session", NoWrap: true},
 			{Header: "Message"},
@@ -76,6 +77,7 @@ func routeTraceRow(tr *model.RouteTrace) string {
         <td class="text-nowrap" title="%s">%s</td>
         <td class="text-nowrap">%s</td>
         <td class="text-nowrap">%s</td>
+        <td class="text-nowrap">%s</td>
         <td>%s</td>
         <td class="text-nowrap">%s</td>
         <td class="text-center">%d</td>
@@ -86,8 +88,9 @@ func routeTraceRow(tr *model.RouteTrace) string {
     </tr>`,
 		template.HTMLEscapeString(debuger.FormatTime(tr.CreatedAt)),
 		template.HTMLEscapeString(debuger.FormatTimeAgo(tr.CreatedAt)),
+		components.EntityID(tr.TraceID),
 		components.TruncatedLink(tr.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(tr.UserID), 16),
-		components.TruncatedLink(tr.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(tr.SessionID), 22),
+		components.EntityIDLink(tr.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(tr.SessionID)),
 		template.HTMLEscapeString(truncateRunes(tr.Message, 80)),
 		routed,
 		tr.NodeCount(),
@@ -115,15 +118,15 @@ func RenderRouteDetail(handler *debuger.DebugHandler, traceID string) (string, e
 	content += components.Breadcrumb([]components.BreadcrumbItem{
 		{Label: "Dashboard", URL: "/agentize/debug"},
 		{Label: "Routing DAG", URL: routesNavPath},
-		{Label: tr.TraceID, Active: true},
+		{Label: model.DisplayID(tr.TraceID), Active: true},
 	})
 
 	// Metadata card
 	content += ui.CardStart("Routing Trace", "diagram-3")
 	content += `<div class="row"><div class="col-md-6"><table class="table table-sm">`
-	content += metaRow("Trace ID", components.InlineCode(tr.TraceID))
+	content += metaRow("Trace ID", components.EntityID(tr.TraceID))
 	content += metaRow("User", components.TruncatedLink(tr.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(tr.UserID), 30))
-	content += metaRow("Session", components.OpenButton("/agentize/debug/sessions/"+template.URLQueryEscaper(tr.SessionID)))
+	content += metaRow("Session", components.EntityIDLink(tr.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(tr.SessionID)))
 	content += metaRow("Status", routeStatusBadge(tr.Status))
 	content += `</table></div><div class="col-md-6"><table class="table table-sm">`
 	content += metaRow("Nodes", fmt.Sprintf("%d", tr.NodeCount()))
@@ -157,7 +160,7 @@ func RenderRouteDetail(handler *debuger.DebugHandler, traceID string) (string, e
 	content += ui.CardEnd()
 
 	content += ui.ContainerEnd()
-	return ui.Header("Agentize Debug - Routing DAG: "+tr.TraceID) + ui.NavbarAndBody(routesNavPath, content) + ui.Footer(), nil
+	return ui.Header("Agentize Debug - Routing DAG: "+model.DisplayID(tr.TraceID)) + ui.NavbarAndBody(routesNavPath, content) + ui.Footer(), nil
 }
 
 // ---------------------------------------------------------------------------

@@ -78,6 +78,12 @@ func TestRenderSessionDetailPaginatesAndCollapsesCollections(t *testing.T) {
 	if strings.Contains(html, "stale context one") || strings.Contains(html, "stale context two") {
 		t.Fatal("historical system prompt contents must not be rendered as current prompts")
 	}
+	if strings.Contains(html, "Session: alice-conv-s0001") || strings.Contains(html, ">alice-conv-s0001</code>") {
+		t.Fatal("legacy concat must not be the visible session id")
+	}
+	if !strings.Contains(html, "Session: 1") || !strings.Contains(html, ">1</code>") {
+		t.Fatal("session page should show numeric id")
+	}
 	if !strings.Contains(html, "archived-01") {
 		t.Fatal("second archived page must expose the oldest archived message")
 	}

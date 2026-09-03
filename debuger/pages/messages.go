@@ -24,7 +24,7 @@ func RenderMessages(handler *debuger.DebugHandler, page int, userID, sessionID s
 	// Apply filters based on query params
 	if sessionID != "" {
 		messages, err = dp.GetMessagesBySessionDesc(sessionID)
-		title = "Messages for Session: " + sessionID
+		title = "Messages for Session: " + model.DisplayID(sessionID)
 		baseURL = "/agentize/debug/messages?session=" + template.URLQueryEscaper(sessionID)
 	} else if userID != "" {
 		messages, err = dp.GetMessagesByUser(userID)
@@ -51,7 +51,7 @@ func RenderMessages(handler *debuger.DebugHandler, page int, userID, sessionID s
 		content += components.Breadcrumb([]components.BreadcrumbItem{
 			{Label: "Dashboard", URL: "/agentize/debug"},
 			{Label: "Sessions", URL: "/agentize/debug/sessions"},
-			{Label: sessionID, URL: "/agentize/debug/sessions/" + template.URLQueryEscaper(sessionID)},
+			{Label: model.DisplayID(sessionID), URL: "/agentize/debug/sessions/" + template.URLQueryEscaper(sessionID)},
 			{Label: "Messages", Active: true},
 		})
 	} else if userID != "" {
