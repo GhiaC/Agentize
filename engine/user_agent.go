@@ -999,9 +999,10 @@ func summarizeNode(node *model.Node) model.NodeDigest {
 //  1. Agent instructions (engine.md)
 //  2. User context — cross-conversation summary entries and tags
 //  3. Session context — this session's title, summary entries, and tags
+//  4. Opened nodes — compact usage catalog for every currently open knowledge node
 //
-// Knowledge, web results, files, positions, and tool manifests are retrieved
-// on demand. The order is deterministic to enable prompt caching.
+// Full node.md content, web results, files, positions, and tool manifests stay
+// behind tools. The order is deterministic to enable prompt caching.
 func (e *Engine) GetSystemPromptEntries(session *model.Session) []model.SystemPromptEntry {
 	var prompts []model.SystemPromptEntry
 	add := func(key, title, content, source string) {
@@ -1015,13 +1016,59 @@ func (e *Engine) GetSystemPromptEntries(session *model.Session) []model.SystemPr
 		add("agent_instructions", "Agent Instructions", basePrompt, "engine/user_agent.md")
 	}
 
-	// Knowledge, web results, files, positions, and tool manifests are deliberately
-	// omitted. They are retrieved on demand through tools. NodeDigests only control
-	// which node-owned tools are active; they never inject node content here.
 	add("user_context", "User Context", e.buildUserContext(session.UserID), "user")
 	add("session_context", "Session Context", e.buildSessionContext(session), "session")
+	add("opened_nodes", "Opened Nodes", e.buildOpenedNodesPrompt(session), "session.NodeDigests")
 
 	return prompts
+}
+
+func (e *Engine) snapshotSystemPrompts(session *model.Session) []string {
+	entries := e.GetSystemPromptEntries(session)
+	session.SystemPrompts = append([]model.SystemPromptEntry(nil), entries...)
+	session.SystemPromptsUpdatedAt = time.Now()
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.Content)
+	}
+	return out
+}
+
+func (e *Engine) buildOpenedNodesPrompt(session *model.Session) string {
+	if session == nil || len(session.NodeDigests) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("# Opened Knowledge Nodes\n\n")
+	sb.WriteString("These nodes are currently open in this session. Opening another node ADDS to this list; it does not close previous nodes. Tools from every listed node stay callable until you close that node with close_node. Never close root.\n\n")
+	for i, digest := range session.NodeDigests {
+		title := strings.TrimSpace(digest.Title)
+		if title == "" {
+			title = digest.Path
+		}
+		fmt.Fprintf(&sb, "## %d. %s\n", i+1, title)
+		fmt.Fprintf(&sb, "- Path: `%s`\n", digest.Path)
+		if e != nil && e.Repo != nil {
+			node, err := e.Repo.LoadNode(digest.Path)
+			if err == nil && node != nil {
+				if strings.TrimSpace(node.Description) != "" {
+					fmt.Fprintf(&sb, "- Description: %s\n", node.Description)
+				}
+				if strings.TrimSpace(node.Summary) != "" && node.Summary != node.Description {
+					fmt.Fprintf(&sb, "- Summary: %s\n", node.Summary)
+				}
+				tools := activeNodeToolNames(node)
+				if len(tools) > 0 {
+					fmt.Fprintf(&sb, "- Active tools: %s\n", strings.Join(tools, ", "))
+					sb.WriteString("- How to use: call those tools directly while this node stays open. To deactivate them, call close_node with this path.\n")
+				} else {
+					sb.WriteString("- Active tools: none (this node is open for its content; use manage_knowledge action=get if you need to re-read it).\n")
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // GetSystemPrompts is the transport projection retained for callers that only
@@ -1476,15 +1523,9 @@ func (e *Engine) processChatRequest(
 		return "", 0, fmt.Errorf("failed to get session: %w", err)
 	}
 
-	// Get system prompts and tools (these don't change during the loop). Keep the
-	// exact typed array on the session for the debug dashboard.
-	systemPromptEntries := e.GetSystemPromptEntries(session)
-	session.SystemPrompts = append([]model.SystemPromptEntry(nil), systemPromptEntries...)
-	session.SystemPromptsUpdatedAt = time.Now()
-	systemPrompts := make([]string, 0, len(systemPromptEntries))
-	for _, entry := range systemPromptEntries {
-		systemPrompts = append(systemPrompts, entry.Content)
-	}
+	// Get system prompts and tools. Keep the exact typed array on the session
+	// for the debug dashboard. Opening a node later in this turn refreshes both.
+	systemPrompts := e.snapshotSystemPrompts(session)
 	allTools := e.GetTools(session)
 	catalogMode := e.effectiveToolCatalogMode(len(allTools))
 	var discoveredTools []string
@@ -1647,6 +1688,7 @@ func (e *Engine) processChatRequest(
 						if next, err := e.Sessions.Get(sessionID); err == nil {
 							session = next
 							allTools = e.GetTools(session)
+							systemPrompts = e.snapshotSystemPrompts(session)
 						}
 					}
 				}

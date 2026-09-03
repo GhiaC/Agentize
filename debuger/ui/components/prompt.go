@@ -77,7 +77,7 @@ func ToolRetrievablePrompt(key, title string) (bool, string) {
 	case strings.Contains(haystack, "position"):
 		return true, "Open positions are read with account tools. Only a short account-status summary belongs in the prompt."
 	case strings.HasPrefix(k, "opened_node") || k == "opened_files" || k == "opened_nodes" || k == "opened_tools" || k == "file_index":
-		return true, "Opened nodes grant tools. Their content is not copied into the prompt."
+		return false, ""
 	case k == "user_files" || strings.Contains(t, "user files"):
 		return true, "User files are listed and edited with manage_files."
 	default:
@@ -221,6 +221,8 @@ func roleBadges(entry PromptArrayEntry) string {
 		return Badge("session memory", "info")
 	case "account_status":
 		return Badge("account status", "primary")
+	case "opened_nodes", "opened_files", "opened_tools":
+		return Badge("opened nodes", "primary")
 	default:
 		if entry.Content == "" {
 			return Badge("empty", "secondary")

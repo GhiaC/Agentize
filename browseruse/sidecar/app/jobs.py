@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -37,6 +38,7 @@ class BrowserRunner(Protocol):
 
 TAB_LOCK_TIMEOUT_SECONDS = 2.0
 TAB_OP_TIMEOUT_SECONDS = 25.0
+BUSY_LOG_INTERVAL_SECONDS = 15.0
 LOGGER = logging.getLogger("browser-use.jobs")
 
 
@@ -79,6 +81,7 @@ class JobManager:
 		self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 		self._session_locks: dict[str, asyncio.Lock] = {}
 		self._active_job_ids: dict[str, str] = {}
+		self._busy_log_at: dict[tuple[str, str], float] = {}
 		self._store = BrowserStore(
 			settings.data_dir / "browser.db",
 			max_jobs=settings.db_max_jobs,
@@ -210,7 +213,7 @@ class JobManager:
 		opener = getattr(self.runner, "open_tab", None)
 		if opener is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support opening tabs")
-		tabs = await self._with_tab_lock(session_id, lambda: opener(session_id, url), "open_tab")
+		tabs = await self._with_tab_lock(session_id, lambda: opener(session_id, url), "open_tab", exclusive=True)
 		self._store.touch_session(session_id)
 		LOGGER.info("tab opened session=%s tabs=%d", _session_ref(session_id), len(tabs))
 		return tabs
@@ -276,7 +279,7 @@ class JobManager:
 			except ValueError as exc:
 				raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-		return await self._with_tab_lock(session_id, act, "act_on_tab")
+		return await self._with_tab_lock(session_id, act, "act_on_tab", exclusive=True)
 
 	async def close_tab(self, session_id: str, tab_id: str) -> list[BrowserTab]:
 		closer = getattr(self.runner, "close_tab", None)
@@ -290,7 +293,7 @@ class JobManager:
 			except BrowserTabUnavailable as exc:
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 
-		return await self._with_tab_lock(session_id, close, "close_tab")
+		return await self._with_tab_lock(session_id, close, "close_tab", exclusive=True)
 
 	def viewport(self, session_id: str):
 		reader = getattr(self.runner, "viewport_state", None)
@@ -310,7 +313,7 @@ class JobManager:
 			except BrowserTabUnavailable as exc:
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 
-		return await self._with_tab_lock(session_id, apply, "set_viewport")
+		return await self._with_tab_lock(session_id, apply, "set_viewport", exclusive=True)
 
 	async def debug(self, job_limit: int, load_limit: int, session_limit: int = 50) -> BrowserDebugResponse:
 		async with self._jobs_lock:
@@ -527,7 +530,10 @@ class JobManager:
 			async with self._semaphore:
 				session_lock = self._session_locks[job.session_id]
 				await session_lock.acquire()
-				self._active_job_ids[job.session_id] = job.id
+				try:
+					self._active_job_ids[job.session_id] = job.id
+				finally:
+					session_lock.release()
 				try:
 					await self._transition(job, JobStatus.RUNNING)
 					queued_s = max(0.0, (datetime.now(UTC) - job.created_at).total_seconds())
@@ -548,7 +554,6 @@ class JobManager:
 						self._log(job, "info", "actions: " + ", ".join(job.result.action_names[:20]))
 				finally:
 					self._active_job_ids.pop(job.session_id, None)
-					session_lock.release()
 		except asyncio.CancelledError:
 			await self._transition(job, JobStatus.CANCELLED)
 			self._log(job, "warn", "job cancelled")
@@ -587,7 +592,11 @@ class JobManager:
 		async with self._jobs_lock:
 			return self._session_locks.setdefault(session_id, asyncio.Lock())
 
-	async def _with_tab_lock(self, session_id: str, operation, operation_name: str = "tab_operation"):
+	async def _with_tab_lock(self, session_id: str, operation, operation_name: str = "tab_operation", *, exclusive: bool = False):
+		if exclusive:
+			job_id = self._active_job_ids.get(session_id, "")
+			if job_id:
+				raise self._session_busy_error(session_id, job_id=job_id, operation=operation_name)
 		lock = await self._session_lock(session_id)
 		try:
 			await asyncio.wait_for(lock.acquire(), timeout=TAB_LOCK_TIMEOUT_SECONDS)
@@ -634,13 +643,7 @@ class JobManager:
 			phase = "queued" if job.status == JobStatus.QUEUED else "running"
 		else:
 			phase = "running" if job_id else "busy"
-		LOGGER.warning(
-			"session_busy operation=%s session=%s job=%s phase=%s",
-			operation or "unknown",
-			_session_ref(session_id),
-			job_id or "none",
-			phase,
-		)
+		self._log_session_busy(session_id, job_id, operation, phase)
 		detail = "browser session busy"
 		if job_id:
 			detail = f"browser session busy: autonomous job {job_id} {phase}"
@@ -648,6 +651,21 @@ class JobManager:
 			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
 			detail=detail,
 			headers={"X-Browser-Session-Busy": "1"},
+		)
+
+	def _log_session_busy(self, session_id: str, job_id: str, operation: str, phase: str) -> None:
+		key = (_session_ref(session_id), operation or "unknown")
+		now = time.monotonic()
+		last = self._busy_log_at.get(key, 0.0)
+		if now - last < BUSY_LOG_INTERVAL_SECONDS:
+			return
+		self._busy_log_at[key] = now
+		LOGGER.warning(
+			"session_busy operation=%s session=%s job=%s phase=%s",
+			operation or "unknown",
+			key[0],
+			job_id or "none",
+			phase,
 		)
 
 	def _prune_locked(self) -> None:

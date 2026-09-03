@@ -83,6 +83,16 @@ func (e *Engine) createOpenFileFunction() model.ToolFunction {
 				payload["activated_tools"] = activeNodeToolNames(node)
 			}
 		}
+		if session, getErr := e.Sessions.Get(sessionID); getErr == nil && session != nil {
+			openPaths := make([]string, 0, len(session.NodeDigests))
+			for _, digest := range session.NodeDigests {
+				if digest.Path != "" {
+					openPaths = append(openPaths, digest.Path)
+				}
+			}
+			payload["open_nodes"] = openPaths
+			payload["closed_previous"] = false
+		}
 		return boundedKnowledgeJSON(payload), nil
 	}
 }
@@ -175,7 +185,7 @@ func GetFileToolDefinitions() []model.Tool {
 	return []model.Tool{
 		{
 			Name:        "open_node",
-			Description: "Opens a knowledge-tree node by path and adds its content and active tools to this session context.",
+			Description: "Opens a knowledge-tree node by path and adds its content and tools to this session. Previously opened nodes stay open; this does not close them.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -209,7 +219,7 @@ func GetFileToolDefinitions() []model.Tool {
 func OpenNodeToolDefinition() openai.Tool {
 	return openai.Tool{Type: openai.ToolTypeFunction, Function: &openai.FunctionDefinition{
 		Name:        "open_node",
-		Description: "Open a knowledge-tree node by path. Returns that node's content and activates only that node's tools for this session. Node content is not injected into the system prompt. This is the knowledge tree, not the user's product memory/journal.",
+		Description: "Open a knowledge-tree node by path. Returns that node's content and activates its tools in addition to any nodes already open. Previously opened nodes stay open; this does not close them. A compact usage catalog of every currently open node is kept in the system prompt. Full node content is returned here, not copied into the prompt. This is the knowledge tree, not the user's product memory/journal.",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

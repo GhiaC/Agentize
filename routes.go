@@ -211,6 +211,7 @@ func (ag *Agentize) createDebugHandler() (*debuger.DebugHandler, error) {
 			LastActivityThreshold:           engineConfig.LastActivityThreshold,
 			ImmediateSummarizationThreshold: engineConfig.ImmediateSummarizationThreshold,
 			SummaryModel:                    engineConfig.SummaryModel,
+			SummarySystemPrompt:             engineConfig.SummarizationPrompts.SummarySystemPrompt,
 		}
 	}
 

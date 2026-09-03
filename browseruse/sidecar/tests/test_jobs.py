@@ -390,14 +390,42 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
 		created = await manager.create("session-1", StartJobRequest(task="hold browser session"))
 		await asyncio.wait_for(runner.started.wait(), timeout=1)
 		self.assertEqual(await manager.screenshot("session-1", created.id), b"PNG")
+		self.assertEqual((await manager.tabs("session-1"))[0].id, "tab-1")
+		self.assertEqual(await manager.tab_screenshot("session-1", "tab-1"), b"TAB-PNG")
 		started = asyncio.get_running_loop().time()
-		with patch("app.jobs.TAB_LOCK_TIMEOUT_SECONDS", 0.05):
-			with self.assertRaises(HTTPException) as caught:
-				await manager.open_tab("session-1", "https://openai.com")
+		with self.assertRaises(HTTPException) as caught:
+			await manager.open_tab("session-1", "https://openai.com")
 		self.assertEqual(caught.exception.status_code, 503)
 		self.assertEqual(caught.exception.headers.get("X-Browser-Session-Busy"), "1")
 		self.assertIn(created.id, str(caught.exception.detail))
 		self.assertLess(asyncio.get_running_loop().time() - started, 0.5)
+		with self.assertRaises(HTTPException) as close_caught:
+			await manager.close_tab("session-1", "tab-1")
+		self.assertEqual(close_caught.exception.status_code, 503)
+		await manager.cancel("session-1", created.id)
+		await manager.shutdown()
+
+	async def test_busy_warnings_are_rate_limited_per_session_operation(self):
+		class BlockingTabRunner(TabRunner):
+			def __init__(self):
+				super().__init__()
+				self.started = asyncio.Event()
+
+			async def run(self, _session_id: str, _job_id: str, _request: StartJobRequest) -> JobResult:
+				self.started.set()
+				await asyncio.Event().wait()
+				return result()
+
+		runner = BlockingTabRunner()
+		manager = JobManager(settings(), runner)
+		created = await manager.create("session-1", StartJobRequest(task="hold browser session"))
+		await asyncio.wait_for(runner.started.wait(), timeout=1)
+		with patch("app.jobs.LOGGER") as logger:
+			with self.assertRaises(HTTPException):
+				await manager.open_tab("session-1", "https://openai.com")
+			with self.assertRaises(HTTPException):
+				await manager.open_tab("session-1", "https://openai.com")
+			self.assertEqual(logger.warning.call_count, 1)
 		await manager.cancel("session-1", created.id)
 		await manager.shutdown()
 

@@ -66,6 +66,7 @@ func TestRenderSessionDetailPaginatesAndCollapsesCollections(t *testing.T) {
 		"first immutable fact", "second immutable fact",
 		"Agent Instructions", "agent_instructions", "User Context", "prefers concise answers",
 		"Session Context", "Opened Tools",
+		"Created At:", "Updated At:", "Summarized At:", "border-top",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("missing %q in rendered session page", want)

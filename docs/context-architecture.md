@@ -13,8 +13,10 @@ Durable memory is split by ownership:
 - **User context**: facts and tags that remain useful across conversations.
 - **Session context**: title, append-only summary entries, and tags for one
   session/conversation.
-- **Knowledge state**: opened node identities are runtime capability state, not
-  prompt content. Knowledge is discovered and read on demand.
+- **Knowledge state**: opened node identities are runtime capability state. A
+  compact usage catalog of currently open nodes is included in the prompt so
+  the model knows what is open and how to use it. Full `node.md` content stays
+  in the tool result.
 
 Collections that can grow without bound (files, conversations, historic
 sessions) are queried with tools. They are not copied into every prompt.
@@ -26,9 +28,12 @@ Worker/conversation sessions assemble entries in this deterministic order:
 1. `agent_instructions` — the stable worker contract.
 2. `user_context` — cross-conversation summary entries and tags.
 3. `session_context` — this session's title, summary entries, and tags.
+4. `opened_nodes` — compact usage catalog for every currently open knowledge node
+   (path, title, active tools, how to use/close). Opening a node adds to this
+   list; it does not close previously opened nodes.
 
-Knowledge, complete position lists, web results, user files, and tool manifests
-never become prompt entries. A compact account state may be written into
+Full node.md content, complete position lists, web results, user files, and tool
+manifests never become prompt entries. A compact account state may be written into
 session context by the owning product, but detailed positions remain tool data.
 
 The Core prompt contains only its controller instructions, user context and its
@@ -45,11 +50,14 @@ system messages until existing rows are naturally rewritten.
 
 `manage_knowledge` is the discovery/read interface: `list` and `search`
 return bounded metadata, `get` reads one node without changing capability
-state, `open` returns its content and activates that exact node's tools, and
-`close` deactivates them. `open_node` / `close_node` are the same open/close
+state, `open` returns its content and activates that exact node's tools **in addition
+to any already-open nodes** (it does not close previous nodes), and `close`
+deactivates one node. `open_node` / `close_node` are the same open/close
 operations with a dedicated schema. Both are registered as executable tools
-and advertised whenever a knowledge repository is configured. Node content is
-returned in the tool result; it is never copied into the system prompt.
+and advertised whenever a knowledge repository is configured. Full node content is
+returned in the tool result. A compact usage catalog of currently open nodes is
+kept in the `opened_nodes` system-prompt entry so the model knows what is open
+and which tools those nodes granted.
 
 `search_tools` searches the tree and returns `{name, path}` so the model can
 open the owning node. It does not load an unopened node's schema into the

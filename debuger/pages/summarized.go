@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"sort"
+	"strings"
 
 	"github.com/ghiac/agentize/debuger"
 	"github.com/ghiac/agentize/debuger/data"
@@ -52,6 +53,12 @@ func RenderSummarized(handler *debuger.DebugHandler, page int) (string, error) {
 			{Label: "Summary Model", Value: config.SummaryModel},
 		}
 		content += components.ConfigCard("Scheduler Configuration", configItems)
+		if prompt := strings.TrimSpace(config.SummarySystemPrompt); prompt != "" {
+			content += collapsibleCardStart("Summarization Prompt", "chat-quote-fill", 1, true)
+			content += `<p class="text-muted mb-3">This prompt is sent to the summary model. Memory is an append-only array: the model can only add new durable facts, or return <code>[]</code> when nothing new is worth keeping. It cannot edit existing entries.</p>`
+			content += fmt.Sprintf(`<pre class="bg-light border rounded p-3" style="white-space: pre-wrap; word-wrap: break-word;">%s</pre>`, template.HTMLEscapeString(prompt))
+			content += collapsibleCardEnd()
+		}
 	}
 
 	// Statistics Cards Row 1 - Summarization Logs

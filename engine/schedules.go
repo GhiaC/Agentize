@@ -131,42 +131,48 @@ type conversationMetadataStore interface {
 // DefaultSummarizationPrompts returns default prompts for summarization
 func DefaultSummarizationPrompts() SummarizationPrompts {
 	return SummarizationPrompts{
-		SummarySystemPrompt: `You are an incremental conversation summarizer. The application stores summary memory as an append-only array. Return only NEW important facts from the new conversation; never repeat, rewrite, merge, correct, or delete an existing entry.
+		SummarySystemPrompt: `You are the permanent-memory writer for this application. The application stores memory as an append-only JSON array of strings. You cannot edit, rewrite, merge, reorder, correct, or delete anything that is already in that array. You can only append new strings, or return [] and add nothing.
 
 CONTENT VIOLATION (check first): If the user's messages contain offensive, vulgar, abusive, or clearly inappropriate language (insults, slurs, explicit content, hate speech, etc.), respond with ONLY this exact word, nothing else: OFFENSIVE_CONTENT. No explanation, no other text.
 
-APPEND-ONLY RULES:
-- Treat existing summary entries as immutable history.
-- Emit only genuinely new specific information from the NEW conversation.
-- If a fact changed, append a new entry describing the change; do not rewrite the old entry.
-- Do not emit facts already present in the existing entries.
+WHAT THIS MEMORY IS FOR:
+This is not a conversation recap. It is the AI's long-term memory: facts that will still matter in a future session when the original messages are gone. If knowing this later would not change how the AI helps the user, do not store it.
 
-WHAT COUNTS AS SPECIFIC (include):
-- Names of people, places, or entities
-- Personal details: age, birthday, preferences, relationships
-- Decisions, commitments, goals
-- Important numbers/IDs/dates the user defined
-- Custom configurations or settings
+APPEND-ONLY CONSEQUENCES:
+- Existing entries are immutable history. Never repeat them.
+- You have no edit capability. A wrong or generic line would sit in memory forever, so be extremely selective.
+- If nothing genuinely new and durable was said, return [] — that is the correct and expected result.
+- If a fact changed, append a new entry describing the change; do not rewrite the old one.
 
-WHAT TO IGNORE (never add):
-- Greetings, pleasantries, small talk, acknowledgments
-- Generic Q&A (unit conversions, weather, time), temporary calculations
-- Generic how-to and common-knowledge lookups, filler
+STORE ONLY NEW, SPECIFIC, DURABLE FACTS, for example:
+- A proper name that was not already stored (person, company, product, place)
+- A personal detail that will stay true (age, role, preference, relationship, constraint)
+- A decision, commitment, goal, or configuration the user made
+- A notable action that actually happened (opened an account, placed a trade, changed a setting)
+- An identifier, date, or number the user defined and will need later
 
-OUTPUT REQUIREMENTS:
+NEVER STORE:
+- Greetings, thanks, acknowledgments, small talk
+- Restating what is already in the existing entries
+- Generic Q&A, how-tos, weather, time, unit conversions, temporary calculations
+- Process chatter ("the user asked…", "I explained…", "we discussed…")
+- Anything that is only useful for this turn
+
+OUTPUT:
 - Return a valid JSON array of compact strings and nothing else.
 - Each string is one independently useful new fact.
 - Return [] when there is nothing important to append.
 
-Example: existing ["User Ali is 28."] + new "I turned 29 and joined TechCorp" => ["User Ali turned 29.","User Ali joined TechCorp."]`,
+Example: existing ["User Ali is 28."] + new "I turned 29 and joined TechCorp" => ["User Ali turned 29.","User Ali joined TechCorp."]
+Example: existing ["User Ali is 28."] + new "ok thanks, what is 2+2?" => []`,
 
-		SummaryUserPromptTemplate: `{{if .PreviousSummary}}IMMUTABLE EXISTING SUMMARY ENTRIES (do not repeat or edit):
+		SummaryUserPromptTemplate: `{{if .PreviousSummary}}IMMUTABLE EXISTING MEMORY ENTRIES (you cannot edit these; do not repeat them):
 {{.PreviousSummary}}
 
-NEW conversation to inspect:
+NEW conversation to inspect. Append only facts that should live in permanent memory. If nothing new is worth remembering, return []:
 {{end}}{{.ConversationText}}
 
-Return only the JSON array of NEW important facts to append:`,
+Return only the JSON array of NEW durable facts to append, or []:`,
 
 		TagSystemPrompt: `You are a conversation tagger that identifies SPECIFIC topics only.
 

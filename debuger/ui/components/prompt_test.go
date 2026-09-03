@@ -13,7 +13,8 @@ func TestToolRetrievablePromptClassifiesDumps(t *testing.T) {
 		want       bool
 	}{
 		{"knowledge_tree", "Knowledge Tree", true},
-		{"opened_node_1", "Opened node", true},
+		{"opened_node_1", "Opened node", false},
+		{"opened_nodes", "Opened Nodes", false},
 		{"web_results", "Web Results", true},
 		{"positions", "Open Positions", true},
 		{"account_positions", "Positions", true},

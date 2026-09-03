@@ -288,18 +288,6 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
             </div>
             <div class="col-md-6">
                 <div class="mb-3">
-                    <strong class="d-block mb-2">Created At:</strong>
-                    <div class="text-muted">%s <small>(%s)</small></div>
-                </div>
-                <div class="mb-3">
-                    <strong class="d-block mb-2">Updated At:</strong>
-                    <div class="text-muted">%s <small>(%s)</small></div>
-                </div>
-                <div class="mb-3">
-                    <strong class="d-block mb-2">Summarized At:</strong>
-                    <div class="text-muted">%s</div>
-                </div>
-                <div class="mb-3">
                     <strong class="d-block mb-2">Messages:</strong>
                     <div>%s + %s</div>
                 </div>
@@ -317,6 +305,20 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
                 </div>
             </div>
         </div>
+        <div class="row g-4 pt-2 mt-1 border-top">
+            <div class="col-md-4">
+                <strong class="d-block mb-1">Created At:</strong>
+                <div class="text-muted">%s <small>(%s)</small></div>
+            </div>
+            <div class="col-md-4">
+                <strong class="d-block mb-1">Updated At:</strong>
+                <div class="text-muted">%s <small>(%s)</small></div>
+            </div>
+            <div class="col-md-4">
+                <strong class="d-block mb-1">Summarized At:</strong>
+                <div class="text-muted">%s</div>
+            </div>
+        </div>
     </div>
 </div>`,
 		components.CodeBlock(template.HTMLEscapeString(session.SessionID)),
@@ -327,16 +329,16 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 		components.Link(session.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(session.UserID)),
 		summaryDisplay,
 		tagsDisplay,
-		debuger.FormatTime(session.CreatedAt),
-		debuger.FormatDuration(session.CreatedAt),
-		debuger.FormatTime(session.UpdatedAt),
-		debuger.FormatDuration(session.UpdatedAt),
-		summarizedAtDisplay,
 		components.Badge(fmt.Sprintf("%d active", activeMessagesCount), "primary"),
 		components.Badge(fmt.Sprintf("%d archived", archivedMessagesCount), "secondary"),
 		components.CountBadge(len(files), "info"),
 		components.CountBadge(session.MessageSeq, "info"),
 		components.CountBadge(session.ToolSeq, "info"),
+		debuger.FormatTime(session.CreatedAt),
+		debuger.FormatDuration(session.CreatedAt),
+		debuger.FormatTime(session.UpdatedAt),
+		debuger.FormatDuration(session.UpdatedAt),
+		summarizedAtDisplay,
 	)
 
 	// Prefer the typed last-assembled prompt array. Legacy rows may still contain
@@ -365,7 +367,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 		}
 	}
 	content += collapsibleCardStart("Current System Prompts", "gear-fill", currentPromptCount, true)
-	content += `<p class="text-muted mb-3">Ordered prompt array actually sent to the model. Each row is a separate document you can open on its own. Knowledge, web results, files, and full position lists are tool data and are not part of this list — only a short account-status summary belongs here.</p>`
+	content += `<p class="text-muted mb-3">Ordered prompt array actually sent to the model. Each row is a separate document you can open on its own. Currently open knowledge nodes appear here with usage instructions. Unopened knowledge, web results, user files, and full position lists stay behind tools.</p>`
 	if legacyPromptFallback {
 		content += components.WarningAlert("Legacy fallback — this session has no typed prompt snapshot yet; these entries came from transcript system messages.")
 	} else if !session.SystemPromptsUpdatedAt.IsZero() {

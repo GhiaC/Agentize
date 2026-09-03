@@ -15,7 +15,7 @@ const maxKnowledgeResultChars = 12000
 func ManageKnowledgeToolDefinition() openai.Tool {
 	return openai.Tool{Type: openai.ToolTypeFunction, Function: &openai.FunctionDefinition{
 		Name:        "manage_knowledge",
-		Description: "Discover and read the knowledge tree on demand. list/search return metadata, get reads one node without activating it, open reads it and activates only that node's tools for this session, and close deactivates them. Knowledge-tree content is never preloaded into the system prompt. This is not the user's product memory or trade journal.",
+		Description: "Discover and read the knowledge tree on demand. list/search return metadata, get reads one node without activating it, open reads it and adds that node's tools to any already-open nodes (it does not close previous nodes), and close deactivates one node. A compact usage catalog of currently open nodes is kept in the system prompt. Full node content is returned by get/open, not copied into the prompt. This is not the user's product memory or trade journal.",
 		Parameters: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -63,6 +63,16 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 			if action == "open" {
 				payload["opened"] = true
 				payload["activated_tools"] = activeNodeToolNames(node)
+				payload["closed_previous"] = false
+				if session, getErr := e.Sessions.Get(sessionID); getErr == nil && session != nil {
+					openPaths := make([]string, 0, len(session.NodeDigests))
+					for _, digest := range session.NodeDigests {
+						if digest.Path != "" {
+							openPaths = append(openPaths, digest.Path)
+						}
+					}
+					payload["open_nodes"] = openPaths
+				}
 			}
 			return boundedKnowledgeJSON(payload), nil
 		case "close":

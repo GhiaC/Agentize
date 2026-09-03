@@ -85,7 +85,7 @@ func TestSystemPromptEntriesExposeTypedContext(t *testing.T) {
 	for _, entry := range entries {
 		byKey[entry.Key] = entry.Content
 	}
-	for _, key := range []string{"agent_instructions", "user_context", "session_context"} {
+	for _, key := range []string{"agent_instructions", "user_context", "session_context", "opened_nodes"} {
 		if byKey[key] == "" {
 			t.Errorf("missing prompt entry %s", key)
 		}
@@ -94,6 +94,12 @@ func TestSystemPromptEntriesExposeTypedContext(t *testing.T) {
 		if _, ok := byKey[forbidden]; ok {
 			t.Fatalf("tool-retrievable data leaked into prompt: %s", forbidden)
 		}
+	}
+	if !strings.Contains(byKey["opened_nodes"], "root/child") {
+		t.Fatal("opened node missing from prompt")
+	}
+	if !strings.Contains(byKey["opened_nodes"], "child_tool") {
+		t.Fatal("opened node tools missing from prompt")
 	}
 	if !strings.Contains(byKey["user_context"], "prefers concise") {
 		t.Fatal("user context missing")
@@ -155,6 +161,23 @@ func TestOpenNodeIsRegisteredAndReturnsContent(t *testing.T) {
 	loaded, _ := st.Get("s1")
 	if !toolNames(eng.GetTools(loaded))["child_tool"] {
 		t.Fatal("open_node did not activate child_tool")
+	}
+	if _, err := eng.Functions.Execute("open_node", map[string]interface{}{
+		"path": "root", "__session_id__": "s1", "__user_id__": "u1",
+	}); err != nil {
+		t.Fatalf("open_node root: %v", err)
+	}
+	loaded, _ = st.Get("s1")
+	names = toolNames(eng.GetTools(loaded))
+	if !names["child_tool"] || !names["root_tool"] {
+		t.Fatalf("opening a second node closed the first: %v", names)
+	}
+	byKey := map[string]string{}
+	for _, entry := range eng.GetSystemPromptEntries(loaded) {
+		byKey[entry.Key] = entry.Content
+	}
+	if !strings.Contains(byKey["opened_nodes"], "Path: `root/child`\n") || !strings.Contains(byKey["opened_nodes"], "Path: `root`\n") {
+		t.Fatalf("opened_nodes prompt missing both paths: %q", byKey["opened_nodes"])
 	}
 	if _, err := eng.Functions.Execute("close_node", map[string]interface{}{
 		"path": "root/child", "__session_id__": "s1",

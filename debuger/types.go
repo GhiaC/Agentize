@@ -62,6 +62,7 @@ type SchedulerConfig struct {
 	LastActivityThreshold           time.Duration
 	ImmediateSummarizationThreshold int
 	SummaryModel                    string
+	SummarySystemPrompt             string
 }
 
 // ToolCallInfo represents information about a tool call for display
