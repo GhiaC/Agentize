@@ -604,6 +604,10 @@ func (s *TaskScheduler) Create(input CreateTaskScheduleInput) (*model.TaskSchedu
 
 	now := time.Now()
 	scheduleID := newTaskID("sch")
+	if user, err := s.store.GetOrCreateUser(input.UserID); err == nil && user != nil {
+		scheduleID = user.NextScheduleID()
+		_ = s.store.PutUser(user)
+	}
 	sessionSeq, err := s.store.GetNextSessionSeq(input.UserID, targetAgentType)
 	if err != nil {
 		return nil, fmt.Errorf("allocate schedule session: %w", err)
@@ -613,6 +617,7 @@ func (s *TaskScheduler) Create(input CreateTaskScheduleInput) (*model.TaskSchedu
 		model.GenerateSessionID(input.UserID, targetAgentType, sessionSeq),
 		targetAgentType,
 	)
+	dedicatedSession.Seq = sessionSeq
 	dedicatedSession.Title = "Schedule: " + input.Name
 	dedicatedSession.Tags = []string{"schedule", "schedule:" + scheduleID}
 	if len(sourceSession.NodeDigests) > 0 {

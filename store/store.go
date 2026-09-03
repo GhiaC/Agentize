@@ -58,6 +58,8 @@ type Store interface {
 	// first (limit <= 0 defaults to an internal page size; offset < 0 → 0).
 	// Prefer this over the unbounded read path for sessions that grow large.
 	GetMessagesBySessionPage(sessionID string, limit, offset int) ([]*model.Message, error)
+	// GetUserMessagesBySessionPage is GetMessagesBySessionPage scoped to userID.
+	GetUserMessagesBySessionPage(userID, sessionID string, limit, offset int) ([]*model.Message, error)
 	AddOpenedFile(openedFile *model.OpenedFile) error
 	// CloseOpenedFile marks the currently-open record for (sessionID, filePath)
 	// closed. It is a no-op when the file is not currently open.
@@ -68,6 +70,9 @@ type Store interface {
 	PutUserFile(f *model.UserFile) error
 	// GetUserFile returns the file by id, or (nil, nil) when not found.
 	GetUserFile(fileID string) (*model.UserFile, error)
+	// GetUserFileForUser looks up a file owned by userID. Required for per-user
+	// numeric FileIDs that are not globally unique.
+	GetUserFileForUser(userID, fileID string) (*model.UserFile, error)
 	DeleteUserFile(fileID string) error
 	PutToolCall(toolCall *model.ToolCall) error
 	UpdateToolCallResponse(toolID string, response string, execErr error) error
@@ -90,6 +95,9 @@ type Store interface {
 
 	// GetConversation returns the conversation or an error when it does not exist.
 	GetConversation(conversationID string) (*model.Conversation, error)
+	// GetUserConversation looks up a conversation owned by userID. Required for
+	// per-user numeric ConversationIDs that are not globally unique.
+	GetUserConversation(userID, conversationID string) (*model.Conversation, error)
 	// PutConversation upserts a conversation keyed by ConversationID.
 	PutConversation(conversation *model.Conversation) error
 	// DeleteConversation removes the conversation row. It does not delete the
@@ -100,6 +108,9 @@ type Store interface {
 	// GetConversationBySession returns the conversation attached to sessionID,
 	// or (nil, nil) when none exists.
 	GetConversationBySession(sessionID string) (*model.Conversation, error)
+	// GetUserConversationBySession looks up the conversation attached to a
+	// user-owned session. Required when SessionID is a per-user numeric id.
+	GetUserConversationBySession(userID, sessionID string) (*model.Conversation, error)
 	// GetNextConversationSeq returns the next conversation sequence for a user.
 	GetNextConversationSeq(userID string) (int, error)
 	// TouchConversationBySession bumps UpdatedAt of the conversation linked to
@@ -113,6 +124,8 @@ type Store interface {
 	PutTaskSchedule(schedule *model.TaskSchedule) error
 	// GetTaskSchedule returns the schedule by id, or (nil, nil) when absent.
 	GetTaskSchedule(scheduleID string) (*model.TaskSchedule, error)
+	// GetUserTaskSchedule looks up a schedule owned by userID.
+	GetUserTaskSchedule(userID, scheduleID string) (*model.TaskSchedule, error)
 	// ListTaskSchedules returns schedules newest-first. An empty userID lists all
 	// schedules (admin/worker use); a non-empty userID enforces owner scoping.
 	ListTaskSchedules(userID string) ([]*model.TaskSchedule, error)
@@ -128,6 +141,8 @@ type Store interface {
 	// PutWorkflowRun upserts a workflow and its complete task DAG.
 	// Read methods live on debuger.DebugStore.
 	PutWorkflowRun(workflow *model.WorkflowRun) error
+	// GetUserWorkflowRun looks up a workflow owned by userID.
+	GetUserWorkflowRun(userID, workflowID string) (*model.WorkflowRun, error)
 
 	// --- Visited-node tracking (user-scoped, in-memory, not persisted) ---
 

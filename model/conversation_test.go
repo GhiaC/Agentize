@@ -27,8 +27,8 @@ func TestConversationRunStateRoundTrip(t *testing.T) {
 
 func TestGenerateConversationID(t *testing.T) {
 	got := GenerateConversationID("alice", 1)
-	if got != "alice-c0001" {
-		t.Fatalf("id = %q, want alice-c0001", got)
+	if got != "1" {
+		t.Fatalf("id = %q, want 1", got)
 	}
 	if got != GenerateConversationID("alice", 1) {
 		t.Fatal("id must be deterministic")

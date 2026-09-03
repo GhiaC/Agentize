@@ -33,8 +33,8 @@ func TestRouteTraceBuilder_DirectAnswer(t *testing.T) {
 	b.Response("hi there", false, RouteStatusOK)
 	tr := b.Build(50 * time.Millisecond)
 
-	if tr.TraceID != s.SessionID+"-rt0001" {
-		t.Errorf("TraceID = %q, want %q", tr.TraceID, s.SessionID+"-rt0001")
+	if tr.TraceID != "1" {
+		t.Errorf("TraceID = %q, want 1", tr.TraceID)
 	}
 	if tr.Status != "ok" {
 		t.Errorf("Status = %q, want ok", tr.Status)

@@ -208,12 +208,17 @@ type Session struct {
 	PendingUserContext *ContextDelta
 
 	// ==================== Sequences ====================
-	MessageSeq          int // Sequence counter for messages
-	ToolSeq             int // Sequence counter for tool calls
-	OpenedFileSeq       int // Sequence counter for opened files
-	UserFileSeq         int // Sequence counter for user files (uploaded/generated)
-	SummarizationLogSeq int // Sequence counter for summarization logs
-	TraceSeq            int // Sequence counter for route traces (Core decision DAGs)
+	// Seq is this session's per-user number (SessionID is FormatID(Seq) for new
+	// rows). Parent identity lives on UserID, never inside SessionID.
+	Seq                 int
+	MessageSeq          int            // Sequence counter for messages (per session)
+	ToolSeq             int            // Deprecated: session-wide tool counter; new tool ids increment per message.
+	ToolSeqByMessage    map[string]int // Per-message tool-call increment
+	OpenedFileSeq       int            // Deprecated: opened-file ids now increment on User.FileSeq.
+	UserFileSeq         int            // Deprecated: user-file ids now increment on User.FileSeq.
+	SummarizationLogSeq int            // Sequence counter for summarization logs (per session)
+	TraceSeq            int            // Sequence counter for route traces (per session)
+	ResultSeq           int            // Sequence counter for buffered tool-result ids (per session)
 
 	// ==================== Internal (not persisted) ====================
 	seqMu sync.Mutex `bson:"-" json:"-"` // Mutex for thread-safe sequence operations
@@ -251,19 +256,19 @@ func NewSessionWithID(userID string, sessionID string, agentType AgentType) *Ses
 		Title:               "",
 		Summary:             SummaryEntries{},
 		SummaryInitialized:  false,
+		Seq:                 SeqFromID(sessionID),
 		MessageSeq:          0,
 		ToolSeq:             0,
+		ToolSeqByMessage:    make(map[string]int),
 		OpenedFileSeq:       0,
 		UserFileSeq:         0,
 		SummarizationLogSeq: 0,
 		TraceSeq:            0,
+		ResultSeq:           0,
 	}
 }
 
-// NewSessionForUser creates a new session for a user with proper sequential ID
-// Format: {UserID}-{AgentType}-s{SeqCounter}
-// This method uses User.NextSessionSeq for sequence generation
-// Note: user must not be nil - caller should check before calling
+// NewSessionForUser creates a new session for a user with a numeric sequential ID.
 func NewSessionForUser(user *User, agentType AgentType) *Session {
 	if user == nil {
 		panic("NewSessionForUser: user cannot be nil")
@@ -271,29 +276,36 @@ func NewSessionForUser(user *User, agentType AgentType) *Session {
 
 	seq := user.NextSessionSeq(agentType)
 	sessionID := GenerateSessionID(user.UserID, agentType, seq)
-	return NewSessionWithID(user.UserID, sessionID, agentType)
+	session := NewSessionWithID(user.UserID, sessionID, agentType)
+	session.Seq = seq
+	return session
 }
 
 // NewSessionWithType creates a new session for a user with a specific agent type
 // This is a convenience function for tests and simple use cases
 // For production, prefer using SessionHandler.CreateSession or NewSessionWithID
 func NewSessionWithType(userID string, agentType AgentType) *Session {
-	// Use seq=1 for simple initialization (tests, local dev)
 	sessionID := GenerateSessionID(userID, agentType, 1)
-	return NewSessionWithID(userID, sessionID, agentType)
+	session := NewSessionWithID(userID, sessionID, agentType)
+	session.Seq = 1
+	return session
 }
 
-// GenerateSessionID generates a session ID with the new format
-// Format: {UserID}-{AgentType}-s{SeqCounter}
-// Example: user123-core-s0001, user123-low-s0002
+// GenerateSessionID returns the numeric session id for seq.
+// userID and agentType are ignored; parent identity is stored on Session.UserID
+// and Session.AgentType.
+//
+// Deprecated: the concatenated form `{UserID}-{AgentType}-s{seq}` is no longer
+// produced. Callers should pass seq from GetNextSessionSeq / User.NextSessionSeq.
 func GenerateSessionID(userID string, agentType AgentType, seq int) string {
-	agentShort := agentTypeShortCode(agentType)
-	return fmt.Sprintf("%s-%s-s%04d", userID, agentShort, seq)
+	_ = userID
+	_ = agentType
+	return FormatID(seq)
 }
 
 // agentTypeShortCode returns short code for agent type.
-// For built-in types it returns the canonical short code; for custom agent
-// types (registered via AgentManager) it uses the AgentType string directly.
+//
+// Deprecated: session ids no longer embed an agent-type fragment.
 func agentTypeShortCode(agentType AgentType) string {
 	s := string(agentType)
 	if s == "" {
@@ -307,125 +319,121 @@ func agentTypeShortCode(agentType AgentType) string {
 func (s *Session) NextMessageSeq() int {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	s.MessageSeq++
-	return s.MessageSeq
+	return NextSeq(&s.MessageSeq)
 }
 
-// GenerateMessageID generates a unique message ID for this session
-// Format: {SessionID}-{SeqID}
-// Thread-safe via mutex
+// GenerateMessageID returns the next numeric message id in this session.
+// Session identity is Session.SessionID, not concatenated into the message id.
 func (s *Session) GenerateMessageID() string {
-	s.seqMu.Lock()
-	defer s.seqMu.Unlock()
-	s.MessageSeq++
-	return fmt.Sprintf("%s-m%04d", s.SessionID, s.MessageSeq)
+	id, _ := s.GenerateMessageIDWithSeq()
+	return id
 }
 
-// GenerateMessageIDWithSeq generates a unique message ID and returns both the ID and sequence number
-// Format: {SessionID}-m{SeqID}
-// Returns: (messageID, seqID)
-// Thread-safe via mutex
+// GenerateMessageIDWithSeq returns the numeric message id and its per-session seq.
 func (s *Session) GenerateMessageIDWithSeq() (string, int) {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	s.MessageSeq++
-	messageID := fmt.Sprintf("%s-m%04d", s.SessionID, s.MessageSeq)
-	return messageID, s.MessageSeq
+	seq := NextSeq(&s.MessageSeq)
+	return FormatID(seq), seq
 }
 
-// NextToolSeq increments and returns the next tool sequence number
-// Thread-safe via mutex
+// NextToolSeq increments and returns the next session-wide tool sequence.
+//
+// Deprecated: tool ids increment per message via GenerateToolIDForMessage.
 func (s *Session) NextToolSeq() int {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	s.ToolSeq++
-	return s.ToolSeq
+	return NextSeq(&s.ToolSeq)
 }
 
-// GenerateToolID generates a unique tool ID for this session
-// Format: {SessionID}-t{SeqID}
-// Thread-safe via mutex
+// GenerateToolID returns the next numeric tool id when the parent message is unknown.
+//
+// Deprecated: prefer GenerateToolIDForMessage so the counter is per message.
 func (s *Session) GenerateToolID() string {
+	return s.GenerateToolIDForMessage("")
+}
+
+// GenerateToolIDForMessage returns the next numeric tool-call id inside messageID.
+// UserID, SessionID, and MessageID stay on ToolCall fields; they are not concatenated.
+func (s *Session) GenerateToolIDForMessage(messageID string) string {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
+	if s.ToolSeqByMessage == nil {
+		s.ToolSeqByMessage = make(map[string]int)
+	}
+	key := strings.TrimSpace(messageID)
+	n := s.ToolSeqByMessage[key]
+	n = NextSeq(&n)
+	s.ToolSeqByMessage[key] = n
 	s.ToolSeq++
-	return fmt.Sprintf("%s-t%04d", s.SessionID, s.ToolSeq)
+	return FormatID(n)
 }
 
-// GenerateToolIDWithSeq generates a unique tool ID and returns both the ID and sequence number
-// Format: {SessionID}-t{SeqID}
-// Returns: (toolID, seqID)
-// Thread-safe via mutex
+// GenerateToolIDWithSeq returns a numeric tool id and the session-wide tool seq.
+//
+// Deprecated: prefer GenerateToolIDForMessage.
 func (s *Session) GenerateToolIDWithSeq() (string, int) {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	s.ToolSeq++
-	toolID := fmt.Sprintf("%s-t%04d", s.SessionID, s.ToolSeq)
-	return toolID, s.ToolSeq
+	seq := NextSeq(&s.ToolSeq)
+	return FormatID(seq), seq
 }
 
-// GenerateFileID generates a unique file ID for this session
-// Format: {SessionID}-f{SeqID}
-// Thread-safe via mutex
+// GenerateFileID returns the next numeric opened-file id for this session.
+//
+// Deprecated: file ids increment per user via User.NextFileID.
 func (s *Session) GenerateFileID() string {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	s.OpenedFileSeq++
-	return fmt.Sprintf("%s-f%04d", s.SessionID, s.OpenedFileSeq)
+	return FormatID(NextSeq(&s.OpenedFileSeq))
 }
 
-// GenerateUserFileID generates a unique ID for a user file (uploaded or
-// generated) in this session. Format: {SessionID}-uf{seq}.
+// GenerateUserFileID returns the next numeric user-file id.
+//
+// Deprecated: file ids increment per user via User.NextFileID.
 func (s *Session) GenerateUserFileID() string {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	s.UserFileSeq++
-	return fmt.Sprintf("%s-uf%04d", s.SessionID, s.UserFileSeq)
+	return FormatID(NextSeq(&s.UserFileSeq))
 }
 
-// GenerateFileIDWithSeq generates a unique file ID and returns both the ID and sequence number
-// Format: {SessionID}-f{SeqID}
-// Returns: (fileID, seqID)
-// Thread-safe via mutex
+// GenerateFileIDWithSeq returns a numeric opened-file id and seq.
+//
+// Deprecated: file ids increment per user via User.NextFileID.
 func (s *Session) GenerateFileIDWithSeq() (string, int) {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	s.OpenedFileSeq++
-	fileID := fmt.Sprintf("%s-f%04d", s.SessionID, s.OpenedFileSeq)
-	return fileID, s.OpenedFileSeq
+	seq := NextSeq(&s.OpenedFileSeq)
+	return FormatID(seq), seq
 }
 
-// GenerateSummarizationLogID generates a unique summarization log ID for this session
-// Format: {SessionID}-l{SeqID}
-// Thread-safe via mutex
+// GenerateSummarizationLogID returns the next numeric log id in this session.
+// SessionID and UserID stay on the log row.
 func (s *Session) GenerateSummarizationLogID() string {
-	s.seqMu.Lock()
-	defer s.seqMu.Unlock()
-	s.SummarizationLogSeq++
-	return fmt.Sprintf("%s-l%04d", s.SessionID, s.SummarizationLogSeq)
+	id, _ := s.GenerateSummarizationLogIDWithSeq()
+	return id
 }
 
-// GenerateSummarizationLogIDWithSeq generates a unique summarization log ID and returns both
-// Format: {SessionID}-l{SeqID}
-// Returns: (logID, seqID)
-// Thread-safe via mutex
+// GenerateSummarizationLogIDWithSeq returns the numeric log id and per-session seq.
 func (s *Session) GenerateSummarizationLogIDWithSeq() (string, int) {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	s.SummarizationLogSeq++
-	logID := fmt.Sprintf("%s-l%04d", s.SessionID, s.SummarizationLogSeq)
-	return logID, s.SummarizationLogSeq
+	seq := NextSeq(&s.SummarizationLogSeq)
+	return FormatID(seq), seq
 }
 
-// GenerateRouteTraceID generates a unique route-trace ID for this session.
-// Format: {SessionID}-rt{SeqID}
-// Example: user123-core-s0001-rt0001
-// Thread-safe via mutex.
+// GenerateRouteTraceID returns the next numeric route-trace id in this session.
 func (s *Session) GenerateRouteTraceID() string {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	s.TraceSeq++
-	return fmt.Sprintf("%s-rt%04d", s.SessionID, s.TraceSeq)
+	return FormatID(NextSeq(&s.TraceSeq))
+}
+
+// GenerateResultID returns the next numeric buffered-tool-result id in this session.
+func (s *Session) GenerateResultID() string {
+	s.seqMu.Lock()
+	defer s.seqMu.Unlock()
+	return FormatID(NextSeq(&s.ResultSeq))
 }
 
 // ==================== Backward Compatibility Methods ====================
@@ -462,6 +470,7 @@ func (s *Session) Clone() *Session {
 		SessionID:           s.SessionID,
 		AgentType:           s.AgentType,
 		Model:               s.Model,
+		ParentSessionID:     s.ParentSessionID,
 		InProgress:          s.InProgress,
 		CreatedAt:           s.CreatedAt,
 		UpdatedAt:           s.UpdatedAt,
@@ -469,12 +478,14 @@ func (s *Session) Clone() *Session {
 		Title:               s.Title,
 		Summary:             s.Summary.Clone(),
 		SummaryInitialized:  s.SummaryInitialized,
+		Seq:                 s.Seq,
 		MessageSeq:          s.MessageSeq,
 		ToolSeq:             s.ToolSeq,
 		OpenedFileSeq:       s.OpenedFileSeq,
 		UserFileSeq:         s.UserFileSeq,
 		SummarizationLogSeq: s.SummarizationLogSeq,
 		TraceSeq:            s.TraceSeq,
+		ResultSeq:           s.ResultSeq,
 		// seqMu is NOT copied - new mutex for the clone
 	}
 
@@ -500,11 +511,17 @@ func (s *Session) Clone() *Session {
 		copy(clone.Tags, s.Tags)
 	}
 
-	// Copy map
+	// Copy maps
 	if s.ToolResults != nil {
 		clone.ToolResults = make(map[string]string, len(s.ToolResults))
 		for k, v := range s.ToolResults {
 			clone.ToolResults[k] = v
+		}
+	}
+	if s.ToolSeqByMessage != nil {
+		clone.ToolSeqByMessage = make(map[string]int, len(s.ToolSeqByMessage))
+		for k, v := range s.ToolSeqByMessage {
+			clone.ToolSeqByMessage[k] = v
 		}
 	}
 

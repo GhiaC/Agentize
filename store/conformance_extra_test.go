@@ -136,7 +136,7 @@ func testPutMessagesBatch(t *testing.T, st Store) {
 	}
 
 	// A batch containing an invalid message writes nothing.
-	bad := model.NewUserMessage("", 9, "user-1", s.SessionID, "bad", model.ContentTypeText)
+	bad := model.NewUserMessage("", 0, "user-1", s.SessionID, "bad", model.ContentTypeText)
 	if err := st.PutMessages([]*model.Message{bad}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("invalid batch: got %v, want ErrValidation", err)
 	}

@@ -29,6 +29,7 @@ var workflowOutputReference = regexp.MustCompile(
 type workflowPersistence interface {
 	PutWorkflowRun(*model.WorkflowRun) error
 	GetWorkflowRun(string) (*model.WorkflowRun, error)
+	GetUserWorkflowRun(userID, workflowID string) (*model.WorkflowRun, error)
 	ListWorkflowRuns(string, int) ([]*model.WorkflowRun, error)
 }
 
@@ -209,8 +210,13 @@ func (ch *CoreHandler) runWorkflow(
 		return nil, err
 	}
 	now := time.Now()
+	workflowID := newWorkflowID()
+	if user, err := ch.getOrCreateUser(userID); err == nil && user != nil {
+		workflowID = user.NextWorkflowID()
+		_ = ch.saveUser(user)
+	}
 	workflow := &model.WorkflowRun{
-		WorkflowID: newWorkflowID(), UserID: userID, SessionID: sessionID,
+		WorkflowID: workflowID, UserID: userID, SessionID: sessionID,
 		MessageID: messageID, ScheduleID: scheduleID, Name: strings.TrimSpace(name),
 		Status: model.WorkflowPending, Tasks: tasks, CreatedAt: now, UpdatedAt: now,
 	}
@@ -388,7 +394,7 @@ func (ch *CoreHandler) getWorkflowStatusTool(userID string, args map[string]inte
 	if !ok {
 		return "", fmt.Errorf("workflow persistence is not configured")
 	}
-	workflow, err := workflowStore.GetWorkflowRun(workflowID)
+	workflow, err := workflowStore.GetUserWorkflowRun(userID, workflowID)
 	if err != nil {
 		return "", err
 	}

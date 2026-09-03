@@ -65,25 +65,22 @@ func (e *Engine) getOwnedToolResult(callerUserID, callerSessionID, resultID stri
 		return "", fmt.Errorf("access denied: no session context")
 	}
 
-	// The result_id embeds the session that produced it. Verify that session is
-	// the caller's own before touching any stored data.
-	owningSession, ok := parseResultID(resultID)
-	if !ok {
-		return "", fmt.Errorf("invalid result_id format: %q", resultID)
-	}
-	if owningSession != callerSessionID {
-		return "", fmt.Errorf("access denied: result_id %q does not belong to this session", resultID)
-	}
-
-	session, err := e.Sessions.Get(owningSession)
+	session, err := e.Sessions.GetUserSession(callerUserID, callerSessionID)
 	if err != nil {
-		return "", fmt.Errorf("result with ID %q not found", resultID)
+		return "", fmt.Errorf("access denied: no session context")
 	}
-
-	// Defense in depth: buffered output is owned by a user; only its owner may
-	// read it. Exact match (both empty in single-tenant / no-auth setups).
 	if strings.TrimSpace(session.UserID) != strings.TrimSpace(callerUserID) {
 		return "", fmt.Errorf("access denied: result_id %q does not belong to you", resultID)
+	}
+
+	if !model.IsNumericID(resultID) {
+		owningSession, ok := parseResultID(resultID)
+		if !ok {
+			return "", fmt.Errorf("invalid result_id format: %q", resultID)
+		}
+		if owningSession != callerSessionID {
+			return "", fmt.Errorf("access denied: result_id %q does not belong to this session", resultID)
+		}
 	}
 
 	if session.ToolResults == nil {

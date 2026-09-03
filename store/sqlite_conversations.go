@@ -23,6 +23,10 @@ func (s *SQLiteStore) GetConversation(conversationID string) (*model.Conversatio
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if err := s.errIfAmbiguousLocked("conversations", "conversation_id", conversationID); err != nil {
+		return nil, err
+	}
+
 	var data string
 	var createdAt, updatedAt int64
 	err := s.db.QueryRow(
@@ -38,7 +42,27 @@ func (s *SQLiteStore) GetConversation(conversationID string) (*model.Conversatio
 	return scanConversation(data, createdAt, updatedAt)
 }
 
+func (s *SQLiteStore) GetUserConversation(userID, conversationID string) (*model.Conversation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var data string
+	var createdAt, updatedAt int64
+	err := s.db.QueryRow(
+		`SELECT data, created_at, updated_at FROM conversations WHERE user_id = ? AND conversation_id = ?`,
+		userID, conversationID,
+	).Scan(&data, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("conversation not found: %s", conversationID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query conversation: %w", err)
+	}
+	return scanConversation(data, createdAt, updatedAt)
+}
+
 func (s *SQLiteStore) PutConversation(conversation *model.Conversation) error {
+	fillConversationIDs(conversation)
 	if err := validateConversation(conversation); err != nil {
 		return err
 	}
@@ -147,11 +171,34 @@ func (s *SQLiteStore) GetConversationBySession(sessionID string) (*model.Convers
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if err := s.errIfAmbiguousLocked("conversations", "session_id", sessionID); err != nil {
+		return nil, err
+	}
+
 	var data string
 	var createdAt, updatedAt int64
 	err := s.db.QueryRow(
 		`SELECT data, created_at, updated_at FROM conversations WHERE session_id = ?`,
 		sessionID,
+	).Scan(&data, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query conversation by session: %w", err)
+	}
+	return scanConversation(data, createdAt, updatedAt)
+}
+
+func (s *SQLiteStore) GetUserConversationBySession(userID, sessionID string) (*model.Conversation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var data string
+	var createdAt, updatedAt int64
+	err := s.db.QueryRow(
+		`SELECT data, created_at, updated_at FROM conversations WHERE user_id = ? AND session_id = ?`,
+		userID, sessionID,
 	).Scan(&data, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil

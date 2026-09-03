@@ -1,10 +1,15 @@
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // User represents a user in the system
 type User struct {
-	// UserID is the unique identifier for the user
+	// UserID is the unique identifier for the user.
+	// Agentize-generated ids are random 8-digit numbers. Hosts may still supply
+	// their own id (for example a Telegram user id); that value is kept as-is.
 	UserID string
 
 	// User information (optional)
@@ -30,19 +35,36 @@ type User struct {
 	ContextSummary SummaryEntries
 	ContextTags    []string
 
-	// Session sequence counters per agent type
-	// Key: AgentType (core, high, low), Value: last session sequence number
-	// Used to generate unique SessionIDs: {UserID}-{AgentType}-{SeqCounter}
+	// SessionSeq is the per-user increment for SessionID (all agent types share
+	// one counter). SessionSeqs is the deprecated per-agent-type map; new code
+	// must not write it. Planned for removal with the concat ID helpers.
+	SessionSeq int
+	// Deprecated: per-agent-type session counters used by concatenated session
+	// ids ({UserID}-{AgentType}-s{seq}). Use SessionSeq.
 	SessionSeqs map[AgentType]int
+
+	// FileSeq is the per-user increment for UserFile and OpenedFile ids.
+	FileSeq int
+	// WorkflowSeq is the per-user increment for WorkflowRun ids.
+	WorkflowSeq int
+	// ScheduleSeq is the per-user increment for TaskSchedule ids.
+	ScheduleSeq int
+	// ReviewSeq is the per-user increment for ReviewRequest ids.
+	ReviewSeq int
 
 	// Metadata
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
 
-// NewUser creates a new user
+// NewUser creates a new user. An empty userID is filled with a random 8-digit
+// Agentize user id. A host-supplied id is stored unchanged.
 func NewUser(userID string) *User {
 	now := time.Now()
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		userID = GenerateUserID()
+	}
 	return &User{
 		UserID:           userID,
 		IsBanned:         false,
@@ -109,20 +131,43 @@ func (u *User) SetActiveSessionID(agentType AgentType, sessionID string) {
 	u.UpdatedAt = time.Now()
 }
 
-// NextSessionSeq increments and returns the next session sequence number for a given agent type
+// NextSessionSeq increments and returns the next per-user session sequence.
+// Agent type is ignored; sessions of every type share one numeric counter.
 func (u *User) NextSessionSeq(agentType AgentType) int {
-	if u.SessionSeqs == nil {
-		u.SessionSeqs = make(map[AgentType]int)
-	}
-	u.SessionSeqs[agentType]++
+	_ = agentType
 	u.UpdatedAt = time.Now()
-	return u.SessionSeqs[agentType]
+	return NextSeq(&u.SessionSeq)
 }
 
-// GetSessionSeq returns the current session sequence number for a given agent type
+// GetSessionSeq returns the current per-user session sequence.
 func (u *User) GetSessionSeq(agentType AgentType) int {
-	if u.SessionSeqs == nil {
+	_ = agentType
+	if u == nil {
 		return 0
 	}
-	return u.SessionSeqs[agentType]
+	return u.SessionSeq
+}
+
+// NextFileID increments the per-user file counter and returns a numeric FileID.
+func (u *User) NextFileID() string {
+	u.UpdatedAt = time.Now()
+	return FormatID(NextSeq(&u.FileSeq))
+}
+
+// NextWorkflowID increments the per-user workflow counter and returns a numeric WorkflowID.
+func (u *User) NextWorkflowID() string {
+	u.UpdatedAt = time.Now()
+	return FormatID(NextSeq(&u.WorkflowSeq))
+}
+
+// NextScheduleID increments the per-user schedule counter and returns a numeric ScheduleID.
+func (u *User) NextScheduleID() string {
+	u.UpdatedAt = time.Now()
+	return FormatID(NextSeq(&u.ScheduleSeq))
+}
+
+// NextReviewID increments the per-user review counter and returns a numeric review ID.
+func (u *User) NextReviewID() string {
+	u.UpdatedAt = time.Now()
+	return FormatID(NextSeq(&u.ReviewSeq))
 }

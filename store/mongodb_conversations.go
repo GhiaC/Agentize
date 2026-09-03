@@ -51,6 +51,7 @@ func (s *MongoDBStore) GetConversation(conversationID string) (*model.Conversati
 }
 
 func (s *MongoDBStore) PutConversation(conversation *model.Conversation) error {
+	fillConversationIDs(conversation)
 	if err := validateConversation(conversation); err != nil {
 		return err
 	}

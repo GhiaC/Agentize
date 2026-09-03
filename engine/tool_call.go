@@ -81,7 +81,7 @@ func (p *ToolCallPersister) SaveForTurn(
 	}
 
 	now := time.Now()
-	toolID := session.GenerateToolID()
+	toolID := session.GenerateToolIDForMessage(messageID)
 	tc := &model.ToolCall{
 		ToolID:        toolID,
 		ToolCallID:    toolCall.ID,
@@ -134,7 +134,7 @@ func (p *ToolCallPersister) SaveWithAgentTypeForTurn(
 	}
 
 	now := time.Now()
-	toolID := session.GenerateToolID()
+	toolID := session.GenerateToolIDForMessage(messageID)
 	tc := &model.ToolCall{
 		ToolID:        toolID,
 		ToolCallID:    toolCall.ID,

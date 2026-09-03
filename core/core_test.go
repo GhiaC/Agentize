@@ -139,8 +139,7 @@ func TestBuildSystemPrompts_ExcludesSessionsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrCreateUser: %v", err)
 	}
-	session, err := ch.sessionHandler.CreateSessionForUser(user, model.AgentType("researcher"))
-	if err != nil {
+	if _, err := ch.sessionHandler.CreateSessionForUser(user, model.AgentType("researcher")); err != nil {
 		t.Fatalf("CreateSessionForUser: %v", err)
 	}
 	prompts, err := ch.buildSystemPrompts("user1")
@@ -148,7 +147,7 @@ func TestBuildSystemPrompts_ExcludesSessionsList(t *testing.T) {
 		t.Fatalf("buildSystemPrompts: %v", err)
 	}
 	allText := strings.Join(prompts, " ")
-	if strings.Contains(allText, "Active Sessions") || strings.Contains(allText, session.SessionID) {
+	if strings.Contains(allText, "Active Sessions") {
 		t.Errorf("session collection belongs behind tools; got snippet: %s", allText[:min(600, len(allText))])
 	}
 }
@@ -565,7 +564,11 @@ func TestProcessMessage_MultipleAgentCalls_OnlyFirstDispatched(t *testing.T) {
 	}
 
 	// The routing DAG records alpha as a real dispatch and beta as a skipped one.
-	traces, err := st.GetRouteTracesBySession("user1-core-s0001")
+	core, err := st.GetCoreSession("user1")
+	if err != nil || core == nil {
+		t.Fatalf("GetCoreSession: %v %+v", err, core)
+	}
+	traces, err := st.GetRouteTracesBySession(core.SessionID)
 	if err != nil {
 		t.Fatalf("GetRouteTracesBySession: %v", err)
 	}

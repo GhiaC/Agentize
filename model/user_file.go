@@ -21,7 +21,7 @@ const (
 // UserFile is distinct from OpenedFile: OpenedFile tracks knowledge-tree nodes
 // opened during a session, whereas UserFile tracks actual user documents.
 type UserFile struct {
-	// FileID is a unique identifier for this file (e.g. {SessionID}-uf0001).
+	// FileID is the per-user numeric increment (FormatID(seq)).
 	FileID string
 
 	// UserID identifies the user who owns the file.
@@ -68,11 +68,23 @@ type ImageEditResult struct {
 	OutputTokens int
 }
 
-// NewUserFile creates a new UserFile record for the given session, allocating a
-// sequential FileID from the session.
+// NewUserFile creates a new UserFile record for the given session.
+// Prefer NewUserFileFor so FileID increments on the user, not the session.
 func NewUserFile(session *Session, name, mimeType string, size int64, storageKey string, source FileSource) *UserFile {
+	return NewUserFileFor(nil, session, name, mimeType, size, storageKey, source)
+}
+
+// NewUserFileFor allocates a per-user numeric FileID when user is non-nil.
+func NewUserFileFor(user *User, session *Session, name, mimeType string, size int64, storageKey string, source FileSource) *UserFile {
+	if session == nil {
+		return nil
+	}
+	fileID := session.GenerateUserFileID()
+	if user != nil {
+		fileID = user.NextFileID()
+	}
 	return &UserFile{
-		FileID:     session.GenerateUserFileID(),
+		FileID:     fileID,
 		UserID:     session.UserID,
 		SessionID:  session.SessionID,
 		Name:       name,

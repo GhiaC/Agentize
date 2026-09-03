@@ -1209,17 +1209,20 @@ func (e *Engine) removeFunctionCalls(sessionID string) error {
 	return e.Sessions.Put(session)
 }
 
-// generateResultID generates a unique ID for tool results
-// Format: r_<fullSessionID>_<unixTimestamp>
-func generateResultID(sessionID string) string {
-	return fmt.Sprintf("r_%s_%d", sessionID, time.Now().Unix())
+// generateResultID returns the next numeric buffered-tool-result id for session.
+func generateResultID(session *model.Session) string {
+	if session == nil {
+		return ""
+	}
+	return session.GenerateResultID()
 }
 
-// parseResultID extracts the full sessionID from a resultID.
-// The timestamp is always the last underscore-separated segment, so everything
-// between the leading "r_" and the final "_<timestamp>" is the sessionID
-// (which itself may contain underscores).
+// parseResultID extracts the sessionID from a deprecated concatenated result id.
+// Numeric result ids do not embed the session; callers must use session context.
 func parseResultID(resultID string) (sessionID string, ok bool) {
+	if model.IsNumericID(resultID) {
+		return "", false
+	}
 	// New format: r_<sessionID>_<timestamp>
 	if strings.HasPrefix(resultID, "r_") {
 		lastUnderscore := strings.LastIndex(resultID, "_")
@@ -1295,7 +1298,7 @@ func (e *Engine) processToolResult(session *model.Session, result string) string
 	if session.ToolResults == nil {
 		session.ToolResults = make(map[string]string)
 	}
-	resultID := generateResultID(session.SessionID)
+	resultID := generateResultID(session)
 	session.ToolResults[resultID] = result
 
 	return fmt.Sprintf("Tool result exceeds %d characters (exact: %d characters). "+

@@ -21,6 +21,9 @@ type SessionStore interface {
 	// GetNextSessionSeq returns the next session sequence number for a user and agent type
 	// This is used to generate unique session IDs without random strings
 	GetNextSessionSeq(userID string, agentType AgentType) (int, error)
+	// GetUserSession looks up a session owned by userID. Required for per-user
+	// numeric SessionIDs that are not globally unique.
+	GetUserSession(userID, sessionID string) (*Session, error)
 }
 
 type sessionConversationStore interface {
@@ -156,6 +159,7 @@ func (sh *SessionHandler) CreateSession(userID string, agentType AgentType) (*Se
 	// Create session with sequence-based ID
 	sessionID := GenerateSessionID(userID, agentType, seq)
 	session := NewSessionWithID(userID, sessionID, agentType)
+	session.Seq = seq
 
 	if err := sh.store.Put(session); err != nil {
 		return nil, fmt.Errorf("failed to store session: %w", err)

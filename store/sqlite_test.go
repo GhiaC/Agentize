@@ -207,9 +207,15 @@ func TestSQLiteStore_MultipleUsers(t *testing.T) {
 	defer store.Close()
 
 	// Create sessions for different users
-	session1 := model.NewSessionWithType("user1", model.AgentTypeCore)
-	session2 := model.NewSessionWithType("user2", model.AgentTypeCore)
-	session3 := model.NewSessionWithType("user1", model.AgentTypeHigh)
+	// Numeric ids collide across users on sqlite's session_id primary key, so
+	// this sqlite-only test uses distinct ids. PostgreSQL composite keys are
+	// covered by TestPostgreSQLStoreLiveNumericScopedIDs.
+	session1 := model.NewSessionWithID("user1", "1", model.AgentTypeCore)
+	session1.Seq = 1
+	session2 := model.NewSessionWithID("user2", "2", model.AgentTypeCore)
+	session2.Seq = 1
+	session3 := model.NewSessionWithID("user1", "3", model.AgentTypeHigh)
+	session3.Seq = 2
 
 	if err := store.Put(session1); err != nil {
 		t.Fatalf("Failed to put session1: %v", err)
@@ -221,7 +227,6 @@ func TestSQLiteStore_MultipleUsers(t *testing.T) {
 		t.Fatalf("Failed to put session3: %v", err)
 	}
 
-	// List sessions for user1
 	sessions, err := store.List("user1")
 	if err != nil {
 		t.Fatalf("Failed to list sessions: %v", err)

@@ -65,7 +65,11 @@ func TestProcessToolResult_OversizedPersistsAndCollectible(t *testing.T) {
 
 	// The full collect_result entry point must parse the id and locate it (no
 	// "result not found in session" error).
-	if sid, ok := parseResultID(resultID); !ok || sid != sessionID {
+	if model.IsNumericID(resultID) {
+		if _, ok := eng.GetToolResult(sessionID, resultID); !ok {
+			t.Fatalf("GetToolResult should locate numeric result_id %q", resultID)
+		}
+	} else if sid, ok := parseResultID(resultID); !ok || sid != sessionID {
 		t.Fatalf("parseResultID(%q) = %q,%v; want %q,true", resultID, sid, ok, sessionID)
 	}
 	if _, ok := eng.GetToolResult(sessionID, resultID); !ok {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -553,17 +552,7 @@ type sessionDocument struct {
 // Format: userID-agentType-s0001 -> 1
 // Returns 0 if the format is not recognized
 func extractSessionSeqFromID(sessionID string) int {
-	// Find the last occurrence of "-s" and extract the number after it
-	idx := strings.LastIndex(sessionID, "-s")
-	if idx == -1 || idx+2 >= len(sessionID) {
-		return 0
-	}
-	seqStr := sessionID[idx+2:]
-	seq, err := strconv.Atoi(seqStr)
-	if err != nil {
-		return 0
-	}
-	return seq
+	return model.SeqFromID(sessionID)
 }
 
 // Get retrieves a session by ID
@@ -702,6 +691,7 @@ func (s *MongoDBStore) getMaxSeqIDForSessionFallback(ctx context.Context, sessio
 // Put stores or updates a session
 // For Core sessions, this ensures only one Core session exists per user
 func (s *MongoDBStore) Put(session *model.Session) error {
+	fillSessionIDs(session)
 	if err := validateSession(session); err != nil {
 		return err
 	}
@@ -728,7 +718,7 @@ func (s *MongoDBStore) Put(session *model.Session) error {
 		SessionID:  session.SessionID,
 		UserID:     session.UserID,
 		AgentType:  string(session.AgentType),
-		SessionSeq: extractSessionSeqFromID(session.SessionID),
+		SessionSeq: sessionSeqValue(session),
 		Data:       string(data),
 		CreatedAt:  session.CreatedAt,
 		UpdatedAt:  session.UpdatedAt,
@@ -916,15 +906,12 @@ func (s *MongoDBStore) List(userID string) ([]*model.Session, error) {
 // GetNextSessionSeq returns the next session sequence number for a user and agent type
 // Uses MAX(session_seq) to avoid duplicate IDs when sessions are deleted
 func (s *MongoDBStore) GetNextSessionSeq(userID string, agentType model.AgentType) (int, error) {
+	_ = agentType
 	ctx, cancel := s.opCtx()
 	defer cancel()
 
-	// Use aggregation to find MAX(session_seq) for this user and agent type
 	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{
-			"user_id":    userID,
-			"agent_type": string(agentType),
-		}}},
+		{{Key: "$match", Value: bson.M{"user_id": userID}}},
 		{{Key: "$group", Value: bson.M{
 			"_id":     nil,
 			"max_seq": bson.M{"$max": "$session_seq"},
@@ -1035,7 +1022,7 @@ func (s *MongoDBStore) PutCoreSession(session *model.Session) error {
 		SessionID:  session.SessionID,
 		UserID:     session.UserID,
 		AgentType:  string(session.AgentType),
-		SessionSeq: extractSessionSeqFromID(session.SessionID),
+		SessionSeq: sessionSeqValue(session),
 		Data:       string(data),
 		CreatedAt:  session.CreatedAt,
 		UpdatedAt:  session.UpdatedAt,

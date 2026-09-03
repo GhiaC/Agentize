@@ -223,9 +223,8 @@ func (t *Tool) SetActive() {
 
 // ToolCall represents a tool call execution record
 type ToolCall struct {
-	// ToolID is a sequential unique identifier for this tool call within the session
-	// Format: {SessionID}-t{SeqID}
-	// Example: user123-core-s0001-t0001
+	// ToolID is the per-message numeric increment (FormatID(seq)).
+	// UserID, SessionID, and MessageID identify the parent; they are not concatenated.
 	ToolID string
 
 	// ToolCallID is the unique identifier for this tool call (from OpenAI)

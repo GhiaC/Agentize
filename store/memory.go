@@ -106,6 +106,20 @@ func (s *DBStore) getOrCreateLock(userID string) *sync.Mutex {
 
 // Get retrieves a session by ID
 // First checks cache, then falls back to database
+func (s *DBStore) GetUserSession(userID, sessionID string) (*model.Session, error) {
+	if session, ok := s.sessionsCache.Get(userID + "/" + sessionID); ok {
+		if session.UserID == userID {
+			return session.Clone(), nil
+		}
+	}
+	session, err := s.sqliteStore.GetUserSession(userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	s.sessionsCache.Add(userID+"/"+sessionID, session.Clone())
+	return session, nil
+}
+
 func (s *DBStore) Get(sessionID string) (*model.Session, error) {
 	// Check cache first
 	if session, ok := s.sessionsCache.Get(sessionID); ok {
@@ -536,6 +550,30 @@ func (s *DBStore) PutWorkflowRun(workflow *model.WorkflowRun) error {
 
 func (s *DBStore) GetConversation(conversationID string) (*model.Conversation, error) {
 	return s.sqliteStore.GetConversation(conversationID)
+}
+
+func (s *DBStore) GetUserConversation(userID, conversationID string) (*model.Conversation, error) {
+	return s.sqliteStore.GetUserConversation(userID, conversationID)
+}
+
+func (s *DBStore) GetUserConversationBySession(userID, sessionID string) (*model.Conversation, error) {
+	return s.sqliteStore.GetUserConversationBySession(userID, sessionID)
+}
+
+func (s *DBStore) GetUserMessagesBySessionPage(userID, sessionID string, limit, offset int) ([]*model.Message, error) {
+	return s.sqliteStore.GetUserMessagesBySessionPage(userID, sessionID, limit, offset)
+}
+
+func (s *DBStore) GetUserFileForUser(userID, fileID string) (*model.UserFile, error) {
+	return s.sqliteStore.GetUserFileForUser(userID, fileID)
+}
+
+func (s *DBStore) GetUserWorkflowRun(userID, workflowID string) (*model.WorkflowRun, error) {
+	return s.sqliteStore.GetUserWorkflowRun(userID, workflowID)
+}
+
+func (s *DBStore) GetUserTaskSchedule(userID, scheduleID string) (*model.TaskSchedule, error) {
+	return s.sqliteStore.GetUserTaskSchedule(userID, scheduleID)
 }
 
 func (s *DBStore) PutConversation(conversation *model.Conversation) error {

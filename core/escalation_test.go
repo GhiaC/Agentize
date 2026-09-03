@@ -106,7 +106,11 @@ func TestEscalation_LowToHigher(t *testing.T) {
 		t.Error("high-tier agent never ran; want escalation to dispatch it")
 	}
 
-	traces, err := st.GetRouteTracesBySession("user1-core-s0001")
+	core, err := st.GetCoreSession("user1")
+	if err != nil || core == nil {
+		t.Fatalf("GetCoreSession: %v %+v", err, core)
+	}
+	traces, err := st.GetRouteTracesBySession(core.SessionID)
 	if err != nil {
 		t.Fatalf("GetRouteTracesByUser: %v", err)
 	}

@@ -27,8 +27,8 @@ type CreateConversationInput struct {
 }
 
 // CreateConversation creates a Conversation row and a linked main Session.
-// SessionID stays on the existing {user}-{agentType}-s{seq} scheme; the
-// user-facing id is {user}-c{seq} with no title slug.
+// SessionID and ConversationID are per-user numeric increments; parent identity
+// lives on UserID / SessionID fields, not concatenated into the id.
 func (e *Engine) CreateConversation(input CreateConversationInput) (*model.Conversation, error) {
 	userID := strings.TrimSpace(input.UserID)
 	if userID == "" {
@@ -64,6 +64,7 @@ func (e *Engine) createTypedSession(userID string, agentType model.AgentType, ti
 	}
 	sessionID := model.GenerateSessionID(userID, agentType, seq)
 	session := model.NewSessionWithID(userID, sessionID, agentType)
+	session.Seq = seq
 	session.Title = title
 	session.Model = modelName
 	session.ParentSessionID = parentSessionID
@@ -104,14 +105,7 @@ func (e *Engine) CreateSubAgent(parentSessionID, title, modelName string) (*mode
 
 // GetConversation returns a conversation after verifying ownership.
 func (e *Engine) GetConversation(userID, conversationID string) (*model.Conversation, error) {
-	conv, err := e.Sessions.GetConversation(strings.TrimSpace(conversationID))
-	if err != nil {
-		return nil, err
-	}
-	if conv.UserID != strings.TrimSpace(userID) {
-		return nil, fmt.Errorf("conversation not found: %s", conversationID)
-	}
-	return conv, nil
+	return e.Sessions.GetUserConversation(strings.TrimSpace(userID), strings.TrimSpace(conversationID))
 }
 
 // ListConversations returns the user's conversations, last used first.
@@ -134,7 +128,7 @@ func (e *Engine) RenameConversation(userID, conversationID, title string) error 
 	if err := e.Sessions.PutConversation(conv); err != nil {
 		return err
 	}
-	session, err := e.Sessions.Get(conv.SessionID)
+	session, err := e.Sessions.GetUserSession(conv.UserID, conv.SessionID)
 	if err != nil {
 		return err
 	}
@@ -154,7 +148,7 @@ func (e *Engine) SetConversationModel(userID, conversationID, modelName string) 
 	if err := e.Sessions.PutConversation(conv); err != nil {
 		return err
 	}
-	session, err := e.Sessions.Get(conv.SessionID)
+	session, err := e.Sessions.GetUserSession(conv.UserID, conv.SessionID)
 	if err != nil {
 		return err
 	}
@@ -244,7 +238,7 @@ func (e *Engine) persistSessionRunState(session *model.Session, phase StatusPhas
 	if sessionID == "" {
 		return
 	}
-	conv, err := e.Sessions.GetConversationBySession(sessionID)
+	conv, err := e.Sessions.GetUserConversationBySession(session.UserID, sessionID)
 	if err != nil || conv == nil {
 		return
 	}

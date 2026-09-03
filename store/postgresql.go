@@ -311,12 +311,22 @@ var insertOrReplaceRE = regexp.MustCompile(`(?is)^\s*INSERT\s+OR\s+REPLACE\s+INT
 var insertValuesRE = regexp.MustCompile(`(?is)INSERT\s+INTO\s+([a-z_][a-z0-9_]*)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]*)\)`)
 
 var postgreSQLPrimaryKeys = map[string]string{
-	"sessions": "session_id", "users": "user_id", "messages": "message_id",
-	"opened_files": "file_id", "user_files": "file_id", "tool_calls": "tool_call_id",
-	"summarization_logs": "log_id", "route_traces": "trace_id", "reviews": "request_id",
-	"conversations": "conversation_id", "task_schedules": "schedule_id",
-	"task_schedule_runs": "run_id", "workflow_runs": "workflow_id",
+	"sessions": "user_id, session_id", "users": "user_id", "messages": "user_id, session_id, message_id",
+	"opened_files": "user_id, session_id, file_id", "user_files": "user_id, file_id", "tool_calls": "tool_call_id",
+	"summarization_logs": "user_id, session_id, log_id", "route_traces": "user_id, session_id, trace_id",
+	"reviews": "request_id", "conversations": "user_id, conversation_id",
+	"task_schedules": "user_id, schedule_id", "task_schedule_runs": "run_id",
+	"workflow_runs": "user_id, workflow_id",
 }
+
+// Native ON CONFLICT(col) clauses in sqlite.go still name the old single-column
+// keys. Remap those targets to the composite keys after schema v2.
+var postgreSQLConflictRemap = map[string]string{
+	"schedule_id": "user_id, schedule_id",
+	"workflow_id": "user_id, workflow_id",
+}
+
+var conflictTargetRE = regexp.MustCompile(`(?i)ON CONFLICT\s*\(\s*([a-z_][a-z0-9_]*)\s*\)`)
 
 var postgreSQLJSONBColumns = map[string]map[string]struct{}{
 	"sessions":           {"data": {}},
@@ -331,9 +341,24 @@ var postgreSQLJSONBColumns = map[string]map[string]struct{}{
 
 func rewritePostgreSQLQuery(query string) string {
 	query = rewritePostgreSQLInsertOrReplace(query)
+	query = rewritePostgreSQLConflictTarget(query)
 	query = rewritePostgreSQLExists(query)
 	query = rewritePostgreSQLPlaceholders(query)
 	return rewritePostgreSQLJSONBCasts(query)
+}
+
+func rewritePostgreSQLConflictTarget(query string) string {
+	return conflictTargetRE.ReplaceAllStringFunc(query, func(match string) string {
+		m := conflictTargetRE.FindStringSubmatch(match)
+		if len(m) < 2 {
+			return match
+		}
+		mapped, ok := postgreSQLConflictRemap[strings.ToLower(m[1])]
+		if !ok {
+			return match
+		}
+		return "ON CONFLICT (" + mapped + ")"
+	})
 }
 
 func rewritePostgreSQLInsertOrReplace(query string) string {
@@ -346,13 +371,21 @@ func rewritePostgreSQLInsertOrReplace(query string) string {
 	if pk == "" {
 		return query
 	}
+	pkCols := make(map[string]struct{})
+	for _, col := range strings.Split(pk, ",") {
+		pkCols[strings.TrimSpace(col)] = struct{}{}
+	}
 	columns := strings.Split(m[2], ",")
 	updates := make([]string, 0, len(columns)-1)
 	for _, raw := range columns {
 		col := strings.TrimSpace(raw)
-		if col != "" && col != pk {
-			updates = append(updates, col+"=EXCLUDED."+col)
+		if col == "" {
+			continue
 		}
+		if _, skip := pkCols[col]; skip {
+			continue
+		}
+		updates = append(updates, col+"=EXCLUDED."+col)
 	}
 	return "INSERT INTO " + table + " (" + m[2] + ") VALUES (" + m[3] + ") ON CONFLICT (" + pk + ") DO UPDATE SET " + strings.Join(updates, ", ")
 }
@@ -428,9 +461,10 @@ type postgreSQLMigration struct {
 	sql     string
 }
 
-var postgreSQLMigrations = []postgreSQLMigration{{
-	1, "initial agentize schema", postgreSQLSchema,
-}}
+var postgreSQLMigrations = []postgreSQLMigration{
+	{1, "initial agentize schema", postgreSQLSchema},
+	{2, "composite keys for numeric scoped ids", postgreSQLNumericIDKeys},
+}
 
 // Foreign keys are intentionally omitted on session/user children: Delete of a
 // session does not cascade, and Verify must report the same orphans as SQLite
@@ -527,4 +561,38 @@ CREATE TABLE IF NOT EXISTS conversations (
  conversation_seq BIGINT NOT NULL DEFAULT 0, title TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
  archived BIGINT NOT NULL DEFAULT 0, data JSONB NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC);
+`
+
+// postgreSQLNumericIDKeys switches scoped entities from globally-unique string
+// ids to composite keys so two users can both own session/conversation/message
+// id "1". Existing concat ids stay as-is; this does not rewrite row values.
+const postgreSQLNumericIDKeys = `
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_pkey;
+ALTER TABLE sessions ADD PRIMARY KEY (user_id, session_id);
+
+ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_pkey;
+ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_session_id_key;
+ALTER TABLE conversations ADD PRIMARY KEY (user_id, conversation_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_user_session ON conversations(user_id, session_id);
+
+ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_pkey;
+ALTER TABLE messages ADD PRIMARY KEY (user_id, session_id, message_id);
+
+ALTER TABLE opened_files DROP CONSTRAINT IF EXISTS opened_files_pkey;
+ALTER TABLE opened_files ADD PRIMARY KEY (user_id, session_id, file_id);
+
+ALTER TABLE user_files DROP CONSTRAINT IF EXISTS user_files_pkey;
+ALTER TABLE user_files ADD PRIMARY KEY (user_id, file_id);
+
+ALTER TABLE summarization_logs DROP CONSTRAINT IF EXISTS summarization_logs_pkey;
+ALTER TABLE summarization_logs ADD PRIMARY KEY (user_id, session_id, log_id);
+
+ALTER TABLE route_traces DROP CONSTRAINT IF EXISTS route_traces_pkey;
+ALTER TABLE route_traces ADD PRIMARY KEY (user_id, session_id, trace_id);
+
+ALTER TABLE workflow_runs DROP CONSTRAINT IF EXISTS workflow_runs_pkey;
+ALTER TABLE workflow_runs ADD PRIMARY KEY (user_id, workflow_id);
+
+ALTER TABLE task_schedules DROP CONSTRAINT IF EXISTS task_schedules_pkey;
+ALTER TABLE task_schedules ADD PRIMARY KEY (user_id, schedule_id);
 `

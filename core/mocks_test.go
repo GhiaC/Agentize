@@ -86,6 +86,17 @@ func (m *MockSessionStore) GetNextSessionSeq(userID string, agentType model.Agen
 	return n + 1, nil
 }
 
+func (m *MockSessionStore) GetUserSession(userID, sessionID string) (*model.Session, error) {
+	session, err := m.Get(sessionID)
+	if err != nil || session == nil {
+		return session, err
+	}
+	if session.UserID != userID {
+		return nil, nil
+	}
+	return session, nil
+}
+
 // GetCoreSession (used by CoreHandler via type assertion)
 func (m *MockSessionStore) GetCoreSession(userID string) (*model.Session, error) {
 	m.mu.RLock()

@@ -1,16 +1,16 @@
 package model
 
 import (
-	"fmt"
 	"strings"
 	"time"
 )
 
 // Conversation is the user-facing chat identity. It sits above Session:
 // the user picks a conversation; the linked Session holds messages, tools,
-// files and any sub-agent workers. IDs never contain a title slug.
+// files and any sub-agent workers.
 //
-// Format: {UserID}-c{Seq}  e.g. alice-c0001
+// ConversationID is a per-user numeric increment (FormatID(Seq)). Parent
+// identity is UserID, never concatenated into the id.
 // ConversationRunState is the last visible turn for this conversation. Hosts
 // persist it on the conversation row so a closed page can reconnect and show
 // the right loading state without guessing from the transcript.
@@ -36,9 +36,13 @@ type Conversation struct {
 	RunState  *ConversationRunState `json:"run_state,omitempty"`
 }
 
-// GenerateConversationID builds a stable conversation id with no slug.
+// GenerateConversationID returns the per-user numeric conversation id.
+// userID is ignored; parent identity is stored on Conversation.UserID.
+//
+// Deprecated: the concatenated form `{UserID}-c{seq}` is no longer produced.
 func GenerateConversationID(userID string, seq int) string {
-	return fmt.Sprintf("%s-c%04d", strings.TrimSpace(userID), seq)
+	_ = strings.TrimSpace(userID)
+	return FormatID(seq)
 }
 
 // NewConversation creates a conversation row pointing at an existing main session.

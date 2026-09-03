@@ -127,6 +127,11 @@ func (m *meteredStore) Get(sessionID string) (*model.Session, error) {
 	return m.Store.Get(sessionID)
 }
 
+func (m *meteredStore) GetUserSession(userID, sessionID string) (*model.Session, error) {
+	defer m.observe(m.begin("GetUserSession"))
+	return m.Store.GetUserSession(userID, sessionID)
+}
+
 func (m *meteredStore) Put(session *model.Session) error {
 	defer m.observe(m.begin("Put"))
 	return m.Store.Put(session)
@@ -186,6 +191,11 @@ func (m *meteredStore) GetMessagesBySessionPage(sessionID string, limit, offset 
 	return m.Store.GetMessagesBySessionPage(sessionID, limit, offset)
 }
 
+func (m *meteredStore) GetUserMessagesBySessionPage(userID, sessionID string, limit, offset int) ([]*model.Message, error) {
+	defer m.observe(m.begin("GetUserMessagesBySessionPage"))
+	return m.Store.GetUserMessagesBySessionPage(userID, sessionID, limit, offset)
+}
+
 func (m *meteredStore) AddOpenedFile(openedFile *model.OpenedFile) error {
 	defer m.observe(m.begin("AddOpenedFile"))
 	return m.Store.AddOpenedFile(openedFile)
@@ -209,6 +219,11 @@ func (m *meteredStore) PutUserFile(f *model.UserFile) error {
 func (m *meteredStore) GetUserFile(fileID string) (*model.UserFile, error) {
 	defer m.observe(m.begin("GetUserFile"))
 	return m.Store.GetUserFile(fileID)
+}
+
+func (m *meteredStore) GetUserFileForUser(userID, fileID string) (*model.UserFile, error) {
+	defer m.observe(m.begin("GetUserFileForUser"))
+	return m.Store.GetUserFileForUser(userID, fileID)
 }
 
 func (m *meteredStore) DeleteUserFile(fileID string) error {
@@ -256,6 +271,11 @@ func (m *meteredStore) GetTaskSchedule(scheduleID string) (*model.TaskSchedule, 
 	return m.Store.GetTaskSchedule(scheduleID)
 }
 
+func (m *meteredStore) GetUserTaskSchedule(userID, scheduleID string) (*model.TaskSchedule, error) {
+	defer m.observe(m.begin("GetUserTaskSchedule"))
+	return m.Store.GetUserTaskSchedule(userID, scheduleID)
+}
+
 func (m *meteredStore) ListTaskSchedules(userID string) ([]*model.TaskSchedule, error) {
 	defer m.observe(m.begin("ListTaskSchedules"))
 	return m.Store.ListTaskSchedules(userID)
@@ -286,6 +306,11 @@ func (m *meteredStore) GetConversation(conversationID string) (*model.Conversati
 	return m.Store.GetConversation(conversationID)
 }
 
+func (m *meteredStore) GetUserConversation(userID, conversationID string) (*model.Conversation, error) {
+	defer m.observe(m.begin("GetUserConversation"))
+	return m.Store.GetUserConversation(userID, conversationID)
+}
+
 func (m *meteredStore) PutConversation(conversation *model.Conversation) error {
 	defer m.observe(m.begin("PutConversation"))
 	return m.Store.PutConversation(conversation)
@@ -309,6 +334,11 @@ func (m *meteredStore) ListAllConversations() ([]*model.Conversation, error) {
 func (m *meteredStore) GetConversationBySession(sessionID string) (*model.Conversation, error) {
 	defer m.observe(m.begin("GetConversationBySession"))
 	return m.Store.GetConversationBySession(sessionID)
+}
+
+func (m *meteredStore) GetUserConversationBySession(userID, sessionID string) (*model.Conversation, error) {
+	defer m.observe(m.begin("GetUserConversationBySession"))
+	return m.Store.GetUserConversationBySession(userID, sessionID)
 }
 
 func (m *meteredStore) GetNextConversationSeq(userID string) (int, error) {
@@ -446,6 +476,11 @@ func (m *meteredStore) GetAllRouteTraces() ([]*model.RouteTrace, error) {
 func (m *meteredStore) GetWorkflowRun(workflowID string) (*model.WorkflowRun, error) {
 	defer m.observe(m.begin("GetWorkflowRun"))
 	return m.Store.GetWorkflowRun(workflowID)
+}
+
+func (m *meteredStore) GetUserWorkflowRun(userID, workflowID string) (*model.WorkflowRun, error) {
+	defer m.observe(m.begin("GetUserWorkflowRun"))
+	return m.Store.GetUserWorkflowRun(userID, workflowID)
 }
 
 func (m *meteredStore) ListWorkflowRuns(userID string, limit int) ([]*model.WorkflowRun, error) {

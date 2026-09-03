@@ -25,8 +25,8 @@ func TestCreateConversation_IDFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	if conv.ConversationID != "alice-c0001" {
-		t.Fatalf("ConversationID = %q, want alice-c0001", conv.ConversationID)
+	if conv.ConversationID != "1" {
+		t.Fatalf("ConversationID = %q, want 1", conv.ConversationID)
 	}
 	if strings.Contains(conv.ConversationID, "btc") || strings.Contains(conv.ConversationID, "plan") {
 		t.Fatalf("id must not contain title slug: %s", conv.ConversationID)
@@ -53,11 +53,11 @@ func TestCreateConversation_Sequence(t *testing.T) {
 	eng := newConversationTestEngine(t)
 	a, _ := eng.CreateConversation(CreateConversationInput{UserID: "alice", Title: "one"})
 	b, _ := eng.CreateConversation(CreateConversationInput{UserID: "alice", Title: "two"})
-	if a.ConversationID != "alice-c0001" || b.ConversationID != "alice-c0002" {
+	if a.ConversationID != "1" || b.ConversationID != "2" {
 		t.Fatalf("ids = %s %s", a.ConversationID, b.ConversationID)
 	}
 	other, _ := eng.CreateConversation(CreateConversationInput{UserID: "bob", Title: "one"})
-	if other.ConversationID != "bob-c0001" {
+	if other.ConversationID != "1" {
 		t.Fatalf("other user id = %s", other.ConversationID)
 	}
 }

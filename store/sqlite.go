@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -554,18 +553,43 @@ func (s *SQLiteStore) getOrCreateLock(userID string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
-// Get retrieves a session by ID
+// Get retrieves a session by ID. Numeric ids are unique per user; if more than
+// one row shares sessionID, Get fails closed. Prefer GetUserSession when the
+// owner is known.
 func (s *SQLiteStore) Get(sessionID string) (*model.Session, error) {
+	return s.getSession("", sessionID)
+}
+
+// GetUserSession retrieves a session owned by userID. This is the production
+// lookup for per-user numeric SessionIDs.
+func (s *SQLiteStore) GetUserSession(userID, sessionID string) (*model.Session, error) {
+	return s.getSession(strings.TrimSpace(userID), sessionID)
+}
+
+func (s *SQLiteStore) getSession(userID, sessionID string) (*model.Session, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if userID == "" {
+		if err := s.errIfAmbiguousLocked("sessions", "session_id", sessionID); err != nil {
+			return nil, err
+		}
+	}
+
 	var data string
 	var createdAt, updatedAt int64
-
-	err := s.db.QueryRow(
-		"SELECT data, created_at, updated_at FROM sessions WHERE session_id = ?",
-		sessionID,
-	).Scan(&data, &createdAt, &updatedAt)
+	var err error
+	if userID != "" {
+		err = s.db.QueryRow(
+			"SELECT data, created_at, updated_at FROM sessions WHERE user_id = ? AND session_id = ?",
+			userID, sessionID,
+		).Scan(&data, &createdAt, &updatedAt)
+	} else {
+		err = s.db.QueryRow(
+			"SELECT data, created_at, updated_at FROM sessions WHERE session_id = ?",
+			sessionID,
+		).Scan(&data, &createdAt, &updatedAt)
+	}
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("session not found: %s", sessionID)
@@ -579,20 +603,14 @@ func (s *SQLiteStore) Get(sessionID string) (*model.Session, error) {
 		return nil, fmt.Errorf("failed to unmarshal session: %w", err)
 	}
 
-	// Restore timestamps
 	session.CreatedAt = time.Unix(createdAt, 0)
 	session.UpdatedAt = time.Unix(updatedAt, 0)
 
-	// Restore MessageSeq from database to ensure it's correct
-	// Use MAX(seq_id) to get the highest sequence number, not COUNT(*) which doesn't reflect actual sequences
-	maxSeqID := s.getMaxSeqIDForSession(sessionID)
+	maxSeqID := s.getMaxSeqIDForUserSession(session.UserID, session.SessionID)
 	if maxSeqID > session.MessageSeq {
-		// Ensure MessageSeq is at least as high as the highest seq_id in the database
 		session.MessageSeq = maxSeqID
 	}
-
-	// Restore ToolSeq from tool_calls so we never reuse a tool ID (ensures new tool calls are stored with unique IDs)
-	maxToolSeq := s.getMaxToolSeqForSession(sessionID)
+	maxToolSeq := s.getMaxToolSeqForUserSession(session.UserID, session.SessionID)
 	if maxToolSeq > session.ToolSeq {
 		session.ToolSeq = maxToolSeq
 	}
@@ -605,11 +623,23 @@ func (s *SQLiteStore) Get(sessionID string) (*model.Session, error) {
 // hold s.mu.RLock; taking it again here can deadlock when a writer is queued,
 // because sync.RWMutex blocks new readers once a writer is waiting.
 func (s *SQLiteStore) getMaxSeqIDForSession(sessionID string) int {
+	return s.getMaxSeqIDForUserSession("", sessionID)
+}
+
+func (s *SQLiteStore) getMaxSeqIDForUserSession(userID, sessionID string) int {
 	var maxSeqID sql.NullInt64
-	err := s.db.QueryRow(
-		"SELECT MAX(seq_id) FROM messages WHERE session_id = ?",
-		sessionID,
-	).Scan(&maxSeqID)
+	var err error
+	if userID != "" {
+		err = s.db.QueryRow(
+			"SELECT MAX(seq_id) FROM messages WHERE user_id = ? AND session_id = ?",
+			userID, sessionID,
+		).Scan(&maxSeqID)
+	} else {
+		err = s.db.QueryRow(
+			"SELECT MAX(seq_id) FROM messages WHERE session_id = ?",
+			sessionID,
+		).Scan(&maxSeqID)
+	}
 	if err != nil || !maxSeqID.Valid {
 		return 0
 	}
@@ -620,7 +650,17 @@ func (s *SQLiteStore) getMaxSeqIDForSession(sessionID string) int {
 // session from tool_calls. Callers already hold s.mu.RLock; see
 // getMaxSeqIDForSession for why this helper must not acquire it recursively.
 func (s *SQLiteStore) getMaxToolSeqForSession(sessionID string) int {
-	rows, err := s.db.Query("SELECT tool_id FROM tool_calls WHERE session_id = ?", sessionID)
+	return s.getMaxToolSeqForUserSession("", sessionID)
+}
+
+func (s *SQLiteStore) getMaxToolSeqForUserSession(userID, sessionID string) int {
+	var rows *sql.Rows
+	var err error
+	if userID != "" {
+		rows, err = s.db.Query("SELECT tool_id FROM tool_calls WHERE user_id = ? AND session_id = ?", userID, sessionID)
+	} else {
+		rows, err = s.db.Query("SELECT tool_id FROM tool_calls WHERE session_id = ?", sessionID)
+	}
 	if err != nil {
 		return 0
 	}
@@ -641,6 +681,7 @@ func (s *SQLiteStore) getMaxToolSeqForSession(sessionID string) int {
 // Put stores or updates a session
 // For Core sessions, this ensures only one Core session exists per user
 func (s *SQLiteStore) Put(session *model.Session) error {
+	fillSessionIDs(session)
 	if err := validateSession(session); err != nil {
 		return err
 	}
@@ -669,8 +710,7 @@ func (s *SQLiteStore) Put(session *model.Session) error {
 	createdAt := session.CreatedAt.Unix()
 	updatedAt := session.UpdatedAt.Unix()
 
-	// Extract session_seq from session_id (format: userID-agentType-s0001)
-	sessionSeq := extractSessionSeq(session.SessionID)
+	sessionSeq := sessionSeqValue(session)
 
 	// Use INSERT OR REPLACE for upsert behavior
 	_, err = s.execWrite(
@@ -692,27 +732,35 @@ func (s *SQLiteStore) Put(session *model.Session) error {
 	return nil
 }
 
-// extractSessionSeq extracts the sequence number from a session ID
-// Format: userID-agentType-s0001 -> 1
-// Returns 0 if the format is not recognized
-func extractSessionSeq(sessionID string) int {
-	// Find the last occurrence of "-s" and extract the number after it
-	idx := strings.LastIndex(sessionID, "-s")
-	if idx == -1 || idx+2 >= len(sessionID) {
+// sessionSeqValue returns the per-user session number to persist.
+func sessionSeqValue(session *model.Session) int {
+	if session == nil {
 		return 0
 	}
-	seqStr := sessionID[idx+2:]
-	seq, err := strconv.Atoi(seqStr)
-	if err != nil {
-		return 0
+	if session.Seq > 0 {
+		return session.Seq
 	}
-	return seq
+	if n := model.SeqFromID(session.SessionID); n > 0 {
+		session.Seq = n
+		return n
+	}
+	return 0
 }
 
-// Delete removes a session
+// extractSessionSeq extracts the sequence number from a session ID.
+// Numeric ids parse directly; deprecated `{user}-{type}-s{seq}` ids still work.
+func extractSessionSeq(sessionID string) int {
+	return model.SeqFromID(sessionID)
+}
+
+// Delete removes a session. Numeric ids that collide across users fail closed.
 func (s *SQLiteStore) Delete(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.errIfAmbiguousLocked("sessions", "session_id", sessionID); err != nil {
+		return err
+	}
 
 	_, err := s.execWrite("DELETE FROM sessions WHERE session_id = ?", sessionID)
 	if err != nil {
@@ -852,16 +900,17 @@ func (s *SQLiteStore) List(userID string) ([]*model.Session, error) {
 	return sessions, nil
 }
 
-// GetNextSessionSeq returns the next session sequence number for a user and agent type
-// Uses MAX(session_seq) to avoid duplicate IDs when sessions are deleted
+// GetNextSessionSeq returns the next session sequence for a user.
+// All agent types share one per-user counter. agentType is ignored.
 func (s *SQLiteStore) GetNextSessionSeq(userID string, agentType model.AgentType) (int, error) {
+	_ = agentType
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var maxSeq sql.NullInt64
 	err := s.db.QueryRow(
-		"SELECT MAX(session_seq) FROM sessions WHERE user_id = ? AND agent_type = ?",
-		userID, string(agentType),
+		"SELECT MAX(session_seq) FROM sessions WHERE user_id = ?",
+		userID,
 	).Scan(&maxSeq)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get max session seq: %w", err)
@@ -961,6 +1010,7 @@ func (s *SQLiteStore) GetCoreSession(userID string) (*model.Session, error) {
 // PutCoreSession stores or updates a Core session for a user
 // This ensures only one Core session exists per user by deleting any existing Core sessions first
 func (s *SQLiteStore) PutCoreSession(session *model.Session) error {
+	fillSessionIDs(session)
 	if err := validateSession(session); err != nil {
 		return err
 	}
@@ -998,8 +1048,7 @@ func (s *SQLiteStore) PutCoreSession(session *model.Session) error {
 	createdAt := session.CreatedAt.Unix()
 	updatedAt := session.UpdatedAt.Unix()
 
-	// Extract session_seq from session_id
-	sessionSeq := extractSessionSeq(session.SessionID)
+	sessionSeq := sessionSeqValue(session)
 
 	// Use INSERT OR REPLACE to handle case where session_id might already exist
 	// (e.g., from a previous session with different agent_type)
@@ -1252,33 +1301,14 @@ func (s *SQLiteStore) computeSessionSeqs(user *model.User) error {
 		return nil
 	}
 
-	// Get max session_seq for each agent type
-	rows, err := s.db.Query(
-		`SELECT agent_type, MAX(session_seq) FROM sessions WHERE user_id = ? GROUP BY agent_type`,
-		user.UserID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to query max session seqs: %w", err)
+	var max sql.NullInt64
+	if err := s.db.QueryRow(`SELECT MAX(session_seq) FROM sessions WHERE user_id = ?`, user.UserID).Scan(&max); err != nil {
+		return fmt.Errorf("failed to query max session seq: %w", err)
 	}
-	defer rows.Close()
-
-	// Update user's SessionSeqs
-	if user.SessionSeqs == nil {
-		user.SessionSeqs = make(map[model.AgentType]int)
+	if max.Valid {
+		user.SessionSeq = int(max.Int64)
 	}
-
-	for rows.Next() {
-		var agentType string
-		var maxSeq sql.NullInt64
-		if err := rows.Scan(&agentType, &maxSeq); err != nil {
-			return fmt.Errorf("failed to scan row: %w", err)
-		}
-		if maxSeq.Valid && agentType != "" {
-			user.SessionSeqs[model.AgentType(agentType)] = int(maxSeq.Int64)
-		}
-	}
-
-	return rows.Err()
+	return nil
 }
 
 // computeActiveSessionIDs computes ActiveSessionIDs from existing sessions for backward compatibility
@@ -1384,6 +1414,7 @@ const messageInsertSQL = `INSERT OR REPLACE INTO messages (
 
 // PutMessage stores a message in the database
 func (s *SQLiteStore) PutMessage(message *model.Message) error {
+	fillMessageIDs(message)
 	if err := validateMessage(message); err != nil {
 		return err
 	}
@@ -1394,7 +1425,10 @@ func (s *SQLiteStore) PutMessage(message *model.Message) error {
 	// Replacing a durable status/tool message is an edit, not a new message. It
 	// must remain possible when the session has reached its message quota.
 	var exists int
-	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM messages WHERE message_id = ?)`, message.MessageID).Scan(&exists); err != nil {
+	if err := s.db.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE user_id = ? AND session_id = ? AND message_id = ?)`,
+		message.UserID, message.SessionID, message.MessageID,
+	).Scan(&exists); err != nil {
 		return fmt.Errorf("failed to check existing message: %w", err)
 	}
 	if exists == 0 {
@@ -1417,6 +1451,7 @@ func (s *SQLiteStore) PutMessages(messages []*model.Message) error {
 		return nil
 	}
 	for _, m := range messages {
+		fillMessageIDs(m)
 		if err := validateMessage(m); err != nil {
 			return err
 		}
@@ -1523,23 +1558,31 @@ const messagesPageSize = 1000
 // first (the same ordering as GetMessagesBySession). limit <= 0 defaults to
 // messagesPageSize; offset < 0 is treated as 0.
 func (s *SQLiteStore) GetMessagesBySessionPage(sessionID string, limit, offset int) ([]*model.Message, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.getMessagesBySessionPageLocked(sessionID, limit, offset)
+	return s.GetUserMessagesBySessionPage("", sessionID, limit, offset)
 }
 
-func (s *SQLiteStore) getMessagesBySessionPageLocked(sessionID string, limit, offset int) ([]*model.Message, error) {
+func (s *SQLiteStore) getMessagesBySessionPageLocked(userID, sessionID string, limit, offset int) ([]*model.Message, error) {
 	if limit <= 0 {
 		limit = messagesPageSize
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := s.db.Query(
-		`SELECT `+messageSelectColumns+`
-		FROM messages WHERE session_id = ? ORDER BY created_at DESC, seq_id DESC LIMIT ? OFFSET ?`,
-		sessionID, limit, offset,
-	)
+	var rows *sql.Rows
+	var err error
+	if userID != "" {
+		rows, err = s.db.Query(
+			`SELECT `+messageSelectColumns+`
+			FROM messages WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC, seq_id DESC LIMIT ? OFFSET ?`,
+			userID, sessionID, limit, offset,
+		)
+	} else {
+		rows, err = s.db.Query(
+			`SELECT `+messageSelectColumns+`
+			FROM messages WHERE session_id = ? ORDER BY created_at DESC, seq_id DESC LIMIT ? OFFSET ?`,
+			sessionID, limit, offset,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query messages: %w", err)
 	}
@@ -1551,20 +1594,7 @@ func (s *SQLiteStore) getMessagesBySessionPageLocked(sessionID string, limit, of
 // implemented via pages internally; prefer GetMessagesBySessionPage for
 // sessions that can grow without bound.
 func (s *SQLiteStore) GetMessagesBySession(sessionID string) ([]*model.Message, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var all []*model.Message
-	for offset := 0; ; offset += messagesPageSize {
-		page, err := s.getMessagesBySessionPageLocked(sessionID, messagesPageSize, offset)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, page...)
-		if len(page) < messagesPageSize {
-			return all, nil
-		}
-	}
+	return s.GetUserMessagesBySession("", sessionID)
 }
 
 // GetMessagesByUser returns all messages for a user
@@ -1586,6 +1616,7 @@ func (s *SQLiteStore) GetMessagesByUser(userID string) ([]*model.Message, error)
 
 // AddOpenedFile records that a file was opened in a session
 func (s *SQLiteStore) AddOpenedFile(openedFile *model.OpenedFile) error {
+	fillOpenedFileIDs(openedFile)
 	if err := validateOpenedFile(openedFile); err != nil {
 		return err
 	}
@@ -1906,6 +1937,7 @@ func (s *SQLiteStore) GetOpenedFilesByUser(userID string) ([]*model.OpenedFile, 
 
 // PutUserFile inserts or updates a user file record.
 func (s *SQLiteStore) PutUserFile(f *model.UserFile) error {
+	fillUserFileIDs(f)
 	if err := validateUserFile(f); err != nil {
 		return err
 	}
@@ -1973,6 +2005,10 @@ const userFileColumns = `file_id, user_id, session_id, name, mime_type, size, st
 func (s *SQLiteStore) GetUserFile(fileID string) (*model.UserFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if err := s.errIfAmbiguousLocked("user_files", "file_id", fileID); err != nil {
+		return nil, err
+	}
 
 	row := s.db.QueryRow(
 		`SELECT `+userFileColumns+` FROM user_files WHERE file_id = ?`,
@@ -2088,6 +2124,7 @@ func (s *SQLiteStore) GetSession(sessionID string) (*model.Session, error) {
 
 // PutToolCall stores a tool call in the database
 func (s *SQLiteStore) PutToolCall(toolCall *model.ToolCall) error {
+	fillToolCallIDs(toolCall)
 	if err := validateToolCall(toolCall); err != nil {
 		return err
 	}
@@ -2395,6 +2432,7 @@ func (s *SQLiteStore) GetToolCallByToolID(toolID string) (*model.ToolCall, error
 
 // PutSummarizationLog stores a summarization log entry in the database
 func (s *SQLiteStore) PutSummarizationLog(log *model.SummarizationLog) error {
+	fillLogIDs(log)
 	if log == nil {
 		return fmt.Errorf("summarization log cannot be nil")
 	}
@@ -2590,6 +2628,7 @@ func (s *SQLiteStore) scanSummarizationLogs(rows *sql.Rows) ([]*model.Summarizat
 // PutRouteTrace upserts a route trace keyed by TraceID. The full DAG is stored
 // as JSON in the data column.
 func (s *SQLiteStore) PutRouteTrace(trace *model.RouteTrace) error {
+	fillRouteTraceIDs(trace)
 	if trace == nil {
 		return fmt.Errorf("route trace cannot be nil")
 	}
@@ -2813,6 +2852,7 @@ func scanReviewRequests(rows *sql.Rows) ([]*model.ReviewRequest, error) {
 
 // PutTaskSchedule upserts a persistent scheduled task.
 func (s *SQLiteStore) PutTaskSchedule(schedule *model.TaskSchedule) error {
+	fillScheduleIDs(schedule)
 	if err := schedule.Validate(); err != nil {
 		return err
 	}
@@ -2844,6 +2884,10 @@ func (s *SQLiteStore) PutTaskSchedule(schedule *model.TaskSchedule) error {
 func (s *SQLiteStore) GetTaskSchedule(scheduleID string) (*model.TaskSchedule, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if err := s.errIfAmbiguousLocked("task_schedules", "schedule_id", scheduleID); err != nil {
+		return nil, err
+	}
 
 	var data string
 	err := s.db.QueryRow(`SELECT data FROM task_schedules WHERE schedule_id = ?`, scheduleID).Scan(&data)
@@ -2989,6 +3033,7 @@ func (s *SQLiteStore) ListTaskScheduleRuns(scheduleID string, limit int) ([]*mod
 
 // PutWorkflowRun upserts a durable Core workflow and its task DAG.
 func (s *SQLiteStore) PutWorkflowRun(workflow *model.WorkflowRun) error {
+	fillWorkflowIDs(workflow)
 	if _, err := workflow.Validate(); err != nil {
 		return err
 	}
@@ -3019,6 +3064,10 @@ func (s *SQLiteStore) PutWorkflowRun(workflow *model.WorkflowRun) error {
 func (s *SQLiteStore) GetWorkflowRun(workflowID string) (*model.WorkflowRun, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if err := s.errIfAmbiguousLocked("workflow_runs", "workflow_id", workflowID); err != nil {
+		return nil, err
+	}
 
 	var data string
 	err := s.db.QueryRow(`SELECT data FROM workflow_runs WHERE workflow_id = ?`, workflowID).Scan(&data)

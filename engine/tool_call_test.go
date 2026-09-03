@@ -143,6 +143,9 @@ func (m *mockSessionStore) List(userID string) ([]*model.Session, error) { retur
 func (m *mockSessionStore) GetNextSessionSeq(userID string, agentType model.AgentType) (int, error) {
 	return 1, nil
 }
+func (m *mockSessionStore) GetUserSession(userID, sessionID string) (*model.Session, error) {
+	return nil, nil
+}
 
 // nonToolCallSessionStore is a SessionStore that does NOT implement ToolCallStore.
 type nonToolCallSessionStore struct{}
@@ -153,6 +156,9 @@ func (n *nonToolCallSessionStore) Delete(sessionID string) error                
 func (n *nonToolCallSessionStore) List(userID string) ([]*model.Session, error) { return nil, nil }
 func (n *nonToolCallSessionStore) GetNextSessionSeq(userID string, agentType model.AgentType) (int, error) {
 	return 1, nil
+}
+func (n *nonToolCallSessionStore) GetUserSession(userID, sessionID string) (*model.Session, error) {
+	return nil, nil
 }
 
 func TestNewToolCallPersister_WithToolCallStore(t *testing.T) {
@@ -368,11 +374,14 @@ func TestToolCallPersister_SaveGeneratesSequentialToolIDs(t *testing.T) {
 	}
 
 	toolID1 := p.Save(session, "msg-1", toolCall)
-	toolID2 := p.Save(session, "msg-2", toolCall)
-	toolID3 := p.Save(session, "msg-3", toolCall)
+	toolID2 := p.Save(session, "msg-1", toolCall)
+	toolID3 := p.Save(session, "msg-2", toolCall)
 
-	if toolID1 == toolID2 || toolID2 == toolID3 || toolID1 == toolID3 {
-		t.Errorf("tool IDs should be unique: %s, %s, %s", toolID1, toolID2, toolID3)
+	if toolID1 != "1" || toolID2 != "2" {
+		t.Errorf("same-message tool ids = %s, %s, want 1, 2", toolID1, toolID2)
+	}
+	if toolID3 != "1" {
+		t.Errorf("per-message tool id = %s, want 1", toolID3)
 	}
 
 	// Verify sequence incremented

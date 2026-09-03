@@ -118,7 +118,13 @@ func (e *Engine) recordUserFile(sessionID, name, mimeType string, source model.F
 	}
 
 	// Allocate a sequential file ID and persist the incremented counter.
-	fileID := session.GenerateUserFileID()
+	var fileID string
+	if user, err := e.Sessions.GetOrCreateUser(session.UserID); err == nil && user != nil {
+		fileID = user.NextFileID()
+		_ = e.Sessions.PutUser(user)
+	} else {
+		fileID = session.GenerateUserFileID()
+	}
 	if err := e.Sessions.Put(session); err != nil {
 		return nil, fmt.Errorf("failed to persist session: %w", err)
 	}
