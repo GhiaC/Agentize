@@ -80,6 +80,10 @@ type Store interface {
 	PutToolCall(toolCall *model.ToolCall) error
 	UpdateToolCallResponse(toolID string, response string, execErr error) error
 	UpdateUserToolCallResponse(userID, sessionID, toolID string, response string, execErr error) error
+	// UpdateMessageToolCallResponse updates one per-message tool id. ToolID is
+	// unique only inside (user, session, message); a global lookup by ToolID
+	// is ambiguous after the second assistant message.
+	UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID string, response string, execErr error) error
 
 	// PutRouteTrace upserts a Core routing-decision DAG for one user message.
 	// The read side lives on debuger.DebugStore (GetRouteTrace* / GetAllRouteTraces).

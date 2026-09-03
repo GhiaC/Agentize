@@ -2320,6 +2320,72 @@ func (s *MongoDBStore) UpdateUserToolCallResponse(userID, sessionID, toolID stri
 	return nil
 }
 
+func (s *MongoDBStore) UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID string, response string, execErr error) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	now := time.Now()
+	messageID = strings.TrimSpace(messageID)
+	docID := scopedChildMongoID(userID, sessionID+"/"+messageID, toolID)
+	var doc toolCallDocument
+	err := s.toolCallsCollection.FindOne(ctx, bson.M{"_id": docID}).Decode(&doc)
+	if err == mongo.ErrNoDocuments {
+		cursor, ferr := s.toolCallsCollection.Find(ctx, bson.M{"user_id": userID, "session_id": sessionID, "tool_id": toolID})
+		if ferr != nil {
+			return fmt.Errorf("failed to find tool call: %w", ferr)
+		}
+		defer cursor.Close(ctx)
+		found := false
+		for cursor.Next(ctx) {
+			var next toolCallDocument
+			if err := cursor.Decode(&next); err != nil {
+				return fmt.Errorf("failed to decode tool call: %w", err)
+			}
+			candidate := &model.ToolCall{}
+			if err := unmarshalJSONOrBSON(next.Data, candidate); err != nil {
+				return fmt.Errorf("failed to unmarshal tool call: %w", err)
+			}
+			if messageID == "" || candidate.MessageID == messageID {
+				doc = next
+				found = true
+				if candidate.MessageID == messageID {
+					break
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("tool call not found (PutToolCall may have failed earlier): %w", mongo.ErrNoDocuments)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to find tool call: %w", err)
+	}
+
+	tc := &model.ToolCall{}
+	if err := unmarshalJSONOrBSON(doc.Data, tc); err != nil {
+		return fmt.Errorf("failed to unmarshal tool call: %w", err)
+	}
+	tc.Response = response
+	tc.ResponseLength = len([]rune(response))
+	tc.DurationMs = now.Sub(tc.CreatedAt).Milliseconds()
+	tc.UpdatedAt = now
+	if execErr != nil {
+		tc.Status = model.ToolCallStatusFailed
+		tc.Error = execErr.Error()
+	} else {
+		tc.Status = model.ToolCallStatusSuccess
+	}
+	data, err := json.Marshal(tc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tool call: %w", err)
+	}
+	doc.Data = string(data)
+	_, err = s.toolCallsCollection.ReplaceOne(ctx, bson.M{"_id": doc.ID}, doc, options.Replace().SetUpsert(false))
+	if err != nil {
+		return fmt.Errorf("failed to update tool call response: %w", err)
+	}
+	return nil
+}
+
 // summarizationLogDocument represents a summarization log document in MongoDB
 type summarizationLogDocument struct {
 	ID        string    `bson:"_id"`

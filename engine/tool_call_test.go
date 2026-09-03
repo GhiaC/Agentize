@@ -71,7 +71,7 @@ func TestToolCallPersister_IntegrationWithSQLite(t *testing.T) {
 	t.Logf("Saved tool call with ID: %s", toolID)
 
 	// Update the response
-	persister.Update(toolID, `{"price": 50000, "currency": "USD"}`, nil)
+	persister.Update(session, "msg-integration", toolID, `{"price": 50000, "currency": "USD"}`, nil)
 
 	// Retrieve and verify
 	savedToolCalls, err := sqliteStore.GetAllToolCalls()
@@ -128,6 +128,10 @@ func (m *mockToolCallStore) UpdateToolCallResponse(toolID, response string, exec
 	}
 	m.updateCalls = append(m.updateCalls, updateCall{toolID: toolID, response: response, execErr: execErr})
 	return nil
+}
+
+func (m *mockToolCallStore) UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID, response string, execErr error) error {
+	return m.UpdateToolCallResponse(toolID, response, execErr)
 }
 
 // mockSessionStore wraps mockToolCallStore to satisfy model.SessionStore interface.
@@ -300,7 +304,7 @@ func TestToolCallPersister_Update(t *testing.T) {
 	store := &mockSessionStore{}
 	p := NewToolCallPersister(store, "Test")
 
-	p.Update("tool-001", "result data", nil)
+	p.Update(nil, "", "tool-001", "result data", nil)
 
 	if len(store.updateCalls) != 1 {
 		t.Fatalf("expected 1 UpdateToolCallResponse call, got %d", len(store.updateCalls))
@@ -319,7 +323,7 @@ func TestToolCallPersister_Update_EmptyToolID(t *testing.T) {
 	p := NewToolCallPersister(store, "Test")
 
 	// Should not call store when toolID is empty
-	p.Update("", "some response", nil)
+	p.Update(nil, "", "", "some response", nil)
 
 	if len(store.updateCalls) != 0 {
 		t.Errorf("expected no UpdateToolCallResponse calls for empty toolID, got %d", len(store.updateCalls))
@@ -332,7 +336,7 @@ func TestToolCallPersister_Update_Error(t *testing.T) {
 	p := NewToolCallPersister(store, "Test")
 
 	// Should not panic, just log the error
-	p.Update("tool-001", "result", nil)
+	p.Update(nil, "", "tool-001", "result", nil)
 
 	if store.updateCallCount != 1 {
 		t.Errorf("expected Update to be called, count=%d", store.updateCallCount)
@@ -361,7 +365,7 @@ func TestToolCallPersister_NilPersister(t *testing.T) {
 	}
 
 	// Should not panic
-	p.Update("tool-1", "response", nil)
+	p.Update(nil, "", "tool-1", "response", nil)
 }
 
 func TestToolCallPersister_SaveGeneratesSequentialToolIDs(t *testing.T) {
@@ -393,6 +397,47 @@ func TestToolCallPersister_SaveGeneratesSequentialToolIDs(t *testing.T) {
 	// Verify sequence incremented
 	if session.ToolSeq != 3 {
 		t.Errorf("expected ToolSeq=3, got %d", session.ToolSeq)
+	}
+}
+
+func TestToolCallPersister_UpdateCompletesPerMessageDuplicateIDs(t *testing.T) {
+	sqliteStore, err := store.NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to create SQLite store: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	persister := NewToolCallPersister(sqliteStore, "PerMessage")
+	session := &model.Session{SessionID: "sess", UserID: "user-1", AgentType: model.AgentTypeLow}
+	if err := sqliteStore.Put(session); err != nil {
+		t.Fatalf("Put session: %v", err)
+	}
+
+	first := persister.Save(session, "m1", openai.ToolCall{ID: "call_a", Function: openai.FunctionCall{Name: "search"}})
+	second := persister.Save(session, "m2", openai.ToolCall{ID: "call_b", Function: openai.FunctionCall{Name: "search"}})
+	if first != "1" || second != "1" {
+		t.Fatalf("tool ids = %s, %s, want 1, 1", first, second)
+	}
+
+	persister.Update(session, "m1", first, "one", nil)
+	persister.Update(session, "m2", second, "two", nil)
+
+	items, err := sqliteStore.GetUserToolCallsBySession(session.UserID, session.SessionID)
+	if err != nil {
+		t.Fatalf("GetUserToolCallsBySession: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("got %d tool calls, want 2", len(items))
+	}
+	got := map[string]string{}
+	for _, item := range items {
+		if item.Status != model.ToolCallStatusSuccess {
+			t.Fatalf("message %s status = %q, want success", item.MessageID, item.Status)
+		}
+		got[item.MessageID] = item.Response
+	}
+	if got["m1"] != "one" || got["m2"] != "two" {
+		t.Fatalf("responses = %v", got)
 	}
 }
 

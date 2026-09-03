@@ -2215,16 +2215,22 @@ func (s *SQLiteStore) UpdateToolCallResponse(toolID string, response string, exe
 	if err := s.errIfAmbiguousLocked("tool_calls", "tool_id", toolID); err != nil {
 		return err
 	}
-	return s.updateToolCallResponseLocked("", "", toolID, response, execErr)
+	return s.updateToolCallResponseLocked("", "", "", toolID, response, execErr)
 }
 
 func (s *SQLiteStore) UpdateUserToolCallResponse(userID, sessionID, toolID string, response string, execErr error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.updateToolCallResponseLocked(userID, sessionID, toolID, response, execErr)
+	return s.updateToolCallResponseLocked(userID, sessionID, "", toolID, response, execErr)
 }
 
-func (s *SQLiteStore) updateToolCallResponseLocked(userID, sessionID, toolID, response string, execErr error) error {
+func (s *SQLiteStore) UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID string, response string, execErr error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updateToolCallResponseLocked(userID, sessionID, messageID, toolID, response, execErr)
+}
+
+func (s *SQLiteStore) updateToolCallResponseLocked(userID, sessionID, messageID, toolID, response string, execErr error) error {
 	now := time.Now()
 	updatedAt := now.Unix()
 	responseLength := utf8.RuneCountInString(response)
@@ -2236,14 +2242,24 @@ func (s *SQLiteStore) updateToolCallResponseLocked(userID, sessionID, toolID, re
 		errorMsg = execErr.Error()
 	}
 
+	userID = strings.TrimSpace(userID)
+	sessionID = strings.TrimSpace(sessionID)
+	messageID = strings.TrimSpace(messageID)
+
 	var createdAtUnix int64
 	var err error
-	if strings.TrimSpace(userID) != "" {
+	switch {
+	case userID != "" && messageID != "":
+		err = s.db.QueryRow(
+			"SELECT created_at FROM tool_calls WHERE user_id = ? AND session_id = ? AND message_id = ? AND tool_id = ?",
+			userID, sessionID, messageID, toolID,
+		).Scan(&createdAtUnix)
+	case userID != "":
 		err = s.db.QueryRow(
 			"SELECT created_at FROM tool_calls WHERE user_id = ? AND session_id = ? AND tool_id = ?",
 			userID, sessionID, toolID,
 		).Scan(&createdAtUnix)
-	} else {
+	default:
 		err = s.db.QueryRow(
 			"SELECT created_at FROM tool_calls WHERE tool_id = ?",
 			toolID,
@@ -2256,7 +2272,16 @@ func (s *SQLiteStore) updateToolCallResponseLocked(userID, sessionID, toolID, re
 		durationMs = now.Sub(createdAt).Milliseconds()
 	}
 
-	if strings.TrimSpace(userID) != "" {
+	switch {
+	case userID != "" && messageID != "":
+		_, err = s.db.Exec(
+			`UPDATE tool_calls
+			 SET response = ?, response_length = ?, duration_ms = ?, status = ?, error = ?, updated_at = ?
+			 WHERE user_id = ? AND session_id = ? AND message_id = ? AND tool_id = ?`,
+			response, responseLength, durationMs, status, errorMsg, updatedAt,
+			userID, sessionID, messageID, toolID,
+		)
+	case userID != "":
 		_, err = s.db.Exec(
 			`UPDATE tool_calls
 			 SET response = ?, response_length = ?, duration_ms = ?, status = ?, error = ?, updated_at = ?
@@ -2264,7 +2289,7 @@ func (s *SQLiteStore) updateToolCallResponseLocked(userID, sessionID, toolID, re
 			response, responseLength, durationMs, status, errorMsg, updatedAt,
 			userID, sessionID, toolID,
 		)
-	} else {
+	default:
 		_, err = s.db.Exec(
 			`UPDATE tool_calls
 			 SET response = ?, response_length = ?, duration_ms = ?, status = ?, error = ?, updated_at = ?

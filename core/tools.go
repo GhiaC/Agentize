@@ -201,7 +201,7 @@ func (ch *CoreHandler) executeCoreToolWithError(
 			Name:      toolCall.Function.Name,
 		}); cbErr != nil {
 			result := engine.FormatBlockedActionResult(cbErr)
-			persister.Update(toolID, result, cbErr)
+			persister.Update(coreSession, messageID, toolID, result, cbErr)
 			// Surface the block on the routing DAG (e.g. a quota callback denied it).
 			routeRecorderFrom(ctx).Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, "blocked: "+cbErr.Error(), model.RouteStatusBlocked, 0)
 			return result, cbErr
@@ -230,7 +230,7 @@ func (ch *CoreHandler) executeCoreToolWithError(
 		if approvalErr != nil {
 			result := fmt.Sprintf("Tool %s was not executed: %v", toolCall.Function.Name, approvalErr)
 			engine.NotifyStatus(ctx, userID, sessionID, engine.StatusToolRejected, toolDetail)
-			persister.Update(toolID, result, approvalErr)
+			persister.Update(coreSession, messageID, toolID, result, approvalErr)
 			routeRecorderFrom(ctx).Approval(toolCall.Function.Name, toolDetail, approvalErr.Error(), model.RouteStatusBlocked, time.Since(approvalStart).Milliseconds())
 			routeRecorderFrom(ctx).Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, "blocked: "+approvalErr.Error(), model.RouteStatusBlocked, 0)
 			return result, approvalErr
@@ -266,7 +266,7 @@ func (ch *CoreHandler) executeCoreToolWithError(
 	}
 
 	engine.NotifyStatus(ctx, userID, sessionID, engine.StatusToolDone, toolDetail)
-	persister.Update(toolID, result, err)
+	persister.Update(coreSession, messageID, toolID, result, err)
 
 	// Record into the routing DAG. Agent dispatch/escalation nodes are recorded
 	// in runCoreToolImpl (with per-agent timing), so skip call_agent_* here.

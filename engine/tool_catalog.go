@@ -271,7 +271,7 @@ func (e *Engine) executeSearchTools(all []openai.Tool, arguments string, discove
 func (e *Engine) recordSearchToolsOnTurn(ctx context.Context, session *model.Session, messageID string, toolCall openai.ToolCall, result string) {
 	persister := NewToolCallPersister(e.Sessions, "Engine")
 	toolID := persister.SaveForTurn(session, messageID, UserMessageIDFrom(ctx), toolCall)
-	persister.Update(toolID, result, nil)
+	persister.Update(session, messageID, toolID, result, nil)
 	rec := turnRecorderFrom(ctx)
 	rec.Tool(model.RouteNodeToolCall, searchToolsName, "Search tools", toolCall.Function.Arguments, model.RouteStatusOK, 0)
 }

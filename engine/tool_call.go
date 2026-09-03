@@ -32,6 +32,7 @@ func FormatToolCallsContent(toolCalls []openai.ToolCall) string {
 type ToolCallStore interface {
 	PutToolCall(*model.ToolCall) error
 	UpdateToolCallResponse(toolID string, response string, err error) error
+	UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID string, response string, err error) error
 }
 
 // ToolCallPersister provides tool call persistence functionality.
@@ -163,15 +164,23 @@ func (p *ToolCallPersister) SaveWithAgentTypeForTurn(
 	return toolID
 }
 
-// Update updates the response for a tool call by ToolID.
-// When execErr != nil: sets Status=failed, Error=execErr.Error(), Response=response (error message).
+// Update records the result of a tool call. When session and messageID are set
+// the row is addressed by the per-message primary key so two assistant
+// messages that both issued tool "1" do not leave the later call pending.
+// When execErr != nil: sets Status=failed, Error=execErr.Error(), Response=response.
 // Does nothing if toolID is empty.
-func (p *ToolCallPersister) Update(toolID, response string, execErr error) {
+func (p *ToolCallPersister) Update(session *model.Session, messageID, toolID, response string, execErr error) {
 	if p == nil || p.store == nil || toolID == "" {
 		return
 	}
 
-	if err := p.store.UpdateToolCallResponse(toolID, response, execErr); err != nil {
+	var err error
+	if session != nil && strings.TrimSpace(messageID) != "" {
+		err = p.store.UpdateMessageToolCallResponse(session.UserID, session.SessionID, messageID, toolID, response, execErr)
+	} else {
+		err = p.store.UpdateToolCallResponse(toolID, response, execErr)
+	}
+	if err != nil {
 		log.Log.Warnf("[%s] ⚠️  Failed to update tool call response | ToolID: %s | Error: %v",
 			p.logger, toolID, err)
 	} else {

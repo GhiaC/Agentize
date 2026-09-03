@@ -184,6 +184,10 @@ func (m *MockSessionStore) UpdateToolCallResponse(toolID, response string, execE
 	return nil
 }
 
+func (m *MockSessionStore) UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID, response string, execErr error) error {
+	return m.UpdateToolCallResponse(toolID, response, execErr)
+}
+
 // Test helpers
 func (m *MockSessionStore) Sessions() map[string]*model.Session {
 	m.mu.RLock()

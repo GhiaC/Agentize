@@ -247,6 +247,7 @@ func TestStoreConformance(t *testing.T) {
 			run("OpenedFiles", testOpenedFiles)
 			run("UserFiles", testUserFiles)
 			run("ToolCalls", testToolCalls)
+			run("ToolCallPerMessageIDs", testToolCallPerMessageIDs)
 			run("ToolCallNotFound", testToolCallNotFound)
 			run("SummarizationLogs", testSummarizationLogs)
 			run("RouteTraces", testRouteTraces)
@@ -588,6 +589,49 @@ func testToolCalls(t *testing.T, st Store) {
 	}
 	if all, _ := st.GetAllToolCalls(); len(all) != 1 {
 		t.Errorf("GetAllToolCalls = %d, want 1", len(all))
+	}
+}
+
+func testToolCallPerMessageIDs(t *testing.T, st Store) {
+	s := newSession("user-1", model.AgentTypeLow)
+	mustPutSession(t, st, s)
+
+	first := newToolCall(s, "1", "call_first", "search")
+	first.MessageID = "m1"
+	first.UserMessageID = "u1"
+	second := newToolCall(s, "1", "call_second", "search")
+	second.MessageID = "m2"
+	second.UserMessageID = "u2"
+	if err := st.PutToolCall(first); err != nil {
+		t.Fatalf("PutToolCall first: %v", err)
+	}
+	if err := st.PutToolCall(second); err != nil {
+		t.Fatalf("PutToolCall second: %v", err)
+	}
+
+	if err := st.UpdateToolCallResponse("1", "should-not-apply", nil); err == nil {
+		t.Fatal("UpdateToolCallResponse(1) must fail when two messages share the per-message id")
+	}
+
+	if err := st.UpdateMessageToolCallResponse(s.UserID, s.SessionID, "m2", "1", "second-result", nil); err != nil {
+		t.Fatalf("UpdateMessageToolCallResponse: %v", err)
+	}
+	items, err := st.GetUserToolCallsBySession(s.UserID, s.SessionID)
+	if err != nil {
+		t.Fatalf("GetUserToolCallsBySession: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("GetUserToolCallsBySession = %d, want 2", len(items))
+	}
+	byMessage := map[string]*model.ToolCall{}
+	for _, item := range items {
+		byMessage[item.MessageID] = item
+	}
+	if byMessage["m1"] == nil || byMessage["m1"].Status != model.ToolCallStatusPending || byMessage["m1"].Response != "" {
+		t.Fatalf("first tool should stay pending, got %+v", byMessage["m1"])
+	}
+	if byMessage["m2"] == nil || byMessage["m2"].Status != model.ToolCallStatusSuccess || byMessage["m2"].Response != "second-result" {
+		t.Fatalf("second tool should be success, got %+v", byMessage["m2"])
 	}
 }
 

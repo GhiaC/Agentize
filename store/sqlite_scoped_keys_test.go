@@ -72,3 +72,56 @@ func TestSQLiteNumericIDsAreNotGlobalPrimaryKeys(t *testing.T) {
 		t.Fatalf("bob session 2 was deleted by alice's delete: %v", err)
 	}
 }
+
+func TestSQLitePerMessageToolIDsStayPendingUntilScopedUpdate(t *testing.T) {
+	st, err := NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	session := model.NewSessionWithType("alice", model.AgentTypeLow)
+	session.SessionID = "2"
+	if err := st.Put(session); err != nil {
+		t.Fatalf("Put session: %v", err)
+	}
+	now := time.Now()
+	first := &model.ToolCall{
+		ToolID: "1", ToolCallID: "call_a", MessageID: "10", UserMessageID: "9",
+		SessionID: session.SessionID, UserID: session.UserID, FunctionName: "add_memory",
+		Arguments: `{}`, Status: model.ToolCallStatusPending, CreatedAt: now, UpdatedAt: now,
+	}
+	second := &model.ToolCall{
+		ToolID: "1", ToolCallID: "call_b", MessageID: "12", UserMessageID: "11",
+		SessionID: session.SessionID, UserID: session.UserID, FunctionName: "add_memory",
+		Arguments: `{}`, Status: model.ToolCallStatusPending, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.PutToolCall(first); err != nil {
+		t.Fatalf("PutToolCall first: %v", err)
+	}
+	if err := st.PutToolCall(second); err != nil {
+		t.Fatalf("PutToolCall second: %v", err)
+	}
+	if err := st.UpdateToolCallResponse("1", "ok", nil); err == nil {
+		t.Fatal("global UpdateToolCallResponse must refuse a duplicated per-message tool id")
+	}
+	if err := st.UpdateMessageToolCallResponse(session.UserID, session.SessionID, "12", "1", "ok", nil); err != nil {
+		t.Fatalf("UpdateMessageToolCallResponse: %v", err)
+	}
+	items, err := st.GetUserToolCallsBySession(session.UserID, session.SessionID)
+	if err != nil || len(items) != 2 {
+		t.Fatalf("GetUserToolCallsBySession = %d, err=%v", len(items), err)
+	}
+	for _, item := range items {
+		switch item.MessageID {
+		case "10":
+			if item.Status != model.ToolCallStatusPending {
+				t.Fatalf("first call status = %q, want pending", item.Status)
+			}
+		case "12":
+			if item.Status != model.ToolCallStatusSuccess || item.Response != "ok" {
+				t.Fatalf("second call = %+v", item)
+			}
+		}
+	}
+}

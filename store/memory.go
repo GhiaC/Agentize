@@ -668,6 +668,10 @@ func (s *DBStore) UpdateUserToolCallResponse(userID, sessionID, toolID string, r
 	return s.sqliteStore.UpdateUserToolCallResponse(userID, sessionID, toolID, response, execErr)
 }
 
+func (s *DBStore) UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID string, response string, execErr error) error {
+	return s.sqliteStore.UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID, response, execErr)
+}
+
 // DeleteUserData deletes all Agentize data for a user (delegates to SQLiteStore
 // and clears caches plus in-memory visited nodes)
 func (s *DBStore) DeleteUserData(userID string) error {

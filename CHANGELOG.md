@@ -20,6 +20,12 @@ API, security & observability hardening (improvement roadmap
   trusted host supplies an equivalent gate.
 
 ### Fixed
+- **Tool calls no longer stay `pending` after they finish.** Per-message numeric
+  ToolIDs (`"1"`, `"2"`, …) are unique only inside one assistant message. The
+  persister still updated by ToolID alone, so PostgreSQL/SQLite treated the id
+  as ambiguous after the first duplicate and left every later row pending even
+  though the executor had already returned. Completion now writes
+  `(user_id, session_id, message_id, tool_id)`.
 - **`collect_result` no longer fails with "result not found in session".**
   Oversized tool results were stored on a freshly-fetched session clone inside
   `saveToolResult` and then clobbered by `ProcessMessage`'s single

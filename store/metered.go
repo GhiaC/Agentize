@@ -256,6 +256,11 @@ func (m *meteredStore) UpdateUserToolCallResponse(userID, sessionID, toolID stri
 	return m.Store.UpdateUserToolCallResponse(userID, sessionID, toolID, response, execErr)
 }
 
+func (m *meteredStore) UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID string, response string, execErr error) error {
+	defer m.observe(m.begin("UpdateMessageToolCallResponse"))
+	return m.Store.UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID, response, execErr)
+}
+
 func (m *meteredStore) PutRouteTrace(trace *model.RouteTrace) error {
 	defer m.observe(m.begin("PutRouteTrace"))
 	return m.Store.PutRouteTrace(trace)

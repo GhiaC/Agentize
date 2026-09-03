@@ -1891,7 +1891,7 @@ func (e *Engine) executeTool(
 		}); cbErr != nil {
 			result := FormatBlockedActionResult(cbErr)
 			if persister != nil {
-				persister.Update(toolID, result, cbErr)
+				persister.Update(session, messageID, toolID, result, cbErr)
 			}
 			return result, nil
 		}
@@ -1924,7 +1924,7 @@ func (e *Engine) executeTool(
 		NotifyStatus(ctx, session.UserID, sessionID, StatusToolRejected, toolDetail)
 		turnRecorderFrom(ctx).Approval(toolCall.Function.Name, toolDetail, approvalErr.Error(), model.RouteStatusBlocked, time.Since(approvalStart).Milliseconds())
 		if persister != nil {
-			persister.Update(toolID, result, approvalErr)
+			persister.Update(session, messageID, toolID, result, approvalErr)
 		}
 		return result, nil
 	}
@@ -1996,7 +1996,7 @@ func (e *Engine) executeTool(
 
 	// Update persister with result
 	if persister != nil {
-		persister.Update(toolID, processedResult, err)
+		persister.Update(session, messageID, toolID, processedResult, err)
 	}
 
 	// A tool (manage_files read on an image) may hand back an image to inject
