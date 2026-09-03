@@ -14,9 +14,10 @@ import (
 
 // SessionStore defines the interface for session storage (pluggable)
 type SessionStore interface {
-	Get(sessionID string) (*Session, error)
+	Get(sessionID string) (*Session, error) // Deprecated: session IDs are per-user; use GetUserSession.
 	Put(session *Session) error
-	Delete(sessionID string) error
+	Delete(sessionID string) error // Deprecated: session IDs are per-user; use DeleteUserSession.
+	DeleteUserSession(userID, sessionID string) error
 	List(userID string) ([]*Session, error)
 	// GetNextSessionSeq returns the next session sequence number for a user and agent type
 	// This is used to generate unique session IDs without random strings
@@ -222,7 +223,10 @@ func (sh *SessionHandler) CreateSessionForUser(user *User, agentType AgentType) 
 	return session, nil
 }
 
-// GetSession retrieves a session by ID
+// GetSession retrieves a session by ID.
+//
+// Deprecated: session IDs increment per user and are not globally unique.
+// Use GetUserSession.
 func (sh *SessionHandler) GetSession(sessionID string) (*Session, error) {
 	session, err := sh.store.Get(sessionID)
 	if err != nil {
@@ -234,6 +238,23 @@ func (sh *SessionHandler) GetSession(sessionID string) (*Session, error) {
 	if !sh.config.DisableLogs {
 		log.Log.Infof("[SessionHandler] 🔍 Retrieved session | SessionID: %s | UserID: %s | AgentType: %s | Title: %s",
 			sessionID, session.UserID, session.AgentType, getSessionTitle(session))
+	}
+	return session, nil
+}
+
+// GetUserSession retrieves a session owned by userID. Numeric SessionIDs are
+// unique per user, so this is the production lookup.
+func (sh *SessionHandler) GetUserSession(userID, sessionID string) (*Session, error) {
+	session, err := sh.store.GetUserSession(userID, sessionID)
+	if err != nil {
+		if !sh.config.DisableLogs {
+			log.Log.Warnf("[SessionHandler] ⚠️  Session not found | UserID: %s | SessionID: %s | Error: %v", userID, sessionID, err)
+		}
+		return nil, err
+	}
+	if !sh.config.DisableLogs {
+		log.Log.Infof("[SessionHandler] 🔍 Retrieved session | UserID: %s | SessionID: %s | AgentType: %s | Title: %s",
+			userID, sessionID, session.AgentType, getSessionTitle(session))
 	}
 	return session, nil
 }

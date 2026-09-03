@@ -60,6 +60,9 @@ type Store interface {
 	GetMessagesBySessionPage(sessionID string, limit, offset int) ([]*model.Message, error)
 	// GetUserMessagesBySessionPage is GetMessagesBySessionPage scoped to userID.
 	GetUserMessagesBySessionPage(userID, sessionID string, limit, offset int) ([]*model.Message, error)
+	// GetUserMessagesBySession is the unbounded user-scoped read. Prefer the
+	// paged variant for large sessions.
+	GetUserMessagesBySession(userID, sessionID string) ([]*model.Message, error)
 	AddOpenedFile(openedFile *model.OpenedFile) error
 	// CloseOpenedFile marks the currently-open record for (sessionID, filePath)
 	// closed. It is a no-op when the file is not currently open.
@@ -76,6 +79,7 @@ type Store interface {
 	DeleteUserFile(fileID string) error
 	PutToolCall(toolCall *model.ToolCall) error
 	UpdateToolCallResponse(toolID string, response string, execErr error) error
+	UpdateUserToolCallResponse(userID, sessionID, toolID string, response string, execErr error) error
 
 	// PutRouteTrace upserts a Core routing-decision DAG for one user message.
 	// The read side lives on debuger.DebugStore (GetRouteTrace* / GetAllRouteTraces).
@@ -103,6 +107,7 @@ type Store interface {
 	// DeleteConversation removes the conversation row. It does not delete the
 	// linked session; callers that own the full graph should delete sessions first.
 	DeleteConversation(conversationID string) error
+	DeleteUserConversation(userID, conversationID string) error
 	// ListConversations returns the user's conversations, newest UpdatedAt first.
 	ListConversations(userID string) ([]*model.Conversation, error)
 	// GetConversationBySession returns the conversation attached to sessionID,
@@ -117,6 +122,7 @@ type Store interface {
 	// sessionID so last-used ordering stays accurate. It is a no-op when no
 	// conversation is attached.
 	TouchConversationBySession(sessionID string) error
+	TouchUserConversationBySession(userID, sessionID string) error
 
 	// --- Persistent task schedules ---
 

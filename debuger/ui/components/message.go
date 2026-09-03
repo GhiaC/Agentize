@@ -55,7 +55,10 @@ func MessageCard(msg *model.Message, config MessageDisplayConfig) string {
 
 	// Tool calls badge with link
 	if config.ShowToolCalls && msg.HasToolCalls {
-		if config.SessionID != "" {
+		if msg.UserID != "" && msg.SessionID != "" {
+			badges += fmt.Sprintf(` <a href="%s" class="badge bg-danger text-decoration-none">🔧 Tool Calls</a>`,
+				debuger.SessionToolCallsPath(msg.UserID, msg.SessionID))
+		} else if config.SessionID != "" {
 			badges += fmt.Sprintf(` <a href="/agentize/debug/tool-calls?session=%s" class="badge bg-danger text-decoration-none">🔧 Tool Calls</a>`,
 				template.URLQueryEscaper(config.SessionID))
 		} else {
@@ -151,9 +154,10 @@ func formatTimeShort(t interface{ Format(string) string }) string {
 
 // MessageRowConfig holds configuration for message table row display
 type MessageRowConfig struct {
-	ShowUser    bool   // Show user column with link
-	ShowSession bool   // Show session column with link
-	BaseURL     string // Base URL for links
+	ShowUser          bool              // Show user column with link
+	ShowSession       bool              // Show session column with link
+	BaseURL           string            // Base URL for links
+	RouteByMessageID  map[string]string // messageID -> DAG href
 }
 
 // DefaultMessageRowConfig returns default configuration for message row
@@ -198,11 +202,19 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 		modelDisplay = getModelDisplayShort(msg.Model)
 	}
 
-	// Tool calls badge
+	// Tool calls / DAG badges
 	toolCallDisplay := Badge("-", "secondary")
 	if msg.HasToolCalls {
-		toolCallDisplay = fmt.Sprintf(`<a href="%s/tool-calls?session=%s" class="btn btn-sm btn-outline-warning">🔧 View</a>`,
-			config.BaseURL, template.URLQueryEscaper(msg.SessionID))
+		toolCallDisplay = fmt.Sprintf(`<a href="%s" class="btn btn-sm btn-outline-warning">🔧 View</a>`,
+			debuger.SessionToolCallsPath(msg.UserID, msg.SessionID))
+	}
+	if config.RouteByMessageID != nil {
+		if u := config.RouteByMessageID[msg.MessageID]; u != "" {
+			if toolCallDisplay == Badge("-", "secondary") {
+				toolCallDisplay = ""
+			}
+			toolCallDisplay += fmt.Sprintf(` <a href="%s" class="btn btn-sm btn-outline-info">DAG</a>`, u)
+		}
 	}
 
 	// Format time as "ago"
@@ -291,7 +303,7 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 		rowID, colSpan,
 		EntityID(msg.MessageID),
 		msg.SeqID,
-		EntityIDLink(msg.SessionID, config.BaseURL+"/sessions/"+template.URLQueryEscaper(msg.SessionID)),
+		EntityIDLink(msg.SessionID, debuger.SessionPath(msg.UserID, msg.SessionID)),
 		TruncatedLink(msg.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(msg.UserID), 40),
 		msg.CreatedAt.Format("2006-01-02 15:04:05"),
 		agentBadge,

@@ -112,6 +112,12 @@ func TestUserFileRecordingAndDashboard(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/agentize/debug/documents/"+uf.FileID+"/raw", nil)
 	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("deprecated raw endpoint status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/agentize/debug/users/"+uf.UserID+"/files/"+uf.FileID+"/raw", nil)
+	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("raw endpoint status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}

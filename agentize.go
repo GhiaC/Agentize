@@ -774,8 +774,8 @@ func (ag *Agentize) DeleteConversation(userID, conversationID string) error {
 	return ag.engine.DeleteConversation(userID, conversationID)
 }
 
-func (ag *Agentize) CreateSubAgent(parentSessionID, title, modelName string) (*model.Session, error) {
-	return ag.engine.CreateSubAgent(parentSessionID, title, modelName)
+func (ag *Agentize) CreateSubAgent(userID, parentSessionID, title, modelName string) (*model.Session, error) {
+	return ag.engine.CreateSubAgent(userID, parentSessionID, title, modelName)
 }
 
 func (ag *Agentize) ProcessConversation(ctx context.Context, userID, conversationID, message string) (string, int, error) {

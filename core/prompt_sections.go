@@ -100,7 +100,7 @@ func (ch *CoreHandler) currentCoreSession(userID string) *model.Session {
 
 type contextResolver interface {
 	GetUser(string) (*model.User, error)
-	GetConversation(string) (*model.Conversation, error)
+	GetUserConversation(userID, conversationID string) (*model.Conversation, error)
 	ListConversations(string) ([]*model.Conversation, error)
 }
 
@@ -135,7 +135,7 @@ func contextSession(store model.SessionStore, userID string, fallback *model.Ses
 			if conversation == nil || conversation.Archived || conversation.UserID != userID {
 				continue
 			}
-			session, err := store.Get(conversation.SessionID)
+			session, err := store.GetUserSession(userID, conversation.SessionID)
 			if err == nil && session != nil && session.UserID == userID {
 				return session
 			}
@@ -148,11 +148,11 @@ func ownedConversationSession(store model.SessionStore, resolver contextResolver
 	if conversationID == "" {
 		return nil
 	}
-	conversation, err := resolver.GetConversation(conversationID)
+	conversation, err := resolver.GetUserConversation(userID, conversationID)
 	if err != nil || conversation == nil || conversation.UserID != userID {
 		return nil
 	}
-	session, err := store.Get(conversation.SessionID)
+	session, err := store.GetUserSession(userID, conversation.SessionID)
 	if err != nil || session == nil || session.UserID != userID {
 		return nil
 	}

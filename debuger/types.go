@@ -20,10 +20,16 @@ type DebugStore interface {
 	GetMessagesBySession(sessionID string) ([]*model.Message, error)
 	GetMessagesByUser(userID string) ([]*model.Message, error)
 	GetOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error)
-	GetUser(userID string) (*model.User, error)
-	GetSession(sessionID string) (*model.Session, error)
+		GetUser(userID string) (*model.User, error)
+		// GetSession looks up a session by id alone.
+		//
+		// Deprecated: numeric session ids are per-user. Use GetUserSession.
+		GetSession(sessionID string) (*model.Session, error)
+		GetUserSession(userID, sessionID string) (*model.Session, error)
 	GetAllToolCalls() ([]*model.ToolCall, error)
+	// Deprecated: numeric session ids are per-user. Use GetUserToolCallsBySession.
 	GetToolCallsBySession(sessionID string) ([]*model.ToolCall, error)
+	GetUserToolCallsBySession(userID, sessionID string) ([]*model.ToolCall, error)
 	GetToolCallByID(toolCallID string) (*model.ToolCall, error)
 	GetToolCallByToolID(toolID string) (*model.ToolCall, error)
 	PutSummarizationLog(log *model.SummarizationLog) error

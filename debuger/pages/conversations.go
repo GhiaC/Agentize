@@ -62,7 +62,7 @@ func conversationRow(conv *model.Conversation) string {
 	if conv.Archived {
 		archived = components.Badge("yes", "secondary")
 	}
-	sessionLink := fmt.Sprintf(`/agentize/debug/sessions/%s`, html.EscapeString(conv.SessionID))
+	sessionLink := debuger.SessionPath(conv.UserID, conv.SessionID)
 	return fmt.Sprintf(
 		`<tr>
 			<td class="text-nowrap">%s</td>

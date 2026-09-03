@@ -112,11 +112,27 @@ func (s *SQLiteStore) DeleteConversation(conversationID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.errIfAmbiguousLocked("conversations", "conversation_id", conversationID); err != nil {
+		return err
+	}
+
 	_, err := s.execWrite(`DELETE FROM conversations WHERE conversation_id = ?`, conversationID)
 	if err != nil {
 		return fmt.Errorf("failed to delete conversation: %w", err)
 	}
 	auditDeletion("conversation", conversationID, "")
+	return nil
+}
+
+func (s *SQLiteStore) DeleteUserConversation(userID, conversationID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.execWrite(`DELETE FROM conversations WHERE user_id = ? AND conversation_id = ?`, userID, conversationID)
+	if err != nil {
+		return fmt.Errorf("failed to delete conversation: %w", err)
+	}
+	auditDeletion("conversation", conversationID, userID)
 	return nil
 }
 
@@ -229,6 +245,15 @@ func (s *SQLiteStore) GetNextConversationSeq(userID string) (int, error) {
 
 func (s *SQLiteStore) TouchConversationBySession(sessionID string) error {
 	conv, err := s.GetConversationBySession(sessionID)
+	if err != nil || conv == nil {
+		return err
+	}
+	bumpConversationActivity(conv)
+	return s.PutConversation(conv)
+}
+
+func (s *SQLiteStore) TouchUserConversationBySession(userID, sessionID string) error {
+	conv, err := s.GetUserConversationBySession(userID, sessionID)
 	if err != nil || conv == nil {
 		return err
 	}

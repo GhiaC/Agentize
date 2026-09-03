@@ -139,6 +139,9 @@ type mockSessionStore struct {
 func (m *mockSessionStore) Get(sessionID string) (*model.Session, error) { return nil, nil }
 func (m *mockSessionStore) Put(session *model.Session) error             { return nil }
 func (m *mockSessionStore) Delete(sessionID string) error                { return nil }
+func (m *mockSessionStore) DeleteUserSession(userID, sessionID string) error {
+	return nil
+}
 func (m *mockSessionStore) List(userID string) ([]*model.Session, error) { return nil, nil }
 func (m *mockSessionStore) GetNextSessionSeq(userID string, agentType model.AgentType) (int, error) {
 	return 1, nil
@@ -153,6 +156,9 @@ type nonToolCallSessionStore struct{}
 func (n *nonToolCallSessionStore) Get(sessionID string) (*model.Session, error) { return nil, nil }
 func (n *nonToolCallSessionStore) Put(session *model.Session) error             { return nil }
 func (n *nonToolCallSessionStore) Delete(sessionID string) error                { return nil }
+func (n *nonToolCallSessionStore) DeleteUserSession(userID, sessionID string) error {
+	return nil
+}
 func (n *nonToolCallSessionStore) List(userID string) ([]*model.Session, error) { return nil, nil }
 func (n *nonToolCallSessionStore) GetNextSessionSeq(userID string, agentType model.AgentType) (int, error) {
 	return 1, nil

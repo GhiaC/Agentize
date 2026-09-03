@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -65,6 +66,17 @@ func (m *MockSessionStore) Delete(sessionID string) error {
 	return nil
 }
 
+func (m *MockSessionStore) DeleteUserSession(userID, sessionID string) error {
+	session, err := m.GetUserSession(userID, sessionID)
+	if err != nil {
+		return err
+	}
+	if session == nil {
+		return nil
+	}
+	return m.Delete(session.SessionID)
+}
+
 func (m *MockSessionStore) List(userID string) ([]*model.Session, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -92,7 +104,7 @@ func (m *MockSessionStore) GetUserSession(userID, sessionID string) (*model.Sess
 		return session, err
 	}
 	if session.UserID != userID {
-		return nil, nil
+		return nil, fmt.Errorf("session not found: %s", sessionID)
 	}
 	return session, nil
 }

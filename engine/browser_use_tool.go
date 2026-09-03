@@ -126,6 +126,14 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 	if sessionID == "" {
 		return "", fmt.Errorf("browser-use tool requires authenticated session context")
 	}
+	userID, _ := args["__user_id__"].(string)
+	userID = strings.TrimSpace(userID)
+	withOwner := func(ctx context.Context) context.Context {
+		if userID == "" {
+			return ctx
+		}
+		return model.WithUserID(ctx, userID)
+	}
 	action, _ := args["action"].(string)
 	action = strings.ToLower(strings.TrimSpace(action))
 
@@ -163,7 +171,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		}
 
 		startContext, cancelStart := context.WithTimeout(context.Background(), 20*time.Second)
-		job, err := e.BrowserUse.Start(startContext, sessionID, browseruse.StartJobRequest{
+		job, err := e.BrowserUse.Start(withOwner(startContext), sessionID, browseruse.StartJobRequest{
 			Task:           task,
 			AllowedDomains: allowedDomains,
 			MaxSteps:       maxSteps,
@@ -180,7 +188,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 				time.Duration(waitSeconds+5)*time.Second,
 			)
 			updated, pollErr := e.BrowserUse.Get(
-				waitContext,
+				withOwner(waitContext),
 				sessionID,
 				job.ID,
 				time.Duration(waitSeconds)*time.Second,
@@ -219,7 +227,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		)
 		defer cancel()
 		job, err := e.BrowserUse.Get(
-			requestContext,
+			withOwner(requestContext),
 			sessionID,
 			jobID,
 			time.Duration(waitSeconds)*time.Second,
@@ -236,7 +244,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		}
 		requestContext, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		job, err := e.BrowserUse.Cancel(requestContext, sessionID, jobID)
+		job, err := e.BrowserUse.Cancel(withOwner(requestContext), sessionID, jobID)
 		if err != nil {
 			return "", fmt.Errorf("cancel browser-use job: %w", err)
 		}
@@ -249,7 +257,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		}
 		requestContext, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		tabs, err := tabService.Tabs(requestContext, sessionID)
+		tabs, err := tabService.Tabs(withOwner(requestContext), sessionID)
 		if err != nil {
 			return "", fmt.Errorf("list browser tabs: %w", err)
 		}
@@ -269,7 +277,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		}
 		requestContext, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		tabs, err := tabService.CloseTab(requestContext, sessionID, tabID)
+		tabs, err := tabService.CloseTab(withOwner(requestContext), sessionID, tabID)
 		if err != nil {
 			return "", fmt.Errorf("close browser tab: %w", err)
 		}
@@ -293,7 +301,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		}
 		requestContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		screenshot, err := screenshotService.Screenshot(requestContext, sessionID, jobID)
+		screenshot, err := screenshotService.Screenshot(withOwner(requestContext), sessionID, jobID)
 		if err != nil {
 			return "", fmt.Errorf("take browser screenshot: %w", err)
 		}
@@ -344,7 +352,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		}
 		requestContext, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		files, err := downloadService.Downloads(requestContext, sessionID, jobID)
+		files, err := downloadService.Downloads(withOwner(requestContext), sessionID, jobID)
 		if err != nil {
 			return "", fmt.Errorf("list browser downloads: %w", err)
 		}
@@ -376,7 +384,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		}
 		requestContext, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		download, err := downloadService.Download(requestContext, sessionID, jobID, fileName)
+		download, err := downloadService.Download(withOwner(requestContext), sessionID, jobID, fileName)
 		if err != nil {
 			return "", fmt.Errorf("retrieve browser download: %w", err)
 		}

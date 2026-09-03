@@ -132,6 +132,15 @@ func GetUserIDFromContext(ctx context.Context) (string, bool) {
 	return userID, ok
 }
 
+// UserIDFrom returns the context user id, or empty when unset.
+func UserIDFrom(ctx context.Context) string {
+	userID, ok := GetUserIDFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(userID)
+}
+
 // AgentType represents the type of agent that owns a session
 type AgentType string
 

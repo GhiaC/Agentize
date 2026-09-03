@@ -158,7 +158,7 @@ func activeConversationContext(store debuger.DebugStore, userID string) (*model.
 			if conversation == nil || conversation.ConversationID != id || conversation.UserID != userID {
 				continue
 			}
-			session, err := store.GetSession(conversation.SessionID)
+			session, err := store.GetUserSession(userID, conversation.SessionID)
 			if err != nil || session == nil || session.UserID != userID {
 				return conversation, nil
 			}
@@ -173,7 +173,7 @@ func activeConversationContext(store debuger.DebugStore, userID string) (*model.
 		if conversation == nil || conversation.Archived || conversation.UserID != userID {
 			continue
 		}
-		session, err := store.GetSession(conversation.SessionID)
+		session, err := store.GetUserSession(userID, conversation.SessionID)
 		if err == nil && session != nil && session.UserID == userID {
 			return conversation, session
 		}

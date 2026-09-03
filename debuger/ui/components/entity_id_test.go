@@ -16,11 +16,11 @@ func TestEntityIDUsesNumericDisplay(t *testing.T) {
 }
 
 func TestEntityIDLinkKeepsStoredHref(t *testing.T) {
-	out := EntityIDLink("alice-conv-s0001", "/agentize/debug/sessions/alice-conv-s0001")
-	if !strings.Contains(out, `href="/agentize/debug/sessions/alice-conv-s0001"`) {
+	out := EntityIDLink("2", "/agentize/debug/users/alice/sessions/2")
+	if !strings.Contains(out, `href="/agentize/debug/users/alice/sessions/2"`) {
 		t.Fatalf("href must keep the stored id, got %s", out)
 	}
-	if !strings.Contains(out, ">1</code>") {
+	if !strings.Contains(out, ">2</code>") {
 		t.Fatalf("label should be numeric, got %s", out)
 	}
 }

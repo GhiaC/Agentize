@@ -485,6 +485,7 @@ var sqliteMigrations = []sqliteMigration{
 	{16, "messages.metadata", func(tx *sql.Tx) error {
 		return addColumns(tx, "messages", `metadata TEXT DEFAULT ''`)
 	}},
+	{17, "composite keys so numeric ids are unique per user/session/message", applySQLiteScopedKeys},
 }
 
 // runMigrations applies every migration newer than the recorded schema version.
@@ -768,6 +769,20 @@ func (s *SQLiteStore) Delete(sessionID string) error {
 	}
 
 	auditDeletion("session", sessionID, "")
+	return nil
+}
+
+// DeleteUserSession removes the session owned by userID. Numeric session ids
+// are per-user, so this is the production delete.
+func (s *SQLiteStore) DeleteUserSession(userID, sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.execWrite("DELETE FROM sessions WHERE user_id = ? AND session_id = ?", userID, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete session: %w", err)
+	}
+	auditDeletion("session", sessionID, userID)
 	return nil
 }
 
@@ -1361,12 +1376,21 @@ func (s *SQLiteStore) computeActiveSessionIDs(user *model.User) error {
 
 // checkMessageQuota enforces MaxMessagesPerSession (when configured) for n new
 // messages in sessionID. Callers must hold s.mu.
-func (s *SQLiteStore) checkMessageQuota(sessionID string, n int) error {
+func (s *SQLiteStore) checkMessageQuota(userID, sessionID string, n int) error {
 	if s.quotas.MaxMessagesPerSession <= 0 {
 		return nil
 	}
 	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE session_id = ?`, sessionID).Scan(&count); err != nil {
+	var err error
+	if strings.TrimSpace(userID) != "" {
+		err = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE user_id = ? AND session_id = ?`, userID, sessionID).Scan(&count)
+	} else {
+		if err := s.errIfAmbiguousLocked("messages", "session_id", sessionID); err != nil {
+			return err
+		}
+		err = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE session_id = ?`, sessionID).Scan(&count)
+	}
+	if err != nil {
 		return fmt.Errorf("failed to count messages for quota: %w", err)
 	}
 	if count+n > s.quotas.MaxMessagesPerSession {
@@ -1443,7 +1467,7 @@ func (s *SQLiteStore) PutMessage(message *model.Message) error {
 		return fmt.Errorf("failed to check existing message: %w", err)
 	}
 	if exists == 0 {
-		if err := s.checkMessageQuota(message.SessionID, 1); err != nil {
+		if err := s.checkMessageQuota(message.UserID, message.SessionID, 1); err != nil {
 			return err
 		}
 	}
@@ -1472,12 +1496,13 @@ func (s *SQLiteStore) PutMessages(messages []*model.Message) error {
 	defer s.mu.Unlock()
 
 	if s.quotas.MaxMessagesPerSession > 0 {
-		perSession := make(map[string]int)
+		type quotaKey struct{ userID, sessionID string }
+		perSession := make(map[quotaKey]int)
 		for _, m := range messages {
-			perSession[m.SessionID]++
+			perSession[quotaKey{m.UserID, m.SessionID}]++
 		}
-		for sessionID, n := range perSession {
-			if err := s.checkMessageQuota(sessionID, n); err != nil {
+		for key, n := range perSession {
+			if err := s.checkMessageQuota(key.userID, key.sessionID, n); err != nil {
 				return err
 			}
 		}
@@ -2187,7 +2212,19 @@ func (s *SQLiteStore) PutToolCall(toolCall *model.ToolCall) error {
 func (s *SQLiteStore) UpdateToolCallResponse(toolID string, response string, execErr error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.errIfAmbiguousLocked("tool_calls", "tool_id", toolID); err != nil {
+		return err
+	}
+	return s.updateToolCallResponseLocked("", "", toolID, response, execErr)
+}
 
+func (s *SQLiteStore) UpdateUserToolCallResponse(userID, sessionID, toolID string, response string, execErr error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updateToolCallResponseLocked(userID, sessionID, toolID, response, execErr)
+}
+
+func (s *SQLiteStore) updateToolCallResponseLocked(userID, sessionID, toolID, response string, execErr error) error {
 	now := time.Now()
 	updatedAt := now.Unix()
 	responseLength := utf8.RuneCountInString(response)
@@ -2199,12 +2236,19 @@ func (s *SQLiteStore) UpdateToolCallResponse(toolID string, response string, exe
 		errorMsg = execErr.Error()
 	}
 
-	// Get created_at to calculate duration (look up by tool_id)
 	var createdAtUnix int64
-	err := s.db.QueryRow(
-		"SELECT created_at FROM tool_calls WHERE tool_id = ?",
-		toolID,
-	).Scan(&createdAtUnix)
+	var err error
+	if strings.TrimSpace(userID) != "" {
+		err = s.db.QueryRow(
+			"SELECT created_at FROM tool_calls WHERE user_id = ? AND session_id = ? AND tool_id = ?",
+			userID, sessionID, toolID,
+		).Scan(&createdAtUnix)
+	} else {
+		err = s.db.QueryRow(
+			"SELECT created_at FROM tool_calls WHERE tool_id = ?",
+			toolID,
+		).Scan(&createdAtUnix)
+	}
 
 	var durationMs int64
 	if err == nil {
@@ -2212,36 +2256,53 @@ func (s *SQLiteStore) UpdateToolCallResponse(toolID string, response string, exe
 		durationMs = now.Sub(createdAt).Milliseconds()
 	}
 
-	_, err = s.db.Exec(
-		`UPDATE tool_calls 
-		 SET response = ?, response_length = ?, duration_ms = ?, status = ?, error = ?, updated_at = ? 
-		 WHERE tool_id = ?`,
-		response,
-		responseLength,
-		durationMs,
-		status,
-		errorMsg,
-		updatedAt,
-		toolID,
-	)
-
+	if strings.TrimSpace(userID) != "" {
+		_, err = s.db.Exec(
+			`UPDATE tool_calls
+			 SET response = ?, response_length = ?, duration_ms = ?, status = ?, error = ?, updated_at = ?
+			 WHERE user_id = ? AND session_id = ? AND tool_id = ?`,
+			response, responseLength, durationMs, status, errorMsg, updatedAt,
+			userID, sessionID, toolID,
+		)
+	} else {
+		_, err = s.db.Exec(
+			`UPDATE tool_calls
+			 SET response = ?, response_length = ?, duration_ms = ?, status = ?, error = ?, updated_at = ?
+			 WHERE tool_id = ?`,
+			response, responseLength, durationMs, status, errorMsg, updatedAt, toolID,
+		)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to update tool call response: %w", err)
 	}
-
 	return nil
 }
 
-// GetToolCallsBySession returns all tool calls for a session
+// GetToolCallsBySession returns all tool calls for a session.
+//
+// Deprecated: numeric session ids are per-user. Use GetUserToolCallsBySession.
 func (s *SQLiteStore) GetToolCallsBySession(sessionID string) ([]*model.ToolCall, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := s.errIfAmbiguousLocked("tool_calls", "session_id", sessionID); err != nil {
+		return nil, err
+	}
+	return s.queryToolCallsLocked(`SELECT tool_call_id, tool_id, message_id, COALESCE(user_message_id,'') as user_message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
+		FROM tool_calls WHERE session_id = ? ORDER BY created_at DESC`, sessionID)
+}
 
-	rows, err := s.db.Query(
-		`SELECT tool_call_id, tool_id, message_id, COALESCE(user_message_id,'') as user_message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
-		FROM tool_calls WHERE session_id = ? ORDER BY created_at DESC`,
-		sessionID,
-	)
+func (s *SQLiteStore) GetUserToolCallsBySession(userID, sessionID string) ([]*model.ToolCall, error) {
+	if strings.TrimSpace(userID) == "" {
+		return s.GetToolCallsBySession(sessionID)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.queryToolCallsLocked(`SELECT tool_call_id, tool_id, message_id, COALESCE(user_message_id,'') as user_message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
+		FROM tool_calls WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC`, userID, sessionID)
+}
+
+func (s *SQLiteStore) queryToolCallsLocked(query string, args ...any) ([]*model.ToolCall, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tool calls: %w", err)
 	}
@@ -2397,6 +2458,9 @@ func (s *SQLiteStore) GetToolCallByID(toolCallID string) (*model.ToolCall, error
 func (s *SQLiteStore) GetToolCallByToolID(toolID string) (*model.ToolCall, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := s.errIfAmbiguousLocked("tool_calls", "tool_id", toolID); err != nil {
+		return nil, err
+	}
 
 	row := s.db.QueryRow(
 		`SELECT tool_call_id, tool_id, message_id, COALESCE(user_message_id,'') as user_message_id, session_id, user_id, agent_type, function_name, COALESCE(display_label,'') as display_label, arguments, response, response_length, duration_ms, status, error, created_at, updated_at
@@ -2673,6 +2737,9 @@ func (s *SQLiteStore) PutRouteTrace(trace *model.RouteTrace) error {
 func (s *SQLiteStore) GetRouteTraceByID(traceID string) (*model.RouteTrace, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := s.errIfAmbiguousLocked("route_traces", "trace_id", traceID); err != nil {
+		return nil, err
+	}
 
 	var data string
 	err := s.db.QueryRow(`SELECT data FROM route_traces WHERE trace_id = ?`, traceID).Scan(&data)
@@ -2875,7 +2942,7 @@ func (s *SQLiteStore) PutTaskSchedule(schedule *model.TaskSchedule) error {
 		`INSERT INTO task_schedules
 			(schedule_id, user_id, session_id, status, next_run_at, data, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(schedule_id) DO UPDATE SET
+		 ON CONFLICT(user_id, schedule_id) DO UPDATE SET
 			user_id=excluded.user_id,
 			session_id=excluded.session_id,
 			status=excluded.status,
@@ -3056,7 +3123,7 @@ func (s *SQLiteStore) PutWorkflowRun(workflow *model.WorkflowRun) error {
 		`INSERT INTO workflow_runs
 			(workflow_id, user_id, session_id, status, data, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(workflow_id) DO UPDATE SET
+		 ON CONFLICT(user_id, workflow_id) DO UPDATE SET
 			user_id=excluded.user_id,
 			session_id=excluded.session_id,
 			status=excluded.status,

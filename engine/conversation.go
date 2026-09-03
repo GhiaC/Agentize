@@ -82,12 +82,12 @@ func (e *Engine) createTypedSession(userID string, agentType model.AgentType, ti
 
 // CreateSubAgent creates a worker session owned by a conversation's main session.
 // The worker cannot create further sub-agents.
-func (e *Engine) CreateSubAgent(parentSessionID, title, modelName string) (*model.Session, error) {
+func (e *Engine) CreateSubAgent(userID, parentSessionID, title, modelName string) (*model.Session, error) {
 	parentSessionID = strings.TrimSpace(parentSessionID)
 	if parentSessionID == "" {
 		return nil, fmt.Errorf("parent session id is required")
 	}
-	parent, err := e.Sessions.Get(parentSessionID)
+	parent, err := e.loadOwnedSession(userID, parentSessionID)
 	if err != nil {
 		return nil, fmt.Errorf("parent session not found: %w", err)
 	}
@@ -180,13 +180,13 @@ func (e *Engine) DeleteConversation(userID, conversationID string) error {
 	}
 	for _, session := range sessions {
 		if session.ParentSessionID == conv.SessionID {
-			_ = e.Sessions.Delete(session.SessionID)
+			_ = e.Sessions.DeleteUserSession(conv.UserID, session.SessionID)
 		}
 	}
-	if err := e.Sessions.Delete(conv.SessionID); err != nil {
+	if err := e.Sessions.DeleteUserSession(conv.UserID, conv.SessionID); err != nil {
 		return err
 	}
-	return e.Sessions.DeleteConversation(conv.ConversationID)
+	return e.Sessions.DeleteUserConversation(conv.UserID, conv.ConversationID)
 }
 
 // ProcessConversation sends a user message through the conversation's main session.
@@ -207,7 +207,7 @@ func (e *Engine) ProcessConversationIncoming(ctx context.Context, userID, conver
 	if err != nil {
 		return "", 0, err
 	}
-	return e.ProcessIncoming(ctx, conv.SessionID, msg)
+	return e.ProcessIncoming(model.WithUserID(ctx, userID), conv.SessionID, msg)
 }
 
 func (e *Engine) touchOwningConversation(session *model.Session) {
@@ -217,6 +217,12 @@ func (e *Engine) touchOwningConversation(session *model.Session) {
 	sessionID := session.SessionID
 	if session.ParentSessionID != "" {
 		sessionID = session.ParentSessionID
+	}
+	if session.UserID != "" {
+		if err := e.Sessions.TouchUserConversationBySession(session.UserID, sessionID); err != nil {
+			log.Log.Warnf("[Engine] ⚠️  Failed to touch conversation | UserID: %s | SessionID: %s | Error: %v", session.UserID, sessionID, err)
+		}
+		return
 	}
 	if err := e.Sessions.TouchConversationBySession(sessionID); err != nil {
 		log.Log.Warnf("[Engine] ⚠️  Failed to touch conversation | SessionID: %s | Error: %v", sessionID, err)

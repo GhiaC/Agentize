@@ -142,6 +142,11 @@ func (m *meteredStore) Delete(sessionID string) error {
 	return m.Store.Delete(sessionID)
 }
 
+func (m *meteredStore) DeleteUserSession(userID, sessionID string) error {
+	defer m.observe(m.begin("DeleteUserSession"))
+	return m.Store.DeleteUserSession(userID, sessionID)
+}
+
 func (m *meteredStore) List(userID string) ([]*model.Session, error) {
 	defer m.observe(m.begin("List"))
 	return m.Store.List(userID)
@@ -196,6 +201,11 @@ func (m *meteredStore) GetUserMessagesBySessionPage(userID, sessionID string, li
 	return m.Store.GetUserMessagesBySessionPage(userID, sessionID, limit, offset)
 }
 
+func (m *meteredStore) GetUserMessagesBySession(userID, sessionID string) ([]*model.Message, error) {
+	defer m.observe(m.begin("GetUserMessagesBySession"))
+	return m.Store.GetUserMessagesBySession(userID, sessionID)
+}
+
 func (m *meteredStore) AddOpenedFile(openedFile *model.OpenedFile) error {
 	defer m.observe(m.begin("AddOpenedFile"))
 	return m.Store.AddOpenedFile(openedFile)
@@ -239,6 +249,11 @@ func (m *meteredStore) PutToolCall(toolCall *model.ToolCall) error {
 func (m *meteredStore) UpdateToolCallResponse(toolID string, response string, execErr error) error {
 	defer m.observe(m.begin("UpdateToolCallResponse"))
 	return m.Store.UpdateToolCallResponse(toolID, response, execErr)
+}
+
+func (m *meteredStore) UpdateUserToolCallResponse(userID, sessionID, toolID string, response string, execErr error) error {
+	defer m.observe(m.begin("UpdateUserToolCallResponse"))
+	return m.Store.UpdateUserToolCallResponse(userID, sessionID, toolID, response, execErr)
 }
 
 func (m *meteredStore) PutRouteTrace(trace *model.RouteTrace) error {
@@ -321,6 +336,11 @@ func (m *meteredStore) DeleteConversation(conversationID string) error {
 	return m.Store.DeleteConversation(conversationID)
 }
 
+func (m *meteredStore) DeleteUserConversation(userID, conversationID string) error {
+	defer m.observe(m.begin("DeleteUserConversation"))
+	return m.Store.DeleteUserConversation(userID, conversationID)
+}
+
 func (m *meteredStore) ListConversations(userID string) ([]*model.Conversation, error) {
 	defer m.observe(m.begin("ListConversations"))
 	return m.Store.ListConversations(userID)
@@ -349,6 +369,11 @@ func (m *meteredStore) GetNextConversationSeq(userID string) (int, error) {
 func (m *meteredStore) TouchConversationBySession(sessionID string) error {
 	defer m.observe(m.begin("TouchConversationBySession"))
 	return m.Store.TouchConversationBySession(sessionID)
+}
+
+func (m *meteredStore) TouchUserConversationBySession(userID, sessionID string) error {
+	defer m.observe(m.begin("TouchUserConversationBySession"))
+	return m.Store.TouchUserConversationBySession(userID, sessionID)
 }
 
 // --- Debug reads + aggregates (debuger.DebugStore) ---
@@ -426,6 +451,11 @@ func (m *meteredStore) GetAllToolCalls() ([]*model.ToolCall, error) {
 func (m *meteredStore) GetToolCallsBySession(sessionID string) ([]*model.ToolCall, error) {
 	defer m.observe(m.begin("GetToolCallsBySession"))
 	return m.Store.GetToolCallsBySession(sessionID)
+}
+
+func (m *meteredStore) GetUserToolCallsBySession(userID, sessionID string) ([]*model.ToolCall, error) {
+	defer m.observe(m.begin("GetUserToolCallsBySession"))
+	return m.Store.GetUserToolCallsBySession(userID, sessionID)
 }
 
 func (m *meteredStore) GetToolCallByID(toolCallID string) (*model.ToolCall, error) {

@@ -13,7 +13,7 @@ import (
 
 // RenderToolCalls generates the tool calls list HTML page
 // sessionID is an optional filter
-func RenderToolCalls(handler *debuger.DebugHandler, page int, sessionID string) (string, error) {
+func RenderToolCalls(handler *debuger.DebugHandler, page int, userID, sessionID string) (string, error) {
 	dp := data.NewDataProvider(handler.GetStore())
 
 	var dbToolCalls []*model.ToolCall
@@ -22,7 +22,11 @@ func RenderToolCalls(handler *debuger.DebugHandler, page int, sessionID string) 
 	var baseURL string
 
 	// Apply filter based on session query param
-	if sessionID != "" {
+	if sessionID != "" && userID != "" {
+		dbToolCalls, err = dp.GetUserToolCallsBySession(userID, sessionID)
+		title = "Tool Calls for Session: " + model.DisplayID(sessionID)
+		baseURL = debuger.SessionToolCallsPath(userID, sessionID)
+	} else if sessionID != "" {
 		dbToolCalls, err = dp.GetToolCallsBySession(sessionID)
 		title = "Tool Calls for Session: " + model.DisplayID(sessionID)
 		baseURL = "/agentize/debug/tool-calls?session=" + template.URLQueryEscaper(sessionID)
@@ -46,10 +50,14 @@ func RenderToolCalls(handler *debuger.DebugHandler, page int, sessionID string) 
 
 	// Show breadcrumb if filtered
 	if sessionID != "" {
+		sessionURL := debuger.SessionPath(userID, sessionID)
+		if userID == "" {
+			sessionURL = "/agentize/debug/sessions"
+		}
 		content += components.Breadcrumb([]components.BreadcrumbItem{
 			{Label: "Dashboard", URL: "/agentize/debug"},
 			{Label: "Sessions", URL: "/agentize/debug/sessions"},
-			{Label: model.DisplayID(sessionID), URL: "/agentize/debug/sessions/" + template.URLQueryEscaper(sessionID)},
+			{Label: model.DisplayID(sessionID), URL: sessionURL},
 			{Label: "Tool Calls", Active: true},
 		})
 	}
@@ -87,13 +95,43 @@ func RenderToolCalls(handler *debuger.DebugHandler, page int, sessionID string) 
 	return ui.Header("Agentize Debug - Tool Calls") + ui.NavbarAndBody("/agentize/debug/tool-calls", content) + ui.Footer(), nil
 }
 
-// RenderToolCallDetail generates a detailed view for a single tool call
+// RenderToolCallDetail generates a detailed view for a single tool call.
+//
+// Deprecated: tool ids increment per message. Use RenderUserToolCallDetail.
 func RenderToolCallDetail(handler *debuger.DebugHandler, toolID string) (string, error) {
 	dp := data.NewDataProvider(handler.GetStore())
-
 	tc, err := dp.GetToolCallByToolID(toolID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get tool call: %w", err)
+	}
+	if tc == nil {
+		return "", fmt.Errorf("tool call not found: %s", toolID)
+	}
+	return RenderUserToolCallDetail(handler, tc.UserID, tc.SessionID, toolID)
+}
+
+func RenderUserToolCallDetail(handler *debuger.DebugHandler, userID, sessionID, toolID string) (string, error) {
+	dp := data.NewDataProvider(handler.GetStore())
+
+	var tc *model.ToolCall
+	if userID != "" && sessionID != "" {
+		items, err := dp.GetUserToolCallsBySession(userID, sessionID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get tool call: %w", err)
+		}
+		for _, item := range items {
+			if item != nil && item.ToolID == toolID {
+				tc = item
+				break
+			}
+		}
+	}
+	if tc == nil && (userID == "" || sessionID == "") {
+		var err error
+		tc, err = dp.GetToolCallByToolID(toolID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get tool call: %w", err)
+		}
 	}
 	if tc == nil {
 		return "", fmt.Errorf("tool call not found: %s", toolID)
@@ -147,7 +185,7 @@ func RenderToolCallDetail(handler *debuger.DebugHandler, toolID string) (string,
 	content += fmt.Sprintf(`<tr><th class="w-25">User</th><td>%s</td></tr>`,
 		components.TruncatedLink(tc.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(tc.UserID), 30))
 	content += fmt.Sprintf(`<tr><th>Session</th><td>%s</td></tr>`,
-		components.EntityIDLink(tc.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(tc.SessionID)))
+		components.EntityIDLink(tc.SessionID, debuger.SessionPath(tc.UserID, tc.SessionID)))
 	content += fmt.Sprintf(`<tr><th>Message ID</th><td>%s</td></tr>`, components.EntityID(tc.MessageID))
 	content += `</table>`
 	content += `</div>`

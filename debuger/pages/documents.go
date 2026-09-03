@@ -54,7 +54,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 				derived = components.EntityID(f.ParentFileID)
 			}
 
-			rawURL := "/agentize/debug/documents/" + template.URLQueryEscaper(f.FileID) + "/raw"
+			rawURL := debuger.FileRawPath(f.UserID, f.FileID)
 			escName := template.HTMLEscapeString(f.Name)
 
 			// Thumbnail for images; a neutral icon otherwise.
@@ -99,7 +99,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 				derived,
 				debuger.FormatTime(f.CreatedAt),
 				components.TruncatedLink(f.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(f.UserID), 20),
-				components.EntityIDLink(f.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(f.SessionID)),
+				components.EntityIDLink(f.SessionID, debuger.SessionPath(f.UserID, f.SessionID)),
 				actions,
 			)
 		}

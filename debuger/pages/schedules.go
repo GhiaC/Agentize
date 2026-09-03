@@ -167,16 +167,16 @@ func renderScheduleRow(schedule *model.TaskSchedule) string {
 	var actions strings.Builder
 	actions.WriteString(`<div class="d-flex gap-1 justify-content-center">`)
 	if schedule.Status == model.TaskScheduleActive {
-		actions.WriteString(scheduleActionForm(schedule.ScheduleID, "run-now", "Run", "outline-primary", false))
-		actions.WriteString(scheduleActionForm(schedule.ScheduleID, "stop", "Stop", "outline-warning", false))
+		actions.WriteString(scheduleActionForm(schedule.UserID, schedule.ScheduleID, "run-now", "Run", "outline-primary", false))
+		actions.WriteString(scheduleActionForm(schedule.UserID, schedule.ScheduleID, "stop", "Stop", "outline-warning", false))
 	} else if schedule.Status == model.TaskSchedulePaused {
-		actions.WriteString(scheduleActionForm(schedule.ScheduleID, "resume", "Resume", "outline-success", false))
+		actions.WriteString(scheduleActionForm(schedule.UserID, schedule.ScheduleID, "resume", "Resume", "outline-success", false))
 	}
 	actions.WriteString(fmt.Sprintf(
-		`<a class="btn btn-sm btn-outline-secondary" href="%s/%s">Details</a>`,
-		schedulesNavPath, template.URLQueryEscaper(schedule.ScheduleID),
+		`<a class="btn btn-sm btn-outline-secondary" href="%s">Details</a>`,
+		debuger.SchedulePath(schedule.UserID, schedule.ScheduleID),
 	))
-	actions.WriteString(scheduleActionForm(schedule.ScheduleID, "delete", "Delete", "outline-danger", true))
+	actions.WriteString(scheduleActionForm(schedule.UserID, schedule.ScheduleID, "delete", "Delete", "outline-danger", true))
 	actions.WriteString(`</div>`)
 
 	return fmt.Sprintf(`<tr>
@@ -200,14 +200,14 @@ func renderScheduleRow(schedule *model.TaskSchedule) string {
 	)
 }
 
-func scheduleActionForm(scheduleID, action, label, color string, confirm bool) string {
+func scheduleActionForm(userID, scheduleID, action, label, color string, confirm bool) string {
 	confirmAttr := ""
 	if confirm {
 		confirmAttr = ` onsubmit="return confirm('Delete this schedule and all of its run history?')"`
 	}
 	return fmt.Sprintf(
-		`<form method="post" action="%s/%s/%s"%s><button class="btn btn-sm btn-%s" type="submit">%s</button></form>`,
-		schedulesNavPath, template.URLQueryEscaper(scheduleID), action,
+		`<form method="post" action="%s/%s"%s><button class="btn btn-sm btn-%s" type="submit">%s</button></form>`,
+		debuger.SchedulePath(userID, scheduleID), action,
 		confirmAttr, color, template.HTMLEscapeString(label),
 	)
 }
@@ -226,7 +226,7 @@ func RenderTaskScheduleDetail(schedule *model.TaskSchedule, runs []*model.TaskSc
 	content += scheduleMetaRow("Schedule ID", components.EntityID(schedule.ScheduleID))
 	content += scheduleMetaRow("Name", esc(schedule.Name))
 	content += scheduleMetaRow("User", esc(schedule.UserID))
-	content += scheduleMetaRow("Dedicated session", components.EntityIDLink(schedule.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(schedule.SessionID)))
+	content += scheduleMetaRow("Dedicated session", components.EntityIDLink(schedule.SessionID, debuger.SessionPath(schedule.UserID, schedule.SessionID)))
 	content += scheduleMetaRow("Source session", components.EntityID(schedule.SourceSessionID))
 	content += scheduleMetaRow("Agent type", esc(string(schedule.AgentType)))
 	content += scheduleMetaRow("Status", esc(string(schedule.Status)))
@@ -243,7 +243,7 @@ func RenderTaskScheduleDetail(schedule *model.TaskSchedule, runs []*model.TaskSc
 	}
 	content += scheduleMetaRow("Run count", runCount)
 	content += scheduleMetaRow("Next run", esc(formatScheduleTime(schedule.NextRunAt)))
-	content += scheduleMetaRow("Latest workflow", scheduleWorkflowLink(schedule.LastWorkflowID))
+	content += scheduleMetaRow("Latest workflow", scheduleWorkflowLink(schedule.UserID, schedule.LastWorkflowID))
 	content += scheduleMetaRow("Conclusion model", esc(schedule.ConclusionModel))
 	content += scheduleMetaRow("Updated", esc(formatScheduleTime(schedule.UpdatedAt)))
 	content += `</tbody></table></div></div>`
@@ -280,7 +280,7 @@ func RenderTaskScheduleDetail(schedule *model.TaskSchedule, runs []*model.TaskSc
 			<th>Started</th><th>Status</th><th>Duration</th><th>Workflow</th><th>Tokens</th><th>Result</th>
 		</tr></thead><tbody>`
 		for _, run := range runs {
-			content += renderScheduleRunRow(run)
+			content += renderScheduleRunRow(schedule.UserID, run)
 		}
 		content += `</tbody></table></div>`
 	}
@@ -290,7 +290,7 @@ func RenderTaskScheduleDetail(schedule *model.TaskSchedule, runs []*model.TaskSc
 		ui.NavbarAndBody(schedulesNavPath, content) + ui.Footer()
 }
 
-func renderScheduleRunRow(run *model.TaskScheduleRun) string {
+func renderScheduleRunRow(userID string, run *model.TaskScheduleRun) string {
 	esc := template.HTMLEscapeString
 	color := "success"
 	if run.Status == model.TaskRunFailed {
@@ -321,17 +321,20 @@ func renderScheduleRunRow(run *model.TaskScheduleRun) string {
 		<td><details><summary>%s</summary><pre class="mt-2 bg-body-tertiary border rounded p-2 text-wrap">%s</pre></details></td>
 	</tr>`,
 		esc(formatScheduleTime(run.StartedAt)), color, esc(string(run.Status)),
-		esc(duration), scheduleWorkflowLink(run.WorkflowID), run.PromptTokens, run.CompletionTokens,
+		esc(duration), scheduleWorkflowLink(userID, run.WorkflowID), run.PromptTokens, run.CompletionTokens,
 		esc(truncateRunes(result, 90)), esc(fullResult),
 	)
 }
 
-func scheduleWorkflowLink(workflowID string) string {
+func scheduleWorkflowLink(userID, workflowID string) string {
 	if workflowID == "" {
 		return `<span class="text-muted">—</span>`
 	}
-	return fmt.Sprintf(`<a href="/agentize/debug/workflows/%s">%s</a>`,
-		template.URLQueryEscaper(workflowID), components.EntityID(workflowID))
+	if userID == "" {
+		return `<span class="text-muted">` + components.EntityID(workflowID) + `</span>`
+	}
+	return fmt.Sprintf(`<a href="%s">%s</a>`,
+		debuger.WorkflowPath(userID, workflowID), components.EntityID(workflowID))
 }
 
 func scheduleMetaRow(label, value string) string {

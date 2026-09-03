@@ -66,7 +66,7 @@ func (e *Engine) manageContextFunction() model.ToolFunction {
 		if scope != "session" {
 			return "", fmt.Errorf("unsupported context scope %q", scope)
 		}
-		session, err := e.Sessions.Get(sessionID)
+		session, err := e.loadOwnedSession(userID, sessionID)
 		if err != nil {
 			return "", err
 		}

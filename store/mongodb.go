@@ -562,6 +562,9 @@ func (s *MongoDBStore) Get(sessionID string) (*model.Session, error) {
 	defer cancel()
 
 	var doc sessionDocument
+	if err := s.errIfAmbiguous(ctx, s.collection, "_id", "sessions", sessionID); err != nil {
+		return nil, err
+	}
 	err := s.collection.FindOne(ctx, bson.M{"_id": sessionID}).Decode(&doc)
 	if err == mongo.ErrNoDocuments {
 		return nil, fmt.Errorf("session not found: %s", sessionID)
@@ -714,8 +717,9 @@ func (s *MongoDBStore) Put(session *model.Session) error {
 		return fmt.Errorf("failed to marshal session: %w", err)
 	}
 
+	docID := scopedMongoID(session.UserID, session.SessionID)
 	doc := sessionDocument{
-		SessionID:  session.SessionID,
+		SessionID:  docID,
 		UserID:     session.UserID,
 		AgentType:  string(session.AgentType),
 		SessionSeq: sessionSeqValue(session),
@@ -728,7 +732,7 @@ func (s *MongoDBStore) Put(session *model.Session) error {
 	defer cancel()
 
 	opts := options.Replace().SetUpsert(true)
-	_, err = s.collection.ReplaceOne(ctx, bson.M{"_id": session.SessionID}, doc, opts)
+	_, err = s.collection.ReplaceOne(ctx, bson.M{"_id": docID}, doc, opts)
 	if err != nil {
 		return fmt.Errorf("failed to store session: %w", err)
 	}
@@ -738,16 +742,35 @@ func (s *MongoDBStore) Put(session *model.Session) error {
 
 // Delete removes a session
 func (s *MongoDBStore) Delete(sessionID string) error {
-	// MongoDB is thread-safe, no mutex needed
 	ctx, cancel := s.opCtx()
 	defer cancel()
 
+	if err := s.errIfAmbiguous(ctx, s.collection, "_id", "sessions", sessionID); err != nil {
+		return err
+	}
 	_, err := s.collection.DeleteOne(ctx, bson.M{"_id": sessionID})
 	if err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
-
 	auditDeletion("session", sessionID, "")
+	return nil
+}
+
+func (s *MongoDBStore) DeleteUserSession(userID, sessionID string) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	res, err := s.collection.DeleteOne(ctx, bson.M{"user_id": userID, "_id": scopedMongoID(userID, sessionID)})
+	if err != nil {
+		return fmt.Errorf("failed to delete session: %w", err)
+	}
+	if res.DeletedCount == 0 {
+		_, err = s.collection.DeleteOne(ctx, bson.M{"user_id": userID, "_id": sessionID})
+		if err != nil {
+			return fmt.Errorf("failed to delete session: %w", err)
+		}
+	}
+	auditDeletion("session", sessionID, userID)
 	return nil
 }
 
@@ -1018,8 +1041,9 @@ func (s *MongoDBStore) PutCoreSession(session *model.Session) error {
 		return fmt.Errorf("failed to marshal session: %w", err)
 	}
 
+	docID := scopedMongoID(session.UserID, session.SessionID)
 	doc := sessionDocument{
-		SessionID:  session.SessionID,
+		SessionID:  docID,
 		UserID:     session.UserID,
 		AgentType:  string(session.AgentType),
 		SessionSeq: sessionSeqValue(session),
@@ -1028,10 +1052,9 @@ func (s *MongoDBStore) PutCoreSession(session *model.Session) error {
 		UpdatedAt:  session.UpdatedAt,
 	}
 
-	// Upsert by _id (the session ID) so the operation is idempotent and matches
-	// the SQLite backend's INSERT OR REPLACE semantics.
+	// Upsert by scoped _id so two users may both own session "1".
 	opts := options.Replace().SetUpsert(true)
-	_, err = s.collection.ReplaceOne(ctx, bson.M{"_id": session.SessionID}, doc, opts)
+	_, err = s.collection.ReplaceOne(ctx, bson.M{"_id": docID}, doc, opts)
 	if err != nil {
 		return fmt.Errorf("failed to store core session: %w", err)
 	}
@@ -1417,12 +1440,13 @@ func (s *MongoDBStore) PutMessage(message *model.Message) error {
 
 	// An upsert of an existing logical message is an edit and must not consume
 	// another quota slot (schedule status messages rely on this across runs).
-	existing, err := s.messagesCollection.CountDocuments(ctx, bson.M{"_id": message.MessageID}, options.Count().SetLimit(1))
+	docID := scopedChildMongoID(message.UserID, message.SessionID, message.MessageID)
+	existing, err := s.messagesCollection.CountDocuments(ctx, bson.M{"_id": docID}, options.Count().SetLimit(1))
 	if err != nil {
 		return fmt.Errorf("failed to check existing message: %w", err)
 	}
 	if existing == 0 {
-		if err := s.checkMessageQuota(ctx, message.SessionID, 1); err != nil {
+		if err := s.checkMessageQuota(ctx, message.UserID, message.SessionID, 1); err != nil {
 			return err
 		}
 	}
@@ -1433,16 +1457,16 @@ func (s *MongoDBStore) PutMessage(message *model.Message) error {
 	}
 
 	doc := messageDocument{
-		MessageID: message.MessageID,
+		MessageID: docID,
 		SessionID: message.SessionID,
 		UserID:    message.UserID,
-		SeqID:     message.SeqID, // Store seq_id separately for efficient querying
+		SeqID:     message.SeqID,
 		Data:      string(data),
 		CreatedAt: message.CreatedAt,
 	}
 
 	opts := options.Replace().SetUpsert(true)
-	_, err = s.messagesCollection.ReplaceOne(ctx, bson.M{"_id": message.MessageID}, doc, opts)
+	_, err = s.messagesCollection.ReplaceOne(ctx, bson.M{"_id": docID}, doc, opts)
 	if err != nil {
 		return fmt.Errorf("failed to store message: %w", err)
 	}
@@ -1452,11 +1476,15 @@ func (s *MongoDBStore) PutMessage(message *model.Message) error {
 
 // checkMessageQuota enforces MaxMessagesPerSession (when configured) for n new
 // messages in sessionID.
-func (s *MongoDBStore) checkMessageQuota(ctx context.Context, sessionID string, n int) error {
+func (s *MongoDBStore) checkMessageQuota(ctx context.Context, userID, sessionID string, n int) error {
 	if s.quotas.MaxMessagesPerSession <= 0 {
 		return nil
 	}
-	count, err := s.messagesCollection.CountDocuments(ctx, bson.M{"session_id": sessionID})
+	filter := bson.M{"session_id": sessionID}
+	if strings.TrimSpace(userID) != "" {
+		filter["user_id"] = userID
+	}
+	count, err := s.messagesCollection.CountDocuments(ctx, filter)
 	if err != nil {
 		return fmt.Errorf("failed to count messages for quota: %w", err)
 	}
@@ -1514,12 +1542,13 @@ func (s *MongoDBStore) PutMessages(messages []*model.Message) error {
 	defer cancel()
 
 	if s.quotas.MaxMessagesPerSession > 0 {
-		perSession := make(map[string]int)
+		type quotaKey struct{ userID, sessionID string }
+		perSession := make(map[quotaKey]int)
 		for _, m := range messages {
-			perSession[m.SessionID]++
+			perSession[quotaKey{m.UserID, m.SessionID}]++
 		}
-		for sessionID, n := range perSession {
-			if err := s.checkMessageQuota(ctx, sessionID, n); err != nil {
+		for key, n := range perSession {
+			if err := s.checkMessageQuota(ctx, key.userID, key.sessionID, n); err != nil {
 				return err
 			}
 		}
@@ -1951,7 +1980,9 @@ func (s *MongoDBStore) PutUserFile(f *model.UserFile) error {
 	}
 
 	opts := options.Replace().SetUpsert(true)
-	if _, err := s.userFilesCollection.ReplaceOne(ctx, bson.M{"_id": f.FileID}, doc, opts); err != nil {
+	docID := scopedMongoID(f.UserID, f.FileID)
+	doc.ID = docID
+	if _, err := s.userFilesCollection.ReplaceOne(ctx, bson.M{"_id": docID}, doc, opts); err != nil {
 		return fmt.Errorf("failed to store user file: %w", err)
 	}
 	return nil
@@ -2054,8 +2085,9 @@ func (s *MongoDBStore) PutToolCall(toolCall *model.ToolCall) error {
 		return fmt.Errorf("failed to marshal tool call: %w", err)
 	}
 
+	docID := scopedChildMongoID(toolCall.UserID, toolCall.SessionID+"/"+toolCall.MessageID, toolCall.ToolID)
 	doc := toolCallDocument{
-		ID:         toolCall.ToolID,
+		ID:         docID,
 		ToolCallID: toolCall.ToolCallID,
 		ToolID:     toolCall.ToolID,
 		SessionID:  toolCall.SessionID,
@@ -2065,7 +2097,7 @@ func (s *MongoDBStore) PutToolCall(toolCall *model.ToolCall) error {
 	}
 
 	opts := options.Replace().SetUpsert(true)
-	_, err = s.toolCallsCollection.ReplaceOne(ctx, bson.M{"_id": toolCall.ToolID}, doc, opts)
+	_, err = s.toolCallsCollection.ReplaceOne(ctx, bson.M{"_id": docID}, doc, opts)
 	if err != nil {
 		return fmt.Errorf("failed to store tool call: %w", err)
 	}
@@ -2073,12 +2105,25 @@ func (s *MongoDBStore) PutToolCall(toolCall *model.ToolCall) error {
 	return nil
 }
 
-// GetToolCallsBySession returns all tool calls for a session
+// GetToolCallsBySession returns all tool calls for a session.
+//
+// Deprecated: numeric session ids are per-user. Use GetUserToolCallsBySession.
 func (s *MongoDBStore) GetToolCallsBySession(sessionID string) ([]*model.ToolCall, error) {
+	return s.findToolCalls(bson.M{"session_id": sessionID})
+}
+
+func (s *MongoDBStore) GetUserToolCallsBySession(userID, sessionID string) ([]*model.ToolCall, error) {
+	if strings.TrimSpace(userID) == "" {
+		return s.GetToolCallsBySession(sessionID)
+	}
+	return s.findToolCalls(bson.M{"user_id": userID, "session_id": sessionID})
+}
+
+func (s *MongoDBStore) findToolCalls(filter bson.M) ([]*model.ToolCall, error) {
 	ctx, cancel := s.opCtx()
 	defer cancel()
 
-	cursor, err := s.toolCallsCollection.Find(ctx, bson.M{"session_id": sessionID}, options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}))
+	cursor, err := s.toolCallsCollection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tool calls: %w", err)
 	}
@@ -2130,6 +2175,9 @@ func (s *MongoDBStore) GetToolCallByToolID(toolID string) (*model.ToolCall, erro
 	ctx, cancel := s.opCtx()
 	defer cancel()
 
+	if err := s.errIfAmbiguous(ctx, s.toolCallsCollection, "tool_id", "tool_calls", toolID); err != nil {
+		return nil, err
+	}
 	var doc toolCallDocument
 	err := s.toolCallsCollection.FindOne(ctx, bson.M{"tool_id": toolID}).Decode(&doc)
 	if err == mongo.ErrNoDocuments {
@@ -2230,6 +2278,45 @@ func (s *MongoDBStore) UpdateToolCallResponse(toolID string, response string, ex
 		return fmt.Errorf("failed to update tool call response: %w", err)
 	}
 
+	return nil
+}
+
+func (s *MongoDBStore) UpdateUserToolCallResponse(userID, sessionID, toolID string, response string, execErr error) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	now := time.Now()
+	var doc toolCallDocument
+	err := s.toolCallsCollection.FindOne(ctx, bson.M{"user_id": userID, "session_id": sessionID, "tool_id": toolID}).Decode(&doc)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return fmt.Errorf("tool call not found (PutToolCall may have failed earlier): %w", err)
+		}
+		return fmt.Errorf("failed to find tool call: %w", err)
+	}
+	tc := &model.ToolCall{}
+	if err := unmarshalJSONOrBSON(doc.Data, tc); err != nil {
+		return fmt.Errorf("failed to unmarshal tool call: %w", err)
+	}
+	tc.Response = response
+	tc.ResponseLength = len([]rune(response))
+	tc.DurationMs = now.Sub(tc.CreatedAt).Milliseconds()
+	tc.UpdatedAt = now
+	if execErr != nil {
+		tc.Status = model.ToolCallStatusFailed
+		tc.Error = execErr.Error()
+	} else {
+		tc.Status = model.ToolCallStatusSuccess
+	}
+	data, err := json.Marshal(tc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tool call: %w", err)
+	}
+	doc.Data = string(data)
+	_, err = s.toolCallsCollection.ReplaceOne(ctx, bson.M{"_id": doc.ID}, doc, options.Replace().SetUpsert(false))
+	if err != nil {
+		return fmt.Errorf("failed to update tool call response: %w", err)
+	}
 	return nil
 }
 
@@ -2387,6 +2474,9 @@ func (s *MongoDBStore) GetRouteTraceByID(traceID string) (*model.RouteTrace, err
 	ctx, cancel := s.opCtx()
 	defer cancel()
 
+	if err := s.errIfAmbiguous(ctx, s.routeTracesCollection, "_id", "route_traces", traceID); err != nil {
+		return nil, err
+	}
 	var doc routeTraceDocument
 	err := s.routeTracesCollection.FindOne(ctx, bson.M{"_id": traceID}).Decode(&doc)
 	if err == mongo.ErrNoDocuments {
@@ -2737,15 +2827,16 @@ func (s *MongoDBStore) PutWorkflowRun(workflow *model.WorkflowRun) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal workflow run: %w", err)
 	}
+	docID := scopedMongoID(workflow.UserID, workflow.WorkflowID)
 	doc := workflowRunDocument{
-		ID: workflow.WorkflowID, UserID: workflow.UserID, SessionID: workflow.SessionID,
+		ID: docID, UserID: workflow.UserID, SessionID: workflow.SessionID,
 		Status: string(workflow.Status), CreatedAt: workflow.CreatedAt,
 		UpdatedAt: workflow.UpdatedAt, Data: string(data),
 	}
 	ctx, cancel := s.opCtx()
 	defer cancel()
 	_, err = s.workflowRunsCollection.ReplaceOne(
-		ctx, bson.M{"_id": workflow.WorkflowID}, doc, options.Replace().SetUpsert(true),
+		ctx, bson.M{"_id": docID}, doc, options.Replace().SetUpsert(true),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to store workflow run: %w", err)

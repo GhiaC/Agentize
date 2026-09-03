@@ -68,7 +68,7 @@ func (e *Engine) createOpenFileFunction() model.ToolFunction {
 			return "", fmt.Errorf("session ID not available")
 		}
 
-		content, err := e.OpenFile(sessionID, path)
+		content, err := e.openFile(stringArg(args, "__user_id__"), sessionID, path)
 		metrics.KnowledgeOpen(metrics.Status(err))
 		if err != nil {
 			return fmt.Sprintf("Error opening node: %v", err), nil
@@ -83,7 +83,7 @@ func (e *Engine) createOpenFileFunction() model.ToolFunction {
 				payload["activated_tools"] = activeNodeToolNames(node)
 			}
 		}
-		if session, getErr := e.Sessions.Get(sessionID); getErr == nil && session != nil {
+		if session, getErr := e.loadOwnedSession(stringArg(args, "__user_id__"), sessionID); getErr == nil && session != nil {
 			openPaths := make([]string, 0, len(session.NodeDigests))
 			for _, digest := range session.NodeDigests {
 				if digest.Path != "" {
@@ -111,7 +111,7 @@ func (e *Engine) createCloseFileFunction() model.ToolFunction {
 			return "", fmt.Errorf("session ID not available")
 		}
 
-		err = e.CloseFile(sessionID, path)
+		err = e.closeFile(stringArg(args, "__user_id__"), sessionID, path)
 		if err != nil {
 			return fmt.Sprintf("Error closing node: %v", err), nil
 		}

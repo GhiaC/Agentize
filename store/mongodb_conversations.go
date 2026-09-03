@@ -83,7 +83,9 @@ func (s *MongoDBStore) PutConversation(conversation *model.Conversation) error {
 	ctx, cancel := s.opCtx()
 	defer cancel()
 	opts := options.Replace().SetUpsert(true)
-	_, err = s.conversationsCollection.ReplaceOne(ctx, bson.M{"_id": conversation.ConversationID}, doc, opts)
+	docID := scopedMongoID(conversation.UserID, conversation.ConversationID)
+	doc.ConversationID = docID
+	_, err = s.conversationsCollection.ReplaceOne(ctx, bson.M{"_id": docID}, doc, opts)
 	if err != nil {
 		return fmt.Errorf("failed to store conversation: %w", err)
 	}
@@ -93,11 +95,31 @@ func (s *MongoDBStore) PutConversation(conversation *model.Conversation) error {
 func (s *MongoDBStore) DeleteConversation(conversationID string) error {
 	ctx, cancel := s.opCtx()
 	defer cancel()
+	if err := s.errIfAmbiguous(ctx, s.conversationsCollection, "_id", "conversations", conversationID); err != nil {
+		return err
+	}
 	_, err := s.conversationsCollection.DeleteOne(ctx, bson.M{"_id": conversationID})
 	if err != nil {
 		return fmt.Errorf("failed to delete conversation: %w", err)
 	}
 	auditDeletion("conversation", conversationID, "")
+	return nil
+}
+
+func (s *MongoDBStore) DeleteUserConversation(userID, conversationID string) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+	res, err := s.conversationsCollection.DeleteOne(ctx, bson.M{"user_id": userID, "_id": scopedMongoID(userID, conversationID)})
+	if err != nil {
+		return fmt.Errorf("failed to delete conversation: %w", err)
+	}
+	if res.DeletedCount == 0 {
+		_, err = s.conversationsCollection.DeleteOne(ctx, bson.M{"user_id": userID, "_id": conversationID})
+		if err != nil {
+			return fmt.Errorf("failed to delete conversation: %w", err)
+		}
+	}
+	auditDeletion("conversation", conversationID, userID)
 	return nil
 }
 
@@ -187,6 +209,15 @@ func (s *MongoDBStore) GetNextConversationSeq(userID string) (int, error) {
 
 func (s *MongoDBStore) TouchConversationBySession(sessionID string) error {
 	conv, err := s.GetConversationBySession(sessionID)
+	if err != nil || conv == nil {
+		return err
+	}
+	bumpConversationActivity(conv)
+	return s.PutConversation(conv)
+}
+
+func (s *MongoDBStore) TouchUserConversationBySession(userID, sessionID string) error {
+	conv, err := s.GetUserConversationBySession(userID, sessionID)
 	if err != nil || conv == nil {
 		return err
 	}

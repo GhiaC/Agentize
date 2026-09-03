@@ -127,7 +127,7 @@ func TestCreateSubAgent_OnlyMainSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	child, err := eng.CreateSubAgent(conv.SessionID, "research", "m-sub")
+	child, err := eng.CreateSubAgent("alice", conv.SessionID, "research", "m-sub")
 	if err != nil {
 		t.Fatalf("sub-agent: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestCreateSubAgent_OnlyMainSession(t *testing.T) {
 	if child.CanCreateSubAgent() {
 		t.Fatal("child must not create sub-agents")
 	}
-	_, err = eng.CreateSubAgent(child.SessionID, "nested", "")
+	_, err = eng.CreateSubAgent("alice", child.SessionID, "nested", "")
 	if !errors.Is(err, ErrSubAgentNesting) {
 		t.Fatalf("nested create error = %v", err)
 	}
@@ -145,7 +145,7 @@ func TestCreateSubAgent_OnlyMainSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("user session: %v", err)
 	}
-	_, err = eng.CreateSubAgent(userSess.SessionID, "nope", "")
+	_, err = eng.CreateSubAgent("alice", userSess.SessionID, "nope", "")
 	if !errors.Is(err, ErrNotConversationSession) {
 		t.Fatalf("low parent error = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestCreateSubAgent_OnlyMainSession(t *testing.T) {
 func TestDeleteConversation_RemovesSubAgents(t *testing.T) {
 	eng := newConversationTestEngine(t)
 	conv, _ := eng.CreateConversation(CreateConversationInput{UserID: "alice", Title: "work"})
-	child, _ := eng.CreateSubAgent(conv.SessionID, "research", "")
+	child, _ := eng.CreateSubAgent("alice", conv.SessionID, "research", "")
 	if err := eng.DeleteConversation("alice", conv.ConversationID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}

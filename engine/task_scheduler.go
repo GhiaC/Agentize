@@ -381,22 +381,26 @@ func (s *TaskScheduler) dispatchDue(ctx context.Context) {
 		if !s.accepts(schedule) {
 			continue
 		}
-		s.startRun(ctx, schedule.ScheduleID)
+		s.startRun(ctx, schedule)
 	}
 }
 
-func (s *TaskScheduler) startRun(parent context.Context, scheduleID string) {
+func (s *TaskScheduler) startRun(parent context.Context, schedule *model.TaskSchedule) {
+	if schedule == nil {
+		return
+	}
+	key := model.ScopeKey(schedule.UserID, schedule.ScheduleID)
 	s.mu.Lock()
 	if !s.running {
 		s.mu.Unlock()
 		return
 	}
-	if _, exists := s.inFlight[scheduleID]; exists {
+	if _, exists := s.inFlight[key]; exists {
 		s.mu.Unlock()
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
-	s.inFlight[scheduleID] = cancel
+	s.inFlight[key] = cancel
 	s.wg.Add(1)
 	s.mu.Unlock()
 
@@ -404,17 +408,17 @@ func (s *TaskScheduler) startRun(parent context.Context, scheduleID string) {
 		defer s.wg.Done()
 		defer func() {
 			s.mu.Lock()
-			delete(s.inFlight, scheduleID)
+			delete(s.inFlight, key)
 			s.mu.Unlock()
 		}()
-		s.execute(runCtx, scheduleID)
+		s.execute(runCtx, schedule.UserID, schedule.ScheduleID)
 	}()
 }
 
-func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
+func (s *TaskScheduler) execute(ctx context.Context, userID, scheduleID string) {
 	scheduleLock := &s.lifecycleMu
 	scheduleLock.Lock()
-	schedule, err := s.store.GetTaskSchedule(scheduleID)
+	schedule, err := s.Get(scheduleID, userID)
 	if err != nil || schedule == nil || schedule.Status != model.TaskScheduleActive {
 		scheduleLock.Unlock()
 		return
@@ -475,7 +479,7 @@ func (s *TaskScheduler) execute(ctx context.Context, scheduleID string) {
 	// Delete is authoritative: do not recreate a run or parent row after it was
 	// removed while execution was being cancelled.
 	scheduleLock.Lock()
-	current, getErr := s.store.GetTaskSchedule(scheduleID)
+	current, getErr := s.Get(scheduleID, userID)
 	if getErr != nil || current == nil {
 		scheduleLock.Unlock()
 		return
@@ -567,7 +571,7 @@ func (s *TaskScheduler) Create(input CreateTaskScheduleInput) (*model.TaskSchedu
 	if len(input.ConclusionPrompt) > 8*1024 {
 		return nil, fmt.Errorf("conclusion_prompt must not exceed 8192 characters")
 	}
-	sourceSession, err := s.store.Get(input.SessionID)
+	sourceSession, err := s.store.GetUserSession(input.UserID, input.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session not found: %w", err)
 	}
@@ -637,7 +641,7 @@ func (s *TaskScheduler) Create(input CreateTaskScheduleInput) (*model.TaskSchedu
 		Status: model.TaskScheduleActive, NextRunAt: now.Add(input.Interval),
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if conversation, convErr := s.store.GetConversationBySession(input.SessionID); convErr != nil {
+	if conversation, convErr := s.store.GetUserConversationBySession(input.UserID, input.SessionID); convErr != nil {
 		_ = s.store.Delete(dedicatedSession.SessionID)
 		return nil, fmt.Errorf("resolve source conversation: %w", convErr)
 	} else if conversation != nil {
@@ -663,14 +667,19 @@ func (s *TaskScheduler) List(userID string) ([]*model.TaskSchedule, error) {
 
 // Get returns one schedule after optional owner enforcement.
 func (s *TaskScheduler) Get(scheduleID, ownerUserID string) (*model.TaskSchedule, error) {
-	schedule, err := s.store.GetTaskSchedule(strings.TrimSpace(scheduleID))
-	if err != nil || schedule == nil {
-		return schedule, err
+	scheduleID = strings.TrimSpace(scheduleID)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if ownerUserID != "" {
+		schedule, err := s.store.GetUserTaskSchedule(ownerUserID, scheduleID)
+		if err != nil {
+			return nil, err
+		}
+		if schedule == nil {
+			return nil, fmt.Errorf("schedule not found")
+		}
+		return schedule, nil
 	}
-	if ownerUserID != "" && schedule.UserID != ownerUserID {
-		return nil, fmt.Errorf("schedule not found")
-	}
-	return schedule, nil
+	return s.store.GetTaskSchedule(scheduleID)
 }
 
 // Runs returns run history after optional owner enforcement.
@@ -735,7 +744,7 @@ func (s *TaskScheduler) changeStatus(
 	}
 	scheduleLock.Unlock()
 	if status == model.TaskSchedulePaused {
-		s.cancelRun(schedule.ScheduleID)
+		s.cancelRun(schedule.UserID, schedule.ScheduleID)
 	}
 	s.notify()
 	s.publishScheduleState(context.Background(), schedule)
@@ -761,7 +770,7 @@ func (s *TaskScheduler) RunNow(scheduleID, ownerUserID string) (*model.TaskSched
 		return nil, fmt.Errorf("schedule is not active")
 	}
 	s.mu.Lock()
-	_, busy := s.inFlight[schedule.ScheduleID]
+	_, busy := s.inFlight[model.ScopeKey(schedule.UserID, schedule.ScheduleID)]
 	s.mu.Unlock()
 	if busy || schedule.LastRunStatus == model.TaskRunRunning {
 		scheduleLock.Unlock()
@@ -792,7 +801,7 @@ func (s *TaskScheduler) Delete(scheduleID, ownerUserID string) error {
 		return fmt.Errorf("schedule not found")
 	}
 	s.mu.Lock()
-	cancel := s.inFlight[schedule.ScheduleID]
+	cancel := s.inFlight[model.ScopeKey(schedule.UserID, schedule.ScheduleID)]
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -810,9 +819,9 @@ func (s *TaskScheduler) Delete(scheduleID, ownerUserID string) error {
 	return s.store.DeleteTaskSchedule(schedule.ScheduleID)
 }
 
-func (s *TaskScheduler) cancelRun(scheduleID string) {
+func (s *TaskScheduler) cancelRun(userID, scheduleID string) {
 	s.mu.Lock()
-	cancel := s.inFlight[scheduleID]
+	cancel := s.inFlight[model.ScopeKey(userID, scheduleID)]
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()

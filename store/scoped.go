@@ -43,6 +43,14 @@ func ambiguousCountSQL(table, column string) (string, bool) {
 		return "SELECT COUNT(*) FROM task_schedules WHERE schedule_id = ?", true
 	case "messages.session_id":
 		return "SELECT COUNT(DISTINCT user_id) FROM messages WHERE session_id = ?", true
+	case "tool_calls.tool_id":
+		return "SELECT COUNT(*) FROM tool_calls WHERE tool_id = ?", true
+	case "tool_calls.session_id":
+		return "SELECT COUNT(DISTINCT user_id) FROM tool_calls WHERE session_id = ?", true
+	case "route_traces.trace_id":
+		return "SELECT COUNT(*) FROM route_traces WHERE trace_id = ?", true
+	case "summarization_logs.log_id":
+		return "SELECT COUNT(*) FROM summarization_logs WHERE log_id = ?", true
 	default:
 		return "", false
 	}

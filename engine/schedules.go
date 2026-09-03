@@ -124,6 +124,7 @@ type userStore interface {
 }
 
 type conversationMetadataStore interface {
+	GetUserConversationBySession(userID, sessionID string) (*model.Conversation, error)
 	GetConversationBySession(sessionID string) (*model.Conversation, error)
 	PutConversation(conversation *model.Conversation) error
 }
@@ -681,7 +682,7 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 
 	// Re-fetch the session to get latest state after acquiring lock
 	sessionStore := ss.sessionHandler.GetStore()
-	freshSession, err := sessionStore.Get(session.SessionID)
+	freshSession, err := sessionStore.GetUserSession(session.UserID, session.SessionID)
 	if err != nil {
 		return fmt.Errorf("failed to get fresh session: %w", err)
 	}
@@ -933,7 +934,7 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		}
 	}
 	if generatedTitle != "" {
-		if err := syncConversationTitle(sessionStore, session.SessionID, generatedTitle, session.UpdatedAt); err != nil {
+		if err := syncConversationTitle(sessionStore, session.UserID, session.SessionID, generatedTitle, session.UpdatedAt); err != nil {
 			if !ss.config.DisableLogs {
 				log.Log.Warnf("[SessionScheduler] ⚠️  Session title saved but conversation title sync failed | SessionID: %s | Error: %v", session.SessionID, err)
 			}
@@ -1236,12 +1237,18 @@ func withoutSystemMessages(messages []openai.ChatCompletionMessage) (nonSystem, 
 	return nonSystem, system
 }
 
-func syncConversationTitle(store model.SessionStore, sessionID, title string, updatedAt time.Time) error {
+func syncConversationTitle(store model.SessionStore, userID, sessionID, title string, updatedAt time.Time) error {
 	conversations, ok := store.(conversationMetadataStore)
 	if !ok {
 		return nil
 	}
-	conversation, err := conversations.GetConversationBySession(sessionID)
+	var conversation *model.Conversation
+	var err error
+	if strings.TrimSpace(userID) != "" {
+		conversation, err = conversations.GetUserConversationBySession(userID, sessionID)
+	} else {
+		conversation, err = conversations.GetConversationBySession(sessionID)
+	}
 	if err != nil || conversation == nil {
 		return err
 	}

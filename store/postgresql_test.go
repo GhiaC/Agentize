@@ -111,7 +111,7 @@ func TestPostgreSQLSchemaHasProductionIndexes(t *testing.T) {
 			t.Fatalf("numeric-id migration missing %q", fragment)
 		}
 	}
-	if postgreSQLMigrations[len(postgreSQLMigrations)-1].version != 2 {
+	if postgreSQLMigrations[len(postgreSQLMigrations)-1].version != 3 {
 		t.Fatalf("unexpected latest PostgreSQL migration version")
 	}
 }
@@ -193,8 +193,8 @@ func openPostgreSQLTestStore(t *testing.T) *PostgreSQLStore {
 func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
 	st := openPostgreSQLTestStore(t)
 	version, err := st.SchemaVersion()
-	if err != nil || version != 2 {
-		t.Fatalf("SchemaVersion = %d (%v), want 2", version, err)
+	if err != nil || version != 3 {
+		t.Fatalf("SchemaVersion = %d (%v), want 3", version, err)
 	}
 	if stats := st.PoolStats(); stats.MaxOpenConnections <= 0 {
 		t.Fatalf("PoolStats.MaxOpenConnections = %d", stats.MaxOpenConnections)
@@ -426,7 +426,7 @@ func TestPostgreSQLStoreLiveReopenIdempotent(t *testing.T) {
 		t.Fatalf("durable reopen lost session: %v %+v", err, got)
 	}
 	version, err := reopened.SchemaVersion()
-	if err != nil || version != 2 {
+	if err != nil || version != 3 {
 		t.Fatalf("schema version after reopen = %d (%v)", version, err)
 	}
 }

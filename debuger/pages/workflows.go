@@ -36,8 +36,8 @@ func RenderWorkflows(handler *debuger.DebugHandler, page int) (string, error) {
 			source := `<span class="text-muted">immediate</span>`
 			if workflow.ScheduleID != "" {
 				source = fmt.Sprintf(
-					`<a href="/agentize/debug/schedules/%s">schedule</a>`,
-					template.URLQueryEscaper(workflow.ScheduleID),
+					`<a href="%s">schedule</a>`,
+					debuger.SchedulePath(workflow.UserID, workflow.ScheduleID),
 				)
 			}
 			content += fmt.Sprintf(`<tr>
@@ -45,7 +45,7 @@ func RenderWorkflows(handler *debuger.DebugHandler, page int) (string, error) {
 				<td><a href="/agentize/debug/users/%s">%s</a><div class="small text-muted">%s</div></td>
 				<td>%s</td><td>%d</td><td>%s</td>
 				<td class="text-nowrap" title="%s">%s</td>
-				<td><a class="btn btn-sm btn-outline-primary" href="%s/%s">View DAG</a></td>
+				<td><a class="btn btn-sm btn-outline-primary" href="%s">View DAG</a></td>
 			</tr>`,
 				template.HTMLEscapeString(workflow.Name),
 				components.EntityIDText(workflow.WorkflowID),
@@ -55,7 +55,7 @@ func RenderWorkflows(handler *debuger.DebugHandler, page int) (string, error) {
 				source, len(workflow.Tasks), workflowStatusBadge(workflow.Status),
 				template.HTMLEscapeString(debuger.FormatTime(workflow.CreatedAt)),
 				template.HTMLEscapeString(debuger.FormatTimeAgo(workflow.CreatedAt)),
-				workflowsNavPath, template.URLQueryEscaper(workflow.WorkflowID),
+				debuger.WorkflowPath(workflow.UserID, workflow.WorkflowID),
 			)
 		}
 		content += `</tbody></table></div>`
@@ -70,7 +70,22 @@ func RenderWorkflows(handler *debuger.DebugHandler, page int) (string, error) {
 // RenderWorkflowDetail renders one workflow's metadata, dependency edges,
 // arguments, outputs, and errors.
 func RenderWorkflowDetail(handler *debuger.DebugHandler, workflowID string) (string, error) {
-	workflow, err := handler.GetStore().GetWorkflowRun(workflowID)
+	return RenderUserWorkflowDetail(handler, "", workflowID)
+}
+
+func RenderUserWorkflowDetail(handler *debuger.DebugHandler, userID, workflowID string) (string, error) {
+	var workflow *model.WorkflowRun
+	var err error
+	if userID != "" {
+		if s, ok := handler.GetStore().(interface {
+			GetUserWorkflowRun(userID, workflowID string) (*model.WorkflowRun, error)
+		}); ok {
+			workflow, err = s.GetUserWorkflowRun(userID, workflowID)
+		}
+	}
+	if workflow == nil && userID == "" {
+		workflow, err = handler.GetStore().GetWorkflowRun(workflowID)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get workflow: %w", err)
 	}
@@ -89,11 +104,11 @@ func RenderWorkflowDetail(handler *debuger.DebugHandler, workflowID string) (str
 	content += workflowMetaRow("Workflow ID", components.EntityID(workflow.WorkflowID))
 	content += workflowMetaRow("Name", template.HTMLEscapeString(workflow.Name))
 	content += workflowMetaRow("User", components.TruncatedLink(workflow.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(workflow.UserID), 30))
-	content += workflowMetaRow("Session", components.EntityIDLink(workflow.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(workflow.SessionID)))
+	content += workflowMetaRow("Session", components.EntityIDLink(workflow.SessionID, debuger.SessionPath(workflow.UserID, workflow.SessionID)))
 	content += `</tbody></table></div><div class="col-md-6"><table class="table table-sm"><tbody>`
 	content += workflowMetaRow("Status", workflowStatusBadge(workflow.Status))
 	content += workflowMetaRow("Tasks", fmt.Sprintf("%d", len(workflow.Tasks)))
-	content += workflowMetaRow("Schedule", workflowScheduleLink(workflow.ScheduleID))
+	content += workflowMetaRow("Schedule", workflowScheduleLink(workflow.UserID, workflow.ScheduleID))
 	content += workflowMetaRow("Created", template.HTMLEscapeString(debuger.FormatTime(workflow.CreatedAt)))
 	content += workflowMetaRow("Duration", template.HTMLEscapeString(workflowDuration(workflow)))
 	content += `</tbody></table></div></div>`
@@ -184,12 +199,15 @@ func workflowMetaRow(label, value string) string {
 		template.HTMLEscapeString(label), value)
 }
 
-func workflowScheduleLink(scheduleID string) string {
+func workflowScheduleLink(userID, scheduleID string) string {
 	if scheduleID == "" {
 		return `<span class="text-muted">immediate</span>`
 	}
-	return fmt.Sprintf(`<a href="/agentize/debug/schedules/%s">%s</a>`,
-		template.URLQueryEscaper(scheduleID), components.EntityID(scheduleID))
+	if userID == "" {
+		return `<span class="text-muted">` + components.EntityID(scheduleID) + `</span>`
+	}
+	return fmt.Sprintf(`<a href="%s">%s</a>`,
+		debuger.SchedulePath(userID, scheduleID), components.EntityID(scheduleID))
 }
 
 func workflowDuration(workflow *model.WorkflowRun) string {

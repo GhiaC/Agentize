@@ -54,7 +54,7 @@ func TestRenderSessionDetailPaginatesAndCollapsesCollections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	html, err := RenderSessionDetailPage(handler, session.SessionID, SessionDetailPages{
+	html, err := RenderUserSessionDetailPage(handler, session.UserID, session.SessionID, SessionDetailPages{
 		Prompts: 1, Messages: 1, Archived: 2, Summarization: 1, ToolCalls: 2, Files: 1,
 	})
 	if err != nil {

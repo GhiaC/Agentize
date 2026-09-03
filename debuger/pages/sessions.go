@@ -33,7 +33,7 @@ func detailPageSlice[T any](items []T, page int) []T {
 	return items[start:end]
 }
 
-func detailPagination(sessionID, pageParam string, current int, total int, pages SessionDetailPages) string {
+func detailPagination(userID, sessionID, pageParam string, current int, total int, pages SessionDetailPages) string {
 	params := url.Values{
 		"prompts_page": {fmt.Sprint(pages.Prompts)}, "messages_page": {fmt.Sprint(pages.Messages)},
 		"archived_page": {fmt.Sprint(pages.Archived)}, "summaries_page": {fmt.Sprint(pages.Summarization)},
@@ -42,7 +42,7 @@ func detailPagination(sessionID, pageParam string, current int, total int, pages
 	params.Del(pageParam)
 	return components.Pagination(components.PaginationConfig{
 		CurrentPage: current, TotalItems: total, ItemsPerPage: sessionDetailItemsPerPage,
-		BaseURL: "/agentize/debug/sessions/" + url.PathEscape(sessionID), PageParam: pageParam, QueryParams: params,
+		BaseURL: debuger.SessionPath(userID, sessionID), PageParam: pageParam, QueryParams: params,
 	})
 }
 
@@ -82,11 +82,17 @@ func RenderSessions(handler *debuger.DebugHandler, page int) (string, error) {
 	} else {
 		// Configure session row display
 		rowConfig := components.DefaultSessionRowConfig()
-		rowConfig.ShowUser = true
-		rowConfig.GetFilesCount = func(sessionID string) int {
-			files, _ := handler.GetStore().GetOpenedFilesBySession(sessionID)
-			return len(files)
-		}
+			rowConfig.ShowUser = true
+			rowConfig.GetFilesCount = func(userID, sessionID string) int {
+				files, _ := handler.GetStore().GetOpenedFilesByUser(userID)
+				n := 0
+				for _, file := range files {
+					if file != nil && file.SessionID == sessionID {
+						n++
+					}
+				}
+				return n
+			}
 
 		columns := components.SessionTableColumns(rowConfig)
 		content += components.TableStartWithConfig(columns, components.TableConfig{
@@ -129,13 +135,34 @@ func convertExMsgToMessage(chatMsg openai.ChatCompletionMessage, sessionID, user
 	}
 }
 
-// RenderSessionDetail generates the session detail HTML page
+// RenderSessionDetail generates the session detail HTML page.
+//
+// Deprecated: session IDs are per-user. Use RenderUserSessionDetail.
 func RenderSessionDetail(handler *debuger.DebugHandler, sessionID string) (string, error) {
 	return RenderSessionDetailPage(handler, sessionID, SessionDetailPages{Prompts: 1, Messages: 1, Archived: 1, Summarization: 1, ToolCalls: 1, Files: 1})
 }
 
+func RenderUserSessionDetail(handler *debuger.DebugHandler, userID, sessionID string) (string, error) {
+	return RenderUserSessionDetailPage(handler, userID, sessionID, SessionDetailPages{Prompts: 1, Messages: 1, Archived: 1, Summarization: 1, ToolCalls: 1, Files: 1})
+}
+
 // RenderSessionDetailPage renders the independently paginated detail view.
+//
+// Deprecated: session IDs are per-user. Use RenderUserSessionDetailPage.
 func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pages SessionDetailPages) (string, error) {
+	dp := data.NewDataProvider(handler.GetStore())
+	session, err := dp.GetSession(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if session == nil {
+		return "", fmt.Errorf("session not found: %s", sessionID)
+	}
+	return RenderUserSessionDetailPage(handler, session.UserID, sessionID, pages)
+}
+
+// RenderUserSessionDetailPage renders the independently paginated detail view.
+func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionID string, pages SessionDetailPages) (string, error) {
 	pageValues := []*int{&pages.Prompts, &pages.Messages, &pages.Archived, &pages.Summarization, &pages.ToolCalls, &pages.Files}
 	for _, page := range pageValues {
 		if *page < 1 {
@@ -144,7 +171,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 	}
 	dp := data.NewDataProvider(handler.GetStore())
 
-	session, err := dp.GetSession(sessionID)
+	session, err := dp.GetUserSession(userID, sessionID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get session: %w", err)
 	}
@@ -153,7 +180,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 	}
 
 	// Messages for this session: newest first (created_at DESC) for listing
-	allMessages, err := dp.GetMessagesBySessionDesc(sessionID)
+	allMessages, err := dp.GetUserMessagesBySessionDesc(userID, sessionID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get messages: %w", err)
 	}
@@ -172,21 +199,37 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 		}
 	}
 
-	files, err := dp.GetOpenedFilesBySession(sessionID)
+	files, err := dp.GetOpenedFilesByUser(userID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get files: %w", err)
 	}
 	openNodes := files[:0]
 	for _, file := range files {
-		if file.IsOpen {
+		if file.IsOpen && file.SessionID == sessionID {
 			openNodes = append(openNodes, file)
 		}
 	}
 	files = openNodes
 
-	summarizationLogs, _ := dp.GetSummarizationLogsBySession(sessionID)
-	dbToolCalls, _ := dp.GetToolCallsBySession(sessionID)
-	toolCalls := data.ConvertToolCallsToInfo(dbToolCalls)
+	allLogs, _ := dp.GetSummarizationLogsBySession(sessionID)
+	summarizationLogs := allLogs[:0]
+	for _, log := range allLogs {
+		if log != nil && log.UserID == userID {
+			summarizationLogs = append(summarizationLogs, log)
+		}
+	}
+	allToolCalls, _ := dp.GetUserToolCallsBySession(userID, sessionID)
+	toolCalls := data.ConvertToolCallsToInfo(allToolCalls)
+
+	routeByMessage := map[string]string{}
+	if traces, err := dp.GetRouteTracesByUser(userID); err == nil {
+		for _, tr := range traces {
+			if tr == nil || tr.SessionID != sessionID || tr.UserMessageID == "" {
+				continue
+			}
+			routeByMessage[tr.UserMessageID] = debuger.RoutePath(userID, sessionID, tr.TraceID)
+		}
+	}
 
 	content := ui.ContainerStart()
 
@@ -392,6 +435,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 		rowConfig := components.DefaultMessageRowConfig()
 		rowConfig.ShowUser = false    // Already on session page, user is known
 		rowConfig.ShowSession = false // Already on session page
+		rowConfig.RouteByMessageID = routeByMessage
 
 		columns := components.MessageTableColumns(rowConfig)
 		content += components.TableStartWithConfig(columns, components.TableConfig{
@@ -401,7 +445,6 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 			Responsive:  true,
 			AlignMiddle: true,
 		})
-
 		messagePage := detailPageSlice(messages, pages.Messages)
 		for i, msg := range messagePage {
 			content += components.MessageTableRow(msg, rowConfig, i)
@@ -409,7 +452,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 
 		content += components.TableEnd(true)
 		content += components.MessageTableScript()
-		content += detailPagination(sessionID, "messages_page", pages.Messages, len(messages), pages)
+		content += detailPagination(userID, sessionID, "messages_page", pages.Messages, len(messages), pages)
 	}
 
 	content += collapsibleCardEnd()
@@ -461,7 +504,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 
 		content += components.TableEnd(true)
 		content += components.MessageTableScript()
-		content += detailPagination(sessionID, "archived_page", pages.Archived, archivedCount, pages)
+		content += detailPagination(userID, sessionID, "archived_page", pages.Archived, archivedCount, pages)
 	}
 
 	content += collapsibleCardEnd()
@@ -527,7 +570,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 			)
 		}
 		content += components.ListGroupEnd()
-		content += detailPagination(sessionID, "summaries_page", pages.Summarization, len(summarizationLogs), pages)
+		content += detailPagination(userID, sessionID, "summaries_page", pages.Summarization, len(summarizationLogs), pages)
 	}
 
 	content += collapsibleCardEnd()
@@ -576,12 +619,12 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 				argsDisplay,
 				resultDisplay,
 				debuger.FormatTime(tc.CreatedAt),
-				components.OpenButton("/agentize/debug/tool-calls/"+template.URLQueryEscaper(tc.ToolID)),
+				components.OpenButton(debuger.ToolCallPath(userID, sessionID, tc.ToolID)),
 			)
 		}
 
 		content += components.TableEnd(true)
-		content += detailPagination(sessionID, "tools_page", pages.ToolCalls, len(toolCalls), pages)
+		content += detailPagination(userID, sessionID, "tools_page", pages.ToolCalls, len(toolCalls), pages)
 	}
 
 	content += collapsibleCardEnd()
@@ -633,7 +676,7 @@ func RenderSessionDetailPage(handler *debuger.DebugHandler, sessionID string, pa
 		}
 
 		content += components.TableEnd(true)
-		content += detailPagination(sessionID, "files_page", pages.Files, len(files), pages)
+		content += detailPagination(userID, sessionID, "files_page", pages.Files, len(files), pages)
 	}
 
 	content += collapsibleCardEnd()

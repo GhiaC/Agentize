@@ -83,7 +83,14 @@ func (ag *Agentize) ProcessMessageAndDeliver(
 		return response, tokens, processErr
 	}
 
-	session, sessionErr := ag.GetSessionStore().Get(sessionID)
+	userID := model.UserIDFrom(ctx)
+	var session *model.Session
+	var sessionErr error
+	if userID != "" {
+		session, sessionErr = ag.GetSessionStore().GetUserSession(userID, sessionID)
+	} else {
+		session, sessionErr = ag.GetSessionStore().Get(sessionID)
+	}
 	if sessionErr != nil {
 		return response, tokens, errors.Join(processErr, fmt.Errorf("load session for generated file delivery: %w", sessionErr))
 	}

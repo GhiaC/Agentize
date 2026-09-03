@@ -35,7 +35,7 @@ func (ch *CoreHandler) initializeTaskScheduler() {
 	)
 	ch.taskScheduler.SetWorkflowExecutor(
 		func(ctx context.Context, schedule *model.TaskSchedule) (string, error) {
-			workflowSession, err := ch.sessionHandler.GetSession(schedule.SessionID)
+			workflowSession, err := ch.sessionHandler.GetUserSession(schedule.UserID, schedule.SessionID)
 			if err != nil {
 				return "", fmt.Errorf("load workflow schedule session: %w", err)
 			}

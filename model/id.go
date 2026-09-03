@@ -140,6 +140,17 @@ func DisplayID(id string) string {
 	return id
 }
 
+// ScopeKey is the in-process identity for a per-user incremental id (locks,
+// queues, caches). It is not stored and is not a concatenated public ID.
+func ScopeKey(userID, id string) string {
+	userID = strings.TrimSpace(userID)
+	id = strings.TrimSpace(id)
+	if userID == "" {
+		return id
+	}
+	return userID + "/" + id
+}
+
 // EnsureID returns id when set, otherwise FormatID(seq). Used to fill empty
 // identifiers on persist without rewriting legacy concatenated values.
 func EnsureID(id string, seq int) string {

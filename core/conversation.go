@@ -481,7 +481,7 @@ func conversationSession(eng *engine.Engine, conv *model.Conversation) *model.Se
 	if eng == nil || eng.Sessions == nil || conv == nil || conv.SessionID == "" {
 		return nil
 	}
-	session, err := eng.Sessions.Get(conv.SessionID)
+	session, err := eng.Sessions.GetUserSession(conv.UserID, conv.SessionID)
 	if err != nil {
 		return nil
 	}

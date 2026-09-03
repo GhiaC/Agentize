@@ -132,13 +132,13 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 	// Add session column if configured
 	if config.ShowSession {
 		html += fmt.Sprintf(`<td class="text-nowrap">%s</td>`,
-			EntityIDLink(tc.SessionID, config.BaseURL+"/sessions/"+template.URLQueryEscaper(tc.SessionID)))
+			EntityIDLink(tc.SessionID, debuger.SessionPath(tc.UserID, tc.SessionID)))
 	}
 
 	html += fmt.Sprintf(`
 		<td class="text-center">%s</td>
 	</tr>`,
-		OpenButton(config.BaseURL+"/tool-calls/"+template.URLQueryEscaper(tc.ToolID)),
+		OpenButton(debuger.ToolCallPath(tc.UserID, tc.SessionID, tc.ToolID)),
 	)
 
 	// Build the expanded details row (hidden by default)
@@ -198,9 +198,9 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 					<pre class="bg-white border rounded p-2 mt-1" style="white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto; font-size: 0.9em;">%s</pre>
 				</div>
 				<div class="mt-3 d-flex gap-2">
-					<a href="%s/tool-calls/%s" class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-up-right"></i> View Details</a>
-					<a href="%s/sessions/%s" class="btn btn-sm btn-outline-secondary"><i class="bi bi-diagram-3"></i> Session</a>
-					<a href="%s/messages?session=%s" class="btn btn-sm btn-outline-secondary"><i class="bi bi-chat-dots"></i> Messages</a>
+					<a href="%s" class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-up-right"></i> View Details</a>
+					<a href="%s" class="btn btn-sm btn-outline-secondary"><i class="bi bi-diagram-3"></i> Session</a>
+					<a href="%s" class="btn btn-sm btn-outline-secondary"><i class="bi bi-chat-dots"></i> Messages</a>
 				</div>
 			</div>
 		</td>
@@ -212,7 +212,7 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 		InlineCode(displayName),
 		agentBadge,
 		TruncatedLink(tc.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(tc.UserID), 40),
-		EntityIDLink(tc.SessionID, config.BaseURL+"/sessions/"+template.URLQueryEscaper(tc.SessionID)),
+		EntityIDLink(tc.SessionID, debuger.SessionPath(tc.UserID, tc.SessionID)),
 		EntityID(tc.MessageID),
 		createdAtDisplay,
 		durationDisplay,
@@ -221,9 +221,9 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 		errorRow,
 		template.HTMLEscapeString(tc.Arguments),
 		template.HTMLEscapeString(tc.Result),
-		config.BaseURL, template.URLQueryEscaper(tc.ToolID),
-		config.BaseURL, template.URLQueryEscaper(tc.SessionID),
-		config.BaseURL, template.URLQueryEscaper(tc.SessionID),
+		debuger.ToolCallPath(tc.UserID, tc.SessionID, tc.ToolID),
+		debuger.SessionPath(tc.UserID, tc.SessionID),
+		debuger.SessionMessagesPath(tc.UserID, tc.SessionID),
 	)
 
 	return html

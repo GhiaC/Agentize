@@ -45,6 +45,7 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 			path = "root"
 		}
 		sessionID, _ := args["__session_id__"].(string)
+		userID, _ := args["__user_id__"].(string)
 		switch action {
 		case "get", "open":
 			node, err := e.Repo.LoadNode(path)
@@ -55,7 +56,7 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 				if sessionID == "" {
 					return "", fmt.Errorf("session identity is unavailable")
 				}
-				if _, err := e.OpenFile(sessionID, path); err != nil {
+				if _, err := e.openFile(userID, sessionID, path); err != nil {
 					return "", err
 				}
 			}
@@ -64,7 +65,7 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 				payload["opened"] = true
 				payload["activated_tools"] = activeNodeToolNames(node)
 				payload["closed_previous"] = false
-				if session, getErr := e.Sessions.Get(sessionID); getErr == nil && session != nil {
+				if session, getErr := e.loadOwnedSession(userID, sessionID); getErr == nil && session != nil {
 					openPaths := make([]string, 0, len(session.NodeDigests))
 					for _, digest := range session.NodeDigests {
 						if digest.Path != "" {
@@ -79,7 +80,7 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 			if sessionID == "" {
 				return "", fmt.Errorf("session identity is unavailable")
 			}
-			if err := e.CloseFile(sessionID, path); err != nil {
+			if err := e.closeFile(userID, sessionID, path); err != nil {
 				return "", err
 			}
 			return boundedKnowledgeJSON(map[string]interface{}{"path": path, "opened": false}), nil

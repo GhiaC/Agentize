@@ -312,7 +312,7 @@ var insertValuesRE = regexp.MustCompile(`(?is)INSERT\s+INTO\s+([a-z_][a-z0-9_]*)
 
 var postgreSQLPrimaryKeys = map[string]string{
 	"sessions": "user_id, session_id", "users": "user_id", "messages": "user_id, session_id, message_id",
-	"opened_files": "user_id, session_id, file_id", "user_files": "user_id, file_id", "tool_calls": "tool_call_id",
+	"opened_files": "user_id, session_id, file_id", "user_files": "user_id, file_id", "tool_calls": "user_id, session_id, message_id, tool_id",
 	"summarization_logs": "user_id, session_id, log_id", "route_traces": "user_id, session_id, trace_id",
 	"reviews": "request_id", "conversations": "user_id, conversation_id",
 	"task_schedules": "user_id, schedule_id", "task_schedule_runs": "run_id",
@@ -464,6 +464,7 @@ type postgreSQLMigration struct {
 var postgreSQLMigrations = []postgreSQLMigration{
 	{1, "initial agentize schema", postgreSQLSchema},
 	{2, "composite keys for numeric scoped ids", postgreSQLNumericIDKeys},
+	{3, "composite keys for per-message tool ids", postgreSQLToolCallKeys},
 }
 
 // Foreign keys are intentionally omitted on session/user children: Delete of a
@@ -595,4 +596,9 @@ ALTER TABLE workflow_runs ADD PRIMARY KEY (user_id, workflow_id);
 
 ALTER TABLE task_schedules DROP CONSTRAINT IF EXISTS task_schedules_pkey;
 ALTER TABLE task_schedules ADD PRIMARY KEY (user_id, schedule_id);
+`
+
+const postgreSQLToolCallKeys = `
+ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey;
+ALTER TABLE tool_calls ADD PRIMARY KEY (user_id, session_id, message_id, tool_id);
 `

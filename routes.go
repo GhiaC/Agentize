@@ -74,9 +74,19 @@ func (ag *Agentize) RegisterRoutes(router *gin.Engine) {
 	router.GET("/agentize/debug/users", p(ag.handleDebugUsers))
 	router.GET("/agentize/debug/users/:userID", p(ag.handleDebugUserDetail))
 	router.POST("/agentize/debug/users/:userID/delete-data", p(ag.handleDebugUserDeleteData))
+	router.GET("/agentize/debug/users/:userID/sessions/:sessionID", p(ag.handleDebugUserSessionDetail))
+	router.GET("/agentize/debug/users/:userID/sessions/:sessionID/messages", p(ag.handleDebugUserSessionMessages))
+	router.GET("/agentize/debug/users/:userID/sessions/:sessionID/tool-calls", p(ag.handleDebugUserSessionToolCalls))
+	router.GET("/agentize/debug/users/:userID/sessions/:sessionID/tool-calls/:toolID", p(ag.handleDebugUserToolCallDetail))
+	router.GET("/agentize/debug/users/:userID/sessions/:sessionID/routes/:traceID", p(ag.handleDebugUserRouteDetail))
+	router.GET("/agentize/debug/users/:userID/sessions/:sessionID/logs/:logID", p(ag.handleDebugUserLogDetail))
+	router.GET("/agentize/debug/users/:userID/workflows/:workflowID", p(ag.handleDebugUserWorkflowDetail))
+	router.GET("/agentize/debug/users/:userID/schedules/:scheduleID", p(ag.handleDebugUserScheduleDetail))
+	router.POST("/agentize/debug/users/:userID/schedules/:scheduleID/:action", p(ag.handleDebugUserScheduleAction))
+	router.GET("/agentize/debug/users/:userID/files/:fileID/raw", p(ag.handleDebugUserFileRaw))
 	router.GET("/agentize/debug/conversations", p(ag.handleDebugConversations))
 	router.GET("/agentize/debug/sessions", p(ag.handleDebugSessions))
-	router.GET("/agentize/debug/sessions/:sessionID", p(ag.handleDebugSessionDetail))
+	router.GET("/agentize/debug/sessions/:sessionID", p(ag.handleDebugSessionDetailDeprecated))
 	router.GET("/agentize/debug/schedules", p(ag.handleDebugSchedules))
 	router.POST("/agentize/debug/schedules", p(ag.handleDebugScheduleCreate))
 	router.GET("/agentize/debug/schedules/:scheduleID", p(ag.handleDebugScheduleDetail))
@@ -347,13 +357,25 @@ func (ag *Agentize) handleDebugScheduleCreate(c *gin.Context) {
 
 // handleDebugScheduleDetail shows configuration and bounded run history.
 func (ag *Agentize) handleDebugScheduleDetail(c *gin.Context) {
+	userID, ok := ag.deprecatedUserQuery(c, "schedule")
+	if !ok {
+		return
+	}
+	ag.redirectDeprecatedDebug(c, debuger.SchedulePath(userID, c.Param("scheduleID")), nil)
+}
+
+func (ag *Agentize) renderScheduleDetail(c *gin.Context, userID, scheduleID string) {
 	scheduler := ag.GetTaskScheduler()
 	if scheduler == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "task scheduler is not configured"})
 		return
 	}
-	schedule, err := scheduler.Get(c.Param("scheduleID"), "")
+	schedule, err := scheduler.Get(scheduleID, userID)
 	if err != nil {
+		if userID == "" {
+			ag.redirectDeprecatedDebug(c, "", err)
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -361,7 +383,11 @@ func (ag *Agentize) handleDebugScheduleDetail(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "schedule not found"})
 		return
 	}
-	runs, err := scheduler.Runs(schedule.ScheduleID, "", 100)
+	if userID == "" {
+		ag.redirectDeprecatedDebug(c, debuger.SchedulePath(schedule.UserID, schedule.ScheduleID), nil)
+		return
+	}
+	runs, err := scheduler.Runs(schedule.ScheduleID, schedule.UserID, 100)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -373,23 +399,25 @@ func (ag *Agentize) handleDebugScheduleDetail(c *gin.Context) {
 
 // handleDebugScheduleAction applies one lifecycle action from the admin page.
 func (ag *Agentize) handleDebugScheduleAction(c *gin.Context) {
+	c.JSON(http.StatusBadRequest, ag.deprecatedUnscopedIDError("schedule"))
+}
+
+func (ag *Agentize) applyScheduleAction(c *gin.Context, userID, id, action string) {
 	scheduler := ag.GetTaskScheduler()
 	if scheduler == nil {
 		redirectSchedulePage(c, "", fmt.Errorf("task scheduler is not configured"))
 		return
 	}
-	id := c.Param("scheduleID")
-	action := c.Param("action")
 	var err error
 	switch action {
 	case "stop":
-		_, err = scheduler.Pause(id, "")
+		_, err = scheduler.Pause(id, userID)
 	case "resume":
-		_, err = scheduler.Resume(id, "")
+		_, err = scheduler.Resume(id, userID)
 	case "run-now":
-		_, err = scheduler.RunNow(id, "")
+		_, err = scheduler.RunNow(id, userID)
 	case "delete":
-		err = scheduler.Delete(id, "")
+		err = scheduler.Delete(id, userID)
 	default:
 		err = fmt.Errorf("unsupported schedule action %q", action)
 	}
@@ -438,22 +466,11 @@ func (ag *Agentize) handleDebugWorkflowDetail(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflowID parameter is required"})
 		return
 	}
-	handler, err := ag.createDebugHandler()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	userID, ok := ag.deprecatedUserQuery(c, "workflow")
+	if !ok {
 		return
 	}
-	html, err := pages.RenderWorkflowDetail(handler, workflowID)
-	if err != nil {
-		if strings.Contains(err.Error(), "workflow not found") {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK, html)
+	ag.redirectDeprecatedDebug(c, debuger.WorkflowPath(userID, workflowID), nil)
 }
 
 // handleDebugUsers handles users list page requests
@@ -647,21 +664,19 @@ func (ag *Agentize) handleDebugSessions(c *gin.Context) {
 	c.String(200, html)
 }
 
-// handleDebugSessionDetail handles session detail page requests
-func (ag *Agentize) handleDebugSessionDetail(c *gin.Context) {
-	sessionID := c.Param("sessionID")
-	if sessionID == "" {
-		c.JSON(400, gin.H{"error": "sessionID parameter is required"})
+func (ag *Agentize) handleDebugUserSessionDetail(c *gin.Context) {
+	userID := strings.TrimSpace(c.Param("userID"))
+	sessionID := strings.TrimSpace(c.Param("sessionID"))
+	if userID == "" || sessionID == "" {
+		c.JSON(400, gin.H{"error": "userID and sessionID are required"})
 		return
 	}
-
 	handler, err := ag.createDebugHandler()
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-
-	html, err := pages.RenderSessionDetailPage(handler, sessionID, pages.SessionDetailPages{
+	html, err := pages.RenderUserSessionDetailPage(handler, userID, sessionID, pages.SessionDetailPages{
 		Prompts:       getNamedPageParam(c, "prompts_page"),
 		Messages:      getNamedPageParam(c, "messages_page"),
 		Archived:      getNamedPageParam(c, "archived_page"),
@@ -673,30 +688,191 @@ func (ag *Agentize) handleDebugSessionDetail(c *gin.Context) {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate session detail page: %v", err)})
 		return
 	}
-
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(200, html)
 }
 
-// handleDebugMessages handles messages list page requests
+func (ag *Agentize) deprecatedUnscopedIDError(kind string) gin.H {
+	return gin.H{"error": kind + " ids increment per user and are not globally unique; use /agentize/debug/users/:userID/..."}
+}
+
+func (ag *Agentize) deprecatedUserQuery(c *gin.Context, kind string) (string, bool) {
+	userID := strings.TrimSpace(c.Query("user"))
+	if userID != "" {
+		return userID, true
+	}
+	c.JSON(http.StatusBadRequest, ag.deprecatedUnscopedIDError(kind))
+	return "", false
+}
+
+// handleDebugSessionDetailDeprecated keeps leftover bookmarks working only when
+// the caller already knows the owner. Numeric session ids are per-user, so
+// /agentize/debug/sessions/2 is not a primary key.
+func (ag *Agentize) handleDebugSessionDetailDeprecated(c *gin.Context) {
+	sessionID := c.Param("sessionID")
+	if sessionID == "" {
+		c.JSON(400, gin.H{"error": "sessionID parameter is required"})
+		return
+	}
+	userID, ok := ag.deprecatedUserQuery(c, "session")
+	if !ok {
+		return
+	}
+	c.Redirect(http.StatusMovedPermanently, debuger.SessionPath(userID, sessionID))
+}
+
+func (ag *Agentize) handleDebugUserSessionMessages(c *gin.Context) {
+	ag.renderDebugMessages(c, c.Param("userID"), c.Param("sessionID"))
+}
+
 func (ag *Agentize) handleDebugMessages(c *gin.Context) {
+	ag.renderDebugMessages(c, c.Query("user"), c.Query("session"))
+}
+
+func (ag *Agentize) renderDebugMessages(c *gin.Context, userID, sessionID string) {
 	handler, err := ag.createDebugHandler()
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-
-	page := getPageParam(c)
-	userID := c.Query("user")
-	sessionID := c.Query("session")
-	html, err := pages.RenderMessages(handler, page, userID, sessionID)
+	html, err := pages.RenderMessages(handler, getPageParam(c), strings.TrimSpace(userID), strings.TrimSpace(sessionID))
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate messages page: %v", err)})
 		return
 	}
-
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(200, html)
+}
+
+func (ag *Agentize) handleDebugUserSessionToolCalls(c *gin.Context) {
+	handler, err := ag.createDebugHandler()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	html, err := pages.RenderToolCalls(handler, getPageParam(c), strings.TrimSpace(c.Param("userID")), strings.TrimSpace(c.Param("sessionID")))
+	if err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate tool calls page: %v", err)})
+		return
+	}
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(200, html)
+}
+
+func (ag *Agentize) handleDebugUserToolCallDetail(c *gin.Context) {
+	handler, err := ag.createDebugHandler()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	html, err := pages.RenderUserToolCallDetail(handler, c.Param("userID"), c.Param("sessionID"), c.Param("toolID"))
+	if err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate tool call detail page: %v", err)})
+		return
+	}
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(200, html)
+}
+
+func (ag *Agentize) handleDebugUserRouteDetail(c *gin.Context) {
+	handler, err := ag.createDebugHandler()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	html, err := pages.RenderUserRouteDetail(handler, c.Param("userID"), c.Param("sessionID"), c.Param("traceID"))
+	if err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate route detail page: %v", err)})
+		return
+	}
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(200, html)
+}
+
+func (ag *Agentize) handleDebugUserLogDetail(c *gin.Context) {
+	handler, err := ag.createDebugHandler()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	html, err := pages.RenderUserSummarizationLogDetail(handler, c.Param("userID"), c.Param("sessionID"), c.Param("logID"))
+	if err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate summarization log detail page: %v", err)})
+		return
+	}
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(200, html)
+}
+
+func (ag *Agentize) handleDebugUserWorkflowDetail(c *gin.Context) {
+	handler, err := ag.createDebugHandler()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	html, err := pages.RenderUserWorkflowDetail(handler, c.Param("userID"), c.Param("workflowID"))
+	if err != nil {
+		if strings.Contains(err.Error(), "workflow not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, html)
+}
+
+func (ag *Agentize) handleDebugUserScheduleDetail(c *gin.Context) {
+	ag.renderScheduleDetail(c, c.Param("userID"), c.Param("scheduleID"))
+}
+
+func (ag *Agentize) handleDebugUserScheduleAction(c *gin.Context) {
+	ag.applyScheduleAction(c, c.Param("userID"), c.Param("scheduleID"), c.Param("action"))
+}
+
+func (ag *Agentize) handleDebugUserFileRaw(c *gin.Context) {
+	userID := strings.TrimSpace(c.Param("userID"))
+	fileID := strings.TrimSpace(c.Param("fileID"))
+	if userID == "" || fileID == "" {
+		c.JSON(400, gin.H{"error": "userID and fileID are required"})
+		return
+	}
+	if ag.rawFileLimiter != nil && !ag.rawFileLimiter.allow(c.ClientIP()) {
+		c.Header("Retry-After", "6")
+		c.JSON(429, gin.H{"error": "rate limit exceeded for raw file downloads; slow down"})
+		return
+	}
+	data, meta, err := ag.ReadUserFileForUser(userID, fileID)
+	if err != nil {
+		c.JSON(404, gin.H{"error": fmt.Sprintf("file not found: %v", err)})
+		return
+	}
+	mimeType := meta.MIMEType
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	disposition := "inline"
+	if c.Query("download") == "1" {
+		disposition = "attachment"
+	}
+	c.Header("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, sanitizeContentDispositionName(meta.Name)))
+	c.Data(200, mimeType, data)
+}
+
+func (ag *Agentize) redirectDeprecatedDebug(c *gin.Context, target string, err error) {
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	if target == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if encoded := c.Request.URL.RawQuery; encoded != "" {
+		target += "?" + encoded
+	}
+	c.Redirect(http.StatusMovedPermanently, target)
 }
 
 // handleDebugDocuments handles the user documents (files) list page requests
@@ -734,23 +910,15 @@ func (ag *Agentize) handleDebugDocumentRaw(c *gin.Context) {
 		return
 	}
 
-	data, meta, err := ag.ReadUserFile(fileID)
-	if err != nil {
-		c.JSON(404, gin.H{"error": fmt.Sprintf("file not found: %v", err)})
+	userID, ok := ag.deprecatedUserQuery(c, "file")
+	if !ok {
 		return
 	}
-
-	mimeType := meta.MIMEType
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-
-	disposition := "inline"
+	target := debuger.FileRawPath(userID, fileID)
 	if c.Query("download") == "1" {
-		disposition = "attachment"
+		target += "?download=1"
 	}
-	c.Header("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, sanitizeContentDispositionName(meta.Name)))
-	c.Data(200, mimeType, data)
+	c.Redirect(http.StatusMovedPermanently, target)
 }
 
 // sanitizeContentDispositionName strips characters that would break a
@@ -972,8 +1140,7 @@ func (ag *Agentize) handleDebugToolCalls(c *gin.Context) {
 	}
 
 	page := getPageParam(c)
-	sessionID := c.Query("session")
-	html, err := pages.RenderToolCalls(handler, page, sessionID)
+	html, err := pages.RenderToolCalls(handler, page, c.Query("user"), c.Query("session"))
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate tool calls page: %v", err)})
 		return
@@ -990,21 +1157,16 @@ func (ag *Agentize) handleDebugToolCallDetail(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "toolID parameter is required"})
 		return
 	}
-
-	handler, err := ag.createDebugHandler()
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+	userID, ok := ag.deprecatedUserQuery(c, "tool call")
+	if !ok {
 		return
 	}
-
-	html, err := pages.RenderToolCallDetail(handler, toolID)
-	if err != nil {
-		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate tool call detail page: %v", err)})
+	sessionID := strings.TrimSpace(c.Query("session"))
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tool call ids increment per message; pass session= and user= or use /users/:userID/sessions/:sessionID/tool-calls/:toolID"})
 		return
 	}
-
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(200, html)
+	ag.redirectDeprecatedDebug(c, debuger.ToolCallPath(userID, sessionID, toolID), nil)
 }
 
 // handleDebugRoutes handles the routing-DAG list page (one trace per user message)
@@ -1033,21 +1195,16 @@ func (ag *Agentize) handleDebugRouteDetail(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "traceID parameter is required"})
 		return
 	}
-
-	handler, err := ag.createDebugHandler()
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+	userID, ok := ag.deprecatedUserQuery(c, "route")
+	if !ok {
 		return
 	}
-
-	html, err := pages.RenderRouteDetail(handler, traceID)
-	if err != nil {
-		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate route detail page: %v", err)})
+	sessionID := strings.TrimSpace(c.Query("session"))
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "route ids increment per session; pass session= and user= or use /users/:userID/sessions/:sessionID/routes/:traceID"})
 		return
 	}
-
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(200, html)
+	ag.redirectDeprecatedDebug(c, debuger.RoutePath(userID, sessionID, traceID), nil)
 }
 
 // handleDebugSummarized handles summarization logs list page requests
@@ -1071,21 +1228,17 @@ func (ag *Agentize) handleDebugSummarized(c *gin.Context) {
 
 // handleDebugSummarizationLogDetail handles summarization log detail page requests
 func (ag *Agentize) handleDebugSummarizationLogDetail(c *gin.Context) {
-	handler, err := ag.createDebugHandler()
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-
 	logID := c.Param("logID")
-	html, err := pages.RenderSummarizationLogDetail(handler, logID)
-	if err != nil {
-		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate summarization log detail page: %v", err)})
+	userID, ok := ag.deprecatedUserQuery(c, "log")
+	if !ok {
 		return
 	}
-
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(200, html)
+	sessionID := strings.TrimSpace(c.Query("session"))
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "log ids increment per session; pass session= and user= or use /users/:userID/sessions/:sessionID/logs/:logID"})
+		return
+	}
+	ag.redirectDeprecatedDebug(c, debuger.LogPath(userID, sessionID, logID), nil)
 }
 
 // indexPageTemplate is the HTML template for the main index page

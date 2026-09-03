@@ -115,14 +115,29 @@ func (dp *DataProvider) GetUser(userID string) (*model.User, error) {
 	return dp.store.GetUser(userID)
 }
 
-// GetSession returns a single session with ExMsgs sorted by CreatedAt DESC
+// GetSession returns a single session with ExMsgs sorted by CreatedAt DESC.
+//
+// Deprecated: numeric session ids are per-user. Use GetUserSession.
 func (dp *DataProvider) GetSession(sessionID string) (*model.Session, error) {
 	session, err := dp.store.GetSession(sessionID)
 	if err != nil {
 		return nil, err
 	}
+	return sortSessionMessages(session), nil
+}
+
+// GetUserSession returns a session owned by userID.
+func (dp *DataProvider) GetUserSession(userID, sessionID string) (*model.Session, error) {
+	session, err := dp.store.GetUserSession(userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return sortSessionMessages(session), nil
+}
+
+func sortSessionMessages(session *model.Session) *model.Session {
 	if session == nil {
-		return nil, nil
+		return nil
 	}
 
 	// Sort ArchivedMsgs by CreatedAt DESC (newest first)
@@ -135,7 +150,7 @@ func (dp *DataProvider) GetSession(sessionID string) (*model.Session, error) {
 		session.Msgs = SortExMsgsByCreatedAtDesc(session.Msgs)
 	}
 
-	return session, nil
+	return session
 }
 
 // GetAllMessages returns all messages sorted by CreatedAt (newest first)
@@ -164,6 +179,25 @@ func (dp *DataProvider) GetMessagesBySession(sessionID string) ([]*model.Message
 // Note: Database query already returns DESC order
 func (dp *DataProvider) GetMessagesBySessionDesc(sessionID string) ([]*model.Message, error) {
 	return dp.store.GetMessagesBySession(sessionID)
+}
+
+func (dp *DataProvider) GetUserMessagesBySessionDesc(userID, sessionID string) ([]*model.Message, error) {
+	if s, ok := dp.store.(interface {
+		GetUserMessagesBySession(userID, sessionID string) ([]*model.Message, error)
+	}); ok {
+		return s.GetUserMessagesBySession(userID, sessionID)
+	}
+	messages, err := dp.store.GetMessagesBySession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := messages[:0]
+	for _, msg := range messages {
+		if msg != nil && msg.UserID == userID {
+			out = append(out, msg)
+		}
+	}
+	return out, nil
 }
 
 // GetMessagesByUser returns messages for a user sorted by CreatedAt (newest first)
@@ -244,11 +278,24 @@ func (dp *DataProvider) GetToolCallsBySession(sessionID string) ([]*model.ToolCa
 		return nil, err
 	}
 
-	// Sort by CreatedAt (newest first)
 	sort.Slice(toolCalls, func(i, j int) bool {
 		return toolCalls[i].CreatedAt.After(toolCalls[j].CreatedAt)
 	})
 
+	return toolCalls, nil
+}
+
+func (dp *DataProvider) GetUserToolCallsBySession(userID, sessionID string) ([]*model.ToolCall, error) {
+	if userID == "" {
+		return dp.GetToolCallsBySession(sessionID)
+	}
+	toolCalls, err := dp.store.GetUserToolCallsBySession(userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(toolCalls, func(i, j int) bool {
+		return toolCalls[i].CreatedAt.After(toolCalls[j].CreatedAt)
+	})
 	return toolCalls, nil
 }
 
@@ -277,6 +324,17 @@ func (dp *DataProvider) GetAllRouteTraces() ([]*model.RouteTrace, error) {
 // GetRouteTracesBySession returns routing DAGs for a session, newest first.
 func (dp *DataProvider) GetRouteTracesBySession(sessionID string) ([]*model.RouteTrace, error) {
 	traces, err := dp.store.GetRouteTracesBySession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(traces, func(i, j int) bool {
+		return traces[i].CreatedAt.After(traces[j].CreatedAt)
+	})
+	return traces, nil
+}
+
+func (dp *DataProvider) GetRouteTracesByUser(userID string) ([]*model.RouteTrace, error) {
+	traces, err := dp.store.GetRouteTracesByUser(userID)
 	if err != nil {
 		return nil, err
 	}

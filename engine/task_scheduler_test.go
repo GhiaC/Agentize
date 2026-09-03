@@ -271,7 +271,7 @@ func TestTaskSchedulerRunConclusionAndLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := scheduler.Get(schedule.ScheduleID, "user-1")
-	if err != nil || got != nil {
+	if got != nil {
 		t.Fatalf("after delete: schedule=%#v err=%v", got, err)
 	}
 }

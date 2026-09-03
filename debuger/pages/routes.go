@@ -66,7 +66,7 @@ func RenderRoutes(handler *debuger.DebugHandler, page int) (string, error) {
 }
 
 func routeTraceRow(tr *model.RouteTrace) string {
-	detailURL := routesNavPath + "/" + template.URLQueryEscaper(tr.TraceID)
+	detailURL := debuger.RoutePath(tr.UserID, tr.SessionID, tr.TraceID)
 
 	routed := `<span class="text-muted">— Core</span>`
 	if agents := tr.DispatchedAgents(); len(agents) > 0 {
@@ -90,7 +90,7 @@ func routeTraceRow(tr *model.RouteTrace) string {
 		template.HTMLEscapeString(debuger.FormatTimeAgo(tr.CreatedAt)),
 		components.EntityID(tr.TraceID),
 		components.TruncatedLink(tr.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(tr.UserID), 16),
-		components.EntityIDLink(tr.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(tr.SessionID)),
+		components.EntityIDLink(tr.SessionID, debuger.SessionPath(tr.UserID, tr.SessionID)),
 		template.HTMLEscapeString(truncateRunes(tr.Message, 80)),
 		routed,
 		tr.NodeCount(),
@@ -104,11 +104,35 @@ func routeTraceRow(tr *model.RouteTrace) string {
 // RenderRouteDetail renders a single routing DAG: metadata, the interactive
 // graph, the message/response, and an ordered step table (also a no-JS fallback).
 func RenderRouteDetail(handler *debuger.DebugHandler, traceID string) (string, error) {
+	return RenderUserRouteDetail(handler, "", "", traceID)
+}
+
+func RenderUserRouteDetail(handler *debuger.DebugHandler, userID, sessionID, traceID string) (string, error) {
 	dp := data.NewDataProvider(handler.GetStore())
 
-	tr, err := dp.GetRouteTraceByID(traceID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get route trace: %w", err)
+	var tr *model.RouteTrace
+	var err error
+	if userID != "" {
+		traces, listErr := dp.GetRouteTracesByUser(userID)
+		if listErr != nil {
+			return "", fmt.Errorf("failed to get route trace: %w", listErr)
+		}
+		for _, item := range traces {
+			if item == nil || item.TraceID != traceID {
+				continue
+			}
+			if sessionID != "" && item.SessionID != sessionID {
+				continue
+			}
+			tr = item
+			break
+		}
+	}
+	if tr == nil && userID == "" {
+		tr, err = dp.GetRouteTraceByID(traceID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get route trace: %w", err)
+		}
 	}
 	if tr == nil {
 		return "", fmt.Errorf("route trace not found: %s", traceID)
@@ -126,7 +150,7 @@ func RenderRouteDetail(handler *debuger.DebugHandler, traceID string) (string, e
 	content += `<div class="row"><div class="col-md-6"><table class="table table-sm">`
 	content += metaRow("Trace ID", components.EntityID(tr.TraceID))
 	content += metaRow("User", components.TruncatedLink(tr.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(tr.UserID), 30))
-	content += metaRow("Session", components.EntityIDLink(tr.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(tr.SessionID)))
+	content += metaRow("Session", components.EntityIDLink(tr.SessionID, debuger.SessionPath(tr.UserID, tr.SessionID)))
 	content += metaRow("Status", routeStatusBadge(tr.Status))
 	content += `</table></div><div class="col-md-6"><table class="table table-sm">`
 	content += metaRow("Nodes", fmt.Sprintf("%d", tr.NodeCount()))

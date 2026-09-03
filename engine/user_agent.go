@@ -216,6 +216,40 @@ func (e *Engine) getSessionMutex(sessionID string) *sync.Mutex {
 	return mu
 }
 
+func (e *Engine) sessionKey(ctx context.Context, sessionID string) string {
+	return model.ScopeKey(model.UserIDFrom(ctx), sessionID)
+}
+
+func (e *Engine) loadSession(ctx context.Context, sessionID string) (*model.Session, error) {
+	return e.loadOwnedSession(model.UserIDFrom(ctx), sessionID)
+}
+
+func (e *Engine) loadOwnedSession(userID, sessionID string) (*model.Session, error) {
+	if strings.TrimSpace(userID) != "" {
+		return e.Sessions.GetUserSession(userID, sessionID)
+	}
+	// Deprecated: numeric ids are per-user. Fail-closed when two users share the number.
+	return e.Sessions.Get(sessionID)
+}
+
+func (e *Engine) sessionFiles(ctx context.Context, sessionID string) ([]*model.UserFile, error) {
+	userID := model.UserIDFrom(ctx)
+	if userID == "" {
+		return e.Sessions.GetUserFilesBySession(sessionID)
+	}
+	files, err := e.Sessions.GetUserFilesByUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	out := files[:0]
+	for _, f := range files {
+		if f != nil && f.SessionID == sessionID {
+			out = append(out, f)
+		}
+	}
+	return out, nil
+}
+
 // IsDBReady returns whether the database is ready
 func (e *Engine) IsDBReady() bool {
 	e.dbReadyMu.RLock()
@@ -513,9 +547,15 @@ func (e *Engine) CreateSession(userID string) (*model.Session, error) {
 	return session, nil
 }
 
-// SetProgress sets the progress state for a session
+// SetProgress sets the progress state for a session.
+//
+// Deprecated: session IDs increment per user. Prefer SetUserProgress.
 func (e *Engine) SetProgress(sessionID string, inProgress bool) error {
-	session, err := e.Sessions.Get(sessionID)
+	return e.SetUserProgress("", sessionID, inProgress)
+}
+
+func (e *Engine) SetUserProgress(userID, sessionID string, inProgress bool) error {
+	session, err := e.loadOwnedSession(userID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -526,8 +566,11 @@ func (e *Engine) SetProgress(sessionID string, inProgress bool) error {
 // OpenFile opens a node by path and adds it to the session's opened nodes.
 // Returns the node content if successfully opened, or an error if the path doesn't exist.
 func (e *Engine) OpenFile(sessionID string, path string) (string, error) {
-	// Get session
-	session, err := e.Sessions.Get(sessionID)
+	return e.openFile("", sessionID, path)
+}
+
+func (e *Engine) openFile(userID, sessionID, path string) (string, error) {
+	session, err := e.loadOwnedSession(userID, sessionID)
 	if err != nil {
 		return "", fmt.Errorf("session not found: %w", err)
 	}
@@ -610,13 +653,14 @@ func (e *Engine) OpenFile(sessionID string, path string) (string, error) {
 // CloseFile removes a node from the session's opened nodes.
 // Returns an error if the path is not opened or is the root node.
 func (e *Engine) CloseFile(sessionID string, path string) error {
-	// Prevent closing root
+	return e.closeFile("", sessionID, path)
+}
+
+func (e *Engine) closeFile(userID, sessionID, path string) error {
 	if path == "root" {
 		return fmt.Errorf("cannot close root node")
 	}
-
-	// Get session
-	session, err := e.Sessions.Get(sessionID)
+	session, err := e.loadOwnedSession(userID, sessionID)
 	if err != nil {
 		return fmt.Errorf("session not found: %w", err)
 	}
@@ -673,7 +717,8 @@ func (e *Engine) ProcessIncoming(
 	msg IncomingMessage,
 ) (string, int, error) {
 	e.ensureSessionProgress()
-	queued := e.sessionProgress.TryQueueMessage(sessionID, QueuedMessage{Content: msg.Content, Metadata: msg.Metadata}, msg.queueClass())
+	key := e.sessionKey(ctx, sessionID)
+	queued := e.sessionProgress.TryQueueMessage(key, QueuedMessage{Content: msg.Content, Metadata: msg.Metadata}, msg.queueClass())
 	if queued {
 		if msg.queueClass() == QueueDeferred {
 			metrics.MessageQueued("agent_deferred")
@@ -683,11 +728,11 @@ func (e *Engine) ProcessIncoming(
 		return queuedAckMessage, 0, nil
 	}
 
-	sessionMu := e.getSessionMutex(sessionID)
+	sessionMu := e.getSessionMutex(key)
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 
-	return e.processMessageLocked(ctx, sessionID, msg)
+	return e.processMessageLocked(ctx, key, sessionID, msg)
 }
 
 // ProcessDeferredMessage queues an alert/schedule until the current turn and
@@ -714,21 +759,22 @@ func (e *Engine) ProcessMessageWithGeneratedFiles(
 	userMessage string,
 ) (string, int, []*model.UserFile, error) {
 	e.ensureSessionProgress()
-	if e.sessionProgress.TryQueueMessage(sessionID, QueuedMessage{Content: userMessage}, QueueUser) {
+	key := e.sessionKey(ctx, sessionID)
+	if e.sessionProgress.TryQueueMessage(key, QueuedMessage{Content: userMessage}, QueueUser) {
 		metrics.MessageQueued("agent")
 		return queuedAckMessage, 0, nil, nil
 	}
 
-	sessionMu := e.getSessionMutex(sessionID)
+	sessionMu := e.getSessionMutex(key)
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 
-	before, err := e.Sessions.GetUserFilesBySession(sessionID)
+	before, err := e.sessionFiles(ctx, sessionID)
 	if err != nil {
 		return "", 0, nil, fmt.Errorf("list session files before message: %w", err)
 	}
-	response, tokens, processErr := e.processMessageLocked(ctx, sessionID, IncomingMessage{Content: userMessage, Queue: QueueUser})
-	after, afterErr := e.Sessions.GetUserFilesBySession(sessionID)
+	response, tokens, processErr := e.processMessageLocked(ctx, key, sessionID, IncomingMessage{Content: userMessage, Queue: QueueUser})
+	after, afterErr := e.sessionFiles(ctx, sessionID)
 	if afterErr != nil {
 		if processErr != nil {
 			return response, tokens, nil, processErr
@@ -767,14 +813,15 @@ func (e *Engine) ProcessScheduledIncoming(
 ) (string, int, error) {
 	e.ensureSessionProgress()
 	msg.Queue = QueueDeferred
+	key := e.sessionKey(ctx, sessionID)
 
-	sessionMu := e.getSessionMutex(sessionID)
+	sessionMu := e.getSessionMutex(key)
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return "", 0, err
 	}
-	return e.processMessageLocked(ctx, sessionID, msg)
+	return e.processMessageLocked(ctx, key, sessionID, msg)
 }
 
 // processMessageLocked processes one message, injects leftover user follow-ups
@@ -782,11 +829,12 @@ func (e *Engine) ProcessScheduledIncoming(
 // the per-session mutex.
 func (e *Engine) processMessageLocked(
 	ctx context.Context,
+	key string,
 	sessionID string,
 	msg IncomingMessage,
 ) (string, int, error) {
-	e.sessionProgress.SetInProgress(sessionID, true)
-	defer e.sessionProgress.SetInProgress(sessionID, false)
+	e.sessionProgress.SetInProgress(key, true)
+	defer e.sessionProgress.SetInProgress(key, false)
 
 	log.Log.Infof("[Engine] 🚀 ProcessMessage | SessionID: %s | MsgLen: %d | Queue: %s", sessionID, len(msg.Content), msg.queueClass())
 
@@ -797,16 +845,19 @@ func (e *Engine) processMessageLocked(
 		return "", 0, errors.New("LLM client is not configured. Call UseLLMConfig first")
 	}
 
-	session, err := e.Sessions.Get(sessionID)
+	session, err := e.loadSession(ctx, sessionID)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to get session: %w", err)
+	}
+	if session.UserID != "" {
+		ctx = model.WithUserID(ctx, session.UserID)
 	}
 
 	log.Log.Infof("[Engine] 🔍 Session loaded | SessionID: %s | UserID: %s | Messages: %d",
 		sessionID, session.UserID, len(session.Msgs))
 
 	if session.UpdatedAt.Before(time.Now().Add(-2 * time.Hour)) {
-		if err := e.removeFunctionCalls(sessionID); err != nil {
+		if err := e.removeFunctionCalls(ctx, sessionID); err != nil {
 			log.Log.Warnf("[Engine] ⚠️  Failed to clean function calls | Error: %v", err)
 		}
 	}
@@ -824,13 +875,13 @@ func (e *Engine) processMessageLocked(
 			phase = StatusPhase("stopped")
 		}
 		e.persistSessionRunState(session, phase, err.Error(), false, UserMessageIDFrom(ctx))
-		e.drainSessionQueues(ctx, sessionID)
+		e.drainSessionQueues(ctx, key, sessionID)
 		return "", tokens, err
 	}
 	e.persistSessionRunState(session, StatusCompleted, "", false, UserMessageIDFrom(ctx))
 	e.touchOwningConversation(session)
 
-	e.drainSessionQueues(ctx, sessionID)
+	e.drainSessionQueues(ctx, key, sessionID)
 
 	log.Log.Infof("[Engine] ✅ Done | SessionID: %s | ResponseLen: %d | Tokens: %d",
 		sessionID, len(response), tokens)
@@ -838,11 +889,11 @@ func (e *Engine) processMessageLocked(
 	return response, tokens, nil
 }
 
-func (e *Engine) drainSessionQueues(ctx context.Context, sessionID string) {
+func (e *Engine) drainSessionQueues(ctx context.Context, key, sessionID string) {
 	drained := false
 	var lastErr error
 	for {
-		if item, ok := e.sessionProgress.TakeUser(sessionID); ok {
+		if item, ok := e.sessionProgress.TakeUser(key); ok {
 			drained = true
 			if _, _, qErr := e.processOneMessageBody(ctx, sessionID, incomingFromQueued(item, QueueUser)); qErr != nil {
 				log.Log.Warnf("[Engine] ⚠️  Queued user message failed | Error: %v", qErr)
@@ -852,7 +903,7 @@ func (e *Engine) drainSessionQueues(ctx context.Context, sessionID string) {
 			}
 			continue
 		}
-		if item, ok := e.sessionProgress.TakeDeferred(sessionID); ok {
+		if item, ok := e.sessionProgress.TakeDeferred(key); ok {
 			drained = true
 			if _, _, qErr := e.processOneMessageBody(ctx, sessionID, incomingFromQueued(item, QueueDeferred)); qErr != nil {
 				log.Log.Warnf("[Engine] ⚠️  Deferred alert/schedule message failed | Error: %v", qErr)
@@ -867,7 +918,7 @@ func (e *Engine) drainSessionQueues(ctx context.Context, sessionID string) {
 	if !drained {
 		return
 	}
-	session, err := e.Sessions.Get(sessionID)
+	session, err := e.loadSession(ctx, sessionID)
 	if err != nil || session == nil {
 		return
 	}
@@ -891,7 +942,7 @@ func (e *Engine) drainSessionQueues(ctx context.Context, sessionID string) {
 func (e *Engine) processOneMessageBody(ctx context.Context, sessionID string, msg IncomingMessage) (string, int, error) {
 	userMessage := msg.Content
 	if len(userMessage) > 0 {
-		session, err := e.Sessions.Get(sessionID)
+		session, err := e.loadSession(ctx, sessionID)
 		if err != nil {
 			return "", 0, fmt.Errorf("failed to get session: %w", err)
 		}
@@ -1190,8 +1241,8 @@ func (e *Engine) GetTools(session *model.Session) []openai.Tool {
 }
 
 // removeFunctionCalls removes function/tool call messages
-func (e *Engine) removeFunctionCalls(sessionID string) error {
-	session, err := e.Sessions.Get(sessionID)
+func (e *Engine) removeFunctionCalls(ctx context.Context, sessionID string) error {
+	session, err := e.loadSession(ctx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -1261,9 +1312,15 @@ func truncateForLog(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// GetToolResult retrieves a stored tool result by ID
+// GetToolResult retrieves a stored tool result by ID.
+//
+// Deprecated: session IDs increment per user. Prefer GetUserToolResult.
 func (e *Engine) GetToolResult(sessionID string, resultID string) (string, bool) {
-	session, err := e.Sessions.Get(sessionID)
+	return e.GetUserToolResult("", sessionID, resultID)
+}
+
+func (e *Engine) GetUserToolResult(userID, sessionID, resultID string) (string, bool) {
+	session, err := e.loadOwnedSession(userID, sessionID)
 	if err != nil {
 		return "", false
 	}
@@ -1332,13 +1389,13 @@ func (e *Engine) CollectResultByID(ctx context.Context, resultID string, query s
 // which enforces per-user ownership via getOwnedToolResult before extraction.
 func (e *Engine) CollectResult(ctx context.Context, sessionID string, resultID string, query string) (string, error) {
 	// Get the stored result
-	fullResult, ok := e.GetToolResult(sessionID, resultID)
+	fullResult, ok := e.GetUserToolResult(model.UserIDFrom(ctx), sessionID, resultID)
 	if !ok {
 		return "", fmt.Errorf("result with ID '%s' not found in session '%s'", resultID, sessionID)
 	}
 
 	// Get userID from session and add to context for LLM call
-	session, err := e.Sessions.Get(sessionID)
+	session, err := e.loadSession(ctx, sessionID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get session: %w", err)
 	}
@@ -1521,7 +1578,7 @@ func (e *Engine) processChatRequest(
 	totalTokenUsage := 0
 
 	// Load session once at the start
-	session, err := e.Sessions.Get(sessionID)
+	session, err := e.loadSession(ctx, sessionID)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to get session: %w", err)
 	}
@@ -1688,7 +1745,7 @@ func (e *Engine) processChatRequest(
 						discoveredTools = appendUniqueTool(discoveredTools, toolCall.Function.Name)
 					}
 					if knowledgeCapabilityTool(toolCall.Function.Name) {
-						if next, err := e.Sessions.Get(sessionID); err == nil {
+						if next, err := e.loadSession(ctx, sessionID); err == nil {
 							session = next
 							allTools = e.GetTools(session)
 							systemPrompts = e.snapshotSystemPrompts(session)

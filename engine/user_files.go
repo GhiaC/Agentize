@@ -105,7 +105,7 @@ func (e *Engine) recordUserFile(sessionID, name, mimeType string, source model.F
 		return nil, fmt.Errorf("session store does not support user files")
 	}
 
-	session, err := e.Sessions.Get(sessionID)
+	session, err := e.loadOwnedSession("", sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load session: %w", err)
 	}

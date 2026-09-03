@@ -20,8 +20,8 @@ func (ch *CoreHandler) getOrCreateCoreSession(userID string) (*model.Session, er
 	ch.coreSessionsMu.Lock()
 	defer ch.coreSessionsMu.Unlock()
 
-	if session, exists := ch.coreSessions[userID]; exists {
-		dbSession, err := ch.sessionHandler.GetSession(session.SessionID)
+	if cached, exists := ch.coreSessions[userID]; exists {
+		dbSession, err := ch.sessionHandler.GetUserSession(userID, cached.SessionID)
 		if err == nil && dbSession != nil {
 			ch.coreSessions[userID] = dbSession
 			return dbSession, nil
@@ -30,7 +30,7 @@ func (ch *CoreHandler) getOrCreateCoreSession(userID string) (*model.Session, er
 
 	activeSessionID := ch.getActiveSessionID(userID, model.AgentTypeCore)
 	if activeSessionID != "" {
-		activeSession, err := ch.sessionHandler.GetSession(activeSessionID)
+		activeSession, err := ch.sessionHandler.GetUserSession(userID, activeSessionID)
 		if err == nil && activeSession != nil {
 			ch.coreSessions[userID] = activeSession
 			return activeSession, nil
@@ -200,15 +200,8 @@ func (ch *CoreHandler) getActiveSessionID(userID string, agentType model.AgentTy
 
 func (ch *CoreHandler) setActiveSessionID(userID string, agentType model.AgentType, sessionID string) error {
 	if sessionID != "" {
-		session, err := ch.sessionHandler.GetSession(sessionID)
+		session, err := ch.sessionHandler.GetUserSession(userID, sessionID)
 		if err != nil || session == nil {
-			return fmt.Errorf("session not found in database: %s", sessionID)
-		}
-		// SECURITY (defense in depth): never make a session that belongs to a
-		// different user the active session for this user. Callers should already
-		// verify ownership, but this is the last gate before the id is persisted
-		// and later handed to ProcessMessage.
-		if session.UserID != userID {
 			return fmt.Errorf("session not found in database: %s", sessionID)
 		}
 	}
@@ -234,12 +227,8 @@ func (ch *CoreHandler) setActiveSessionID(userID string, agentType model.AgentTy
 func (ch *CoreHandler) getOrCreateActiveSession(userID string, agentType model.AgentType) (string, error) {
 	sessionID := ch.getActiveSessionID(userID, agentType)
 	if sessionID != "" {
-		session, err := ch.sessionHandler.GetSession(sessionID)
-		// SECURITY (defense in depth): only reuse the stored active session if it
-		// still exists AND belongs to this user. A mismatch (e.g. from a stale or
-		// tampered active-session pointer) is discarded and a fresh session is
-		// created rather than processing against another user's session.
-		if err == nil && session != nil && session.UserID == userID {
+		session, err := ch.sessionHandler.GetUserSession(userID, sessionID)
+		if err == nil && session != nil {
 			return sessionID, nil
 		}
 		log.Log.Warnf("[CoreHandler] ⚠️  Active session missing or not owned, creating new | UserID: %s | AgentType: %s",

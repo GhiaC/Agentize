@@ -10,9 +10,9 @@ import (
 
 // SessionRowConfig holds configuration for session table row display
 type SessionRowConfig struct {
-	ShowUser      bool                       // Show user column with link
-	BaseURL       string                     // Base URL for links
-	GetFilesCount func(sessionID string) int // Function to get files count
+	ShowUser      bool                                 // Show user column with link
+	BaseURL       string                               // Base URL for links
+	GetFilesCount func(userID, sessionID string) int // Function to get files count
 }
 
 // DefaultSessionRowConfig returns default configuration for session row
@@ -20,7 +20,7 @@ func DefaultSessionRowConfig() SessionRowConfig {
 	return SessionRowConfig{
 		ShowUser:      true,
 		BaseURL:       "/agentize/debug",
-		GetFilesCount: func(sessionID string) int { return 0 },
+		GetFilesCount: func(userID, sessionID string) int { return 0 },
 	}
 }
 
@@ -122,7 +122,7 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 		<td class="text-center">%s</td>
 	</tr>`,
 		statusBadges,
-		OpenButton(config.BaseURL+"/sessions/"+template.URLQueryEscaper(session.SessionID)),
+		OpenButton(debuger.SessionPath(session.UserID, session.SessionID)),
 	)
 
 	// Build the expanded details row (hidden by default)
@@ -157,7 +157,7 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 	// Get files count if function provided
 	filesCount := 0
 	if config.GetFilesCount != nil {
-		filesCount = config.GetFilesCount(session.SessionID)
+		filesCount = config.GetFilesCount(session.UserID, session.SessionID)
 	}
 
 	// In progress badge
@@ -199,9 +199,9 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 					<div class="bg-white border rounded p-2 mt-1" style="white-space: pre-wrap; word-wrap: break-word;">%s</div>
 				</div>
 				<div class="mt-3 d-flex gap-2">
-					<a href="%s/sessions/%s" class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-up-right"></i> View Details</a>
-					<a href="%s/messages?session=%s" class="btn btn-sm btn-outline-secondary"><i class="bi bi-chat-dots"></i> Messages</a>
-					<a href="%s/tool-calls?session=%s" class="btn btn-sm btn-outline-secondary"><i class="bi bi-tools"></i> Tool Calls</a>
+					<a href="%s" class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-up-right"></i> View Details</a>
+					<a href="%s" class="btn btn-sm btn-outline-secondary"><i class="bi bi-chat-dots"></i> Messages</a>
+					<a href="%s" class="btn btn-sm btn-outline-secondary"><i class="bi bi-tools"></i> Tool Calls</a>
 				</div>
 			</div>
 		</td>
@@ -223,9 +223,9 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 		inProgressDisplay,
 		tagsDisplay,
 		template.HTMLEscapeString(summaryDisplay),
-		config.BaseURL, template.URLQueryEscaper(session.SessionID),
-		config.BaseURL, template.URLQueryEscaper(session.SessionID),
-		config.BaseURL, template.URLQueryEscaper(session.SessionID),
+		debuger.SessionPath(session.UserID, session.SessionID),
+		debuger.SessionMessagesPath(session.UserID, session.SessionID),
+		debuger.SessionToolCallsPath(session.UserID, session.SessionID),
 	)
 
 	return html

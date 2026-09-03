@@ -112,9 +112,6 @@ func (s *DBStore) GetUserSession(userID, sessionID string) (*model.Session, erro
 			return session.Clone(), nil
 		}
 	}
-	if session, ok := s.sessionsCache.Get(sessionID); ok && session.UserID == userID {
-		return session.Clone(), nil
-	}
 	session, err := s.sqliteStore.GetUserSession(userID, sessionID)
 	if err != nil {
 		return nil, err
@@ -124,13 +121,11 @@ func (s *DBStore) GetUserSession(userID, sessionID string) (*model.Session, erro
 }
 
 func (s *DBStore) Get(sessionID string) (*model.Session, error) {
-	// Check cache first
-	if session, ok := s.sessionsCache.Get(sessionID); ok {
-		// Return a copy to prevent external modification (using Clone to avoid copylocks)
+	// Deprecated: numeric session ids are per-user. Prefer GetUserSession.
+	if session, ok := s.sessionsCache.Get(sessionID); ok && model.IsLegacyConcatID(sessionID) {
 		return session.Clone(), nil
 	}
 
-	// Not in cache, get from database
 	session, err := s.sqliteStore.Get(sessionID)
 	if err != nil {
 		return nil, err
@@ -164,26 +159,35 @@ func (s *DBStore) cacheSession(session *model.Session) {
 		return
 	}
 	clone := session.Clone()
-	s.sessionsCache.Add(session.SessionID, clone)
 	if session.UserID != "" {
 		s.sessionsCache.Add(userSessionCacheKey(session.UserID, session.SessionID), clone)
+	}
+	// Deprecated: bare sessionID is only unique for leftover concatenated ids.
+	if model.IsLegacyConcatID(session.SessionID) {
+		s.sessionsCache.Add(session.SessionID, clone)
 	}
 }
 
 // Delete removes a session
 // Removes from both cache and database
 func (s *DBStore) Delete(sessionID string) error {
-	userID := ""
-	if session, ok := s.sessionsCache.Get(sessionID); ok && session != nil {
-		userID = session.UserID
-	}
+	session, _ := s.sqliteStore.Get(sessionID)
 	if err := s.sqliteStore.Delete(sessionID); err != nil {
 		return err
 	}
 	s.sessionsCache.Remove(sessionID)
-	if userID != "" {
-		s.sessionsCache.Remove(userSessionCacheKey(userID, sessionID))
+	if session != nil && session.UserID != "" {
+		s.sessionsCache.Remove(userSessionCacheKey(session.UserID, sessionID))
 	}
+	return nil
+}
+
+func (s *DBStore) DeleteUserSession(userID, sessionID string) error {
+	if err := s.sqliteStore.DeleteUserSession(userID, sessionID); err != nil {
+		return err
+	}
+	s.sessionsCache.Remove(sessionID)
+	s.sessionsCache.Remove(userSessionCacheKey(userID, sessionID))
 	return nil
 }
 
@@ -373,6 +377,10 @@ func (s *DBStore) GetMessagesBySession(sessionID string) ([]*model.Message, erro
 	return s.sqliteStore.GetMessagesBySession(sessionID)
 }
 
+func (s *DBStore) GetUserMessagesBySession(userID, sessionID string) ([]*model.Message, error) {
+	return s.sqliteStore.GetUserMessagesBySession(userID, sessionID)
+}
+
 // GetMessagesBySessionPage returns one page of a session's messages (delegates to SQLiteStore)
 func (s *DBStore) GetMessagesBySessionPage(sessionID string, limit, offset int) ([]*model.Message, error) {
 	return s.sqliteStore.GetMessagesBySessionPage(sessionID, limit, offset)
@@ -466,6 +474,10 @@ func (s *DBStore) GetAllToolCalls() ([]*model.ToolCall, error) {
 // GetToolCallsBySession returns all tool calls for a session (delegates to SQLiteStore)
 func (s *DBStore) GetToolCallsBySession(sessionID string) ([]*model.ToolCall, error) {
 	return s.sqliteStore.GetToolCallsBySession(sessionID)
+}
+
+func (s *DBStore) GetUserToolCallsBySession(userID, sessionID string) ([]*model.ToolCall, error) {
+	return s.sqliteStore.GetUserToolCallsBySession(userID, sessionID)
 }
 
 // GetToolCallByID returns a tool call by its ID (delegates to SQLiteStore)
@@ -604,6 +616,10 @@ func (s *DBStore) DeleteConversation(conversationID string) error {
 	return s.sqliteStore.DeleteConversation(conversationID)
 }
 
+func (s *DBStore) DeleteUserConversation(userID, conversationID string) error {
+	return s.sqliteStore.DeleteUserConversation(userID, conversationID)
+}
+
 func (s *DBStore) ListConversations(userID string) ([]*model.Conversation, error) {
 	return s.sqliteStore.ListConversations(userID)
 }
@@ -624,6 +640,10 @@ func (s *DBStore) TouchConversationBySession(sessionID string) error {
 	return s.sqliteStore.TouchConversationBySession(sessionID)
 }
 
+func (s *DBStore) TouchUserConversationBySession(userID, sessionID string) error {
+	return s.sqliteStore.TouchUserConversationBySession(userID, sessionID)
+}
+
 // GetWorkflowRun returns a durable Core workflow by id.
 func (s *DBStore) GetWorkflowRun(workflowID string) (*model.WorkflowRun, error) {
 	return s.sqliteStore.GetWorkflowRun(workflowID)
@@ -642,6 +662,10 @@ func (s *DBStore) PutToolCall(toolCall *model.ToolCall) error {
 // UpdateToolCallResponse updates the response for a tool call (delegates to SQLiteStore)
 func (s *DBStore) UpdateToolCallResponse(toolID string, response string, execErr error) error {
 	return s.sqliteStore.UpdateToolCallResponse(toolID, response, execErr)
+}
+
+func (s *DBStore) UpdateUserToolCallResponse(userID, sessionID, toolID string, response string, execErr error) error {
+	return s.sqliteStore.UpdateUserToolCallResponse(userID, sessionID, toolID, response, execErr)
 }
 
 // DeleteUserData deletes all Agentize data for a user (delegates to SQLiteStore

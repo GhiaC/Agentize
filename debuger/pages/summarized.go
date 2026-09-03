@@ -197,13 +197,13 @@ func RenderSummarized(handler *debuger.DebugHandler, page int) (string, error) {
             </tr>`,
 				statusBadge,
 				typeBadge,
-				components.TruncatedLink(sessionDisplay, "/agentize/debug/sessions/"+template.URLQueryEscaper(log.SessionID), 20),
+				components.TruncatedLink(sessionDisplay, debuger.SessionPath(log.UserID, log.SessionID), 20),
 				components.InlineCode(debuger.TruncateString(log.ModelUsed, 15)),
 				msgsInfo,
 				tokenBadge,
 				durationDisplay,
 				debuger.FormatDuration(log.CreatedAt),
-				components.ViewDetailsButton("/agentize/debug/summarized/"+template.URLQueryEscaper(log.LogID)),
+				components.ViewDetailsButton(debuger.LogPath(log.UserID, log.SessionID, log.LogID)),
 			)
 		}
 
@@ -341,7 +341,7 @@ func RenderSummarizedMessages(handler *debuger.DebugHandler) (string, error) {
     <p class="mb-2 text-justify">%s</p>`,
 				components.RoleBadge(msgInfo.Role),
 				toolCallBadge,
-				components.ButtonOutlineSmall("Open Session", "/agentize/debug/sessions/"+template.URLQueryEscaper(msgInfo.SessionID), "primary"),
+				components.ButtonOutlineSmall("Open Session", debuger.SessionPath(msgInfo.UserID, msgInfo.SessionID), "primary"),
 				components.Badge("User: "+debuger.TruncateString(msgInfo.UserID, 20), "info"),
 				debuger.FormatTime(msgInfo.SummarizedAt),
 				contentDisplay,
@@ -380,21 +380,43 @@ func RenderSummarizedMessages(handler *debuger.DebugHandler) (string, error) {
 	return ui.Header("Agentize Debug - Summarized Messages") + ui.NavbarAndBody("/agentize/debug/summarized", content) + ui.Footer(), nil
 }
 
-// RenderSummarizationLogDetail generates the detail page for a single summarization log
+// RenderSummarizationLogDetail generates the detail page for a single summarization log.
+//
+// Deprecated: log ids increment per session. Use RenderUserSummarizationLogDetail.
 func RenderSummarizationLogDetail(handler *debuger.DebugHandler, logID string) (string, error) {
+	return RenderUserSummarizationLogDetail(handler, "", "", logID)
+}
+
+func RenderUserSummarizationLogDetail(handler *debuger.DebugHandler, userID, sessionID, logID string) (string, error) {
 	dp := data.NewDataProvider(handler.GetStore())
 
-	// Get all logs and find the one we need
-	allLogs, err := dp.GetAllSummarizationLogs()
-	if err != nil {
-		return "", fmt.Errorf("failed to get summarization logs: %w", err)
-	}
-
 	var log *model.SummarizationLog
-	for _, l := range allLogs {
-		if l.LogID == logID {
-			log = l
-			break
+	if userID != "" && sessionID != "" {
+		items, err := dp.GetSummarizationLogsBySession(sessionID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get summarization logs: %w", err)
+		}
+		for _, l := range items {
+			if l != nil && l.LogID == logID && l.UserID == userID {
+				log = l
+				break
+			}
+		}
+	}
+	if log == nil && userID == "" {
+		allLogs, err := dp.GetAllSummarizationLogs()
+		if err != nil {
+			return "", fmt.Errorf("failed to get summarization logs: %w", err)
+		}
+		var matches int
+		for _, l := range allLogs {
+			if l != nil && l.LogID == logID {
+				matches++
+				log = l
+			}
+		}
+		if matches > 1 {
+			return "", fmt.Errorf("summarization log %q is not unique; look up with user id", logID)
 		}
 	}
 
@@ -503,7 +525,7 @@ func RenderSummarizationLogDetail(handler *debuger.DebugHandler, logID string) (
 		components.EntityIDCodeBlock(log.LogID),
 		statusBadge,
 		typeBadge,
-		components.EntityIDLink(log.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(log.SessionID)),
+		components.EntityIDLink(log.SessionID, debuger.SessionPath(log.UserID, log.SessionID)),
 		template.HTMLEscapeString(log.SessionTitle),
 		components.Link(log.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(log.UserID)),
 		components.InlineCode(log.ModelUsed),

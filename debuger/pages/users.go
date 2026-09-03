@@ -453,7 +453,7 @@ func RenderUserDetailPage(handler *debuger.DebugHandler, userID string, showDele
 				components.InlineCode(template.HTMLEscapeString(f.MIMEType)),
 				formatBytes(f.Size),
 				debuger.FormatTime(f.CreatedAt),
-				components.EntityIDLink(f.SessionID, "/agentize/debug/sessions/"+template.URLQueryEscaper(f.SessionID)),
+				components.EntityIDLink(f.SessionID, debuger.SessionPath(f.UserID, f.SessionID)),
 			)
 		}
 
@@ -474,8 +474,8 @@ func userConversationRow(conv *model.Conversation) string {
 	if conv.Archived {
 		archived = components.Badge("yes", "secondary")
 	}
-	return fmt.Sprintf(`<tr><td class="text-nowrap">%s</td><td>%s</td><td>%s</td><td>%s</td><td><a href="/agentize/debug/sessions/%s">%s</a></td><td>%s</td></tr>`,
-		template.HTMLEscapeString(formatTimeAgo(conv.UpdatedAt)), components.EntityID(conv.ConversationID), template.HTMLEscapeString(title), template.HTMLEscapeString(conv.Model), url.PathEscape(conv.SessionID), components.EntityID(conv.SessionID), archived)
+	return fmt.Sprintf(`<tr><td class="text-nowrap">%s</td><td>%s</td><td>%s</td><td>%s</td><td><a href="%s">%s</a></td><td>%s</td></tr>`,
+		template.HTMLEscapeString(formatTimeAgo(conv.UpdatedAt)), components.EntityID(conv.ConversationID), template.HTMLEscapeString(title), template.HTMLEscapeString(conv.Model), debuger.SessionPath(conv.UserID, conv.SessionID), components.EntityID(conv.SessionID), archived)
 }
 
 // renderCoreSystemPromptCard renders the "Core System Prompt" card: the ordered
