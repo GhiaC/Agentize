@@ -50,6 +50,7 @@ API, security & observability hardening (improvement roadmap
   screenshots and other files generated during the same turn. Debug artifacts
   strip request/response headers, cookies, POST data, and bodies before
   remaining at rest.
+- **Host tool vision inject.** `engine.InjectToolImage` (also `agentize.InjectToolImage`) lets a host-registered tool put a screenshot into the next LLM request as a multimodal vision message, without writing a user file or requiring `manage_files` `action=read`.
 - **Deterministic Core workflows.** `execute_workflow` accepts an exact Core-tool
   DAG, calls no planner LLM, persists every task transition in `workflow_runs`,
   and requests approval for each immediate task. The admin dashboard exposes

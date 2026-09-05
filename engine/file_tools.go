@@ -258,6 +258,38 @@ func CloseNodeToolDefinition() openai.Tool {
 // the engine loop so it can be injected into the conversation as a vision message.
 const injectImageArgKey = "__inject_image__"
 
+// InjectToolImage attaches image bytes to the current host tool call so the next
+// LLM request sees them as a vision message. Call it on the same args map the
+// tool received. The image is not written to the file store and is not persisted
+// in transcript history. Empty data is a no-op.
+func InjectToolImage(args map[string]any, name, mimeType string, data []byte) {
+	if args == nil || len(data) == 0 {
+		return
+	}
+	mimeType = strings.TrimSpace(mimeType)
+	if mimeType == "" || !strings.HasPrefix(mimeType, "image/") {
+		mimeType = "image/png"
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "image"
+	}
+	args[injectImageArgKey] = &injectedImage{
+		DataURL: fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data)),
+		Name:    name,
+	}
+}
+
+// HasInjectedToolImage reports whether InjectToolImage (or manage_files image
+// read) stashed a vision payload on args.
+func HasInjectedToolImage(args map[string]any) bool {
+	if args == nil {
+		return false
+	}
+	inj, ok := args[injectImageArgKey].(*injectedImage)
+	return ok && inj != nil && inj.DataURL != ""
+}
+
 // usageArgKey is the shared-args key a tool uses to hand model/token usage back
 // to executeTool so the tool's billing/usage event carries the real cost (used
 // by edit_image, whose cost is the underlying image-model call).

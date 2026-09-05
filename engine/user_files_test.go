@@ -283,6 +283,23 @@ func TestManageFilesTool_ReadImageInjects(t *testing.T) {
 	}
 }
 
+func TestInjectToolImageStashesVisionPayload(t *testing.T) {
+	args := map[string]any{}
+	png := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	InjectToolImage(args, "page.png", "image/png", png)
+	if !HasInjectedToolImage(args) {
+		t.Fatal("expected injected image")
+	}
+	inj := args[injectImageArgKey].(*injectedImage)
+	if inj.Name != "page.png" || !strings.HasPrefix(inj.DataURL, "data:image/png;base64,") {
+		t.Fatalf("unexpected inject: %+v", inj)
+	}
+	InjectToolImage(args, "empty.png", "image/png", nil)
+	if args[injectImageArgKey].(*injectedImage).Name != "page.png" {
+		t.Fatal("empty data must not clear a previous inject")
+	}
+}
+
 func TestManageFilesTool_GrepAndEdit(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
 	base := map[string]interface{}{"__user_id__": "user-1", "__session_id__": session.SessionID}

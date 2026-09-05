@@ -545,6 +545,18 @@ func (ag *Agentize) RecordUserFileForUser(userID, name, mimeType string, source 
 	return ag.engine.RecordUserFileForUser(userID, name, mimeType, source, data)
 }
 
+// InjectToolImage attaches image bytes to the current host tool call so the next
+// LLM request sees them as a vision message. Call it on the same args map the
+// tool received. The image is not written to the file store.
+func InjectToolImage(args map[string]any, name, mimeType string, data []byte) {
+	engine.InjectToolImage(args, name, mimeType, data)
+}
+
+// HasInjectedToolImage reports whether InjectToolImage stashed a vision payload.
+func HasInjectedToolImage(args map[string]any) bool {
+	return engine.HasInjectedToolImage(args)
+}
+
 // ListUserFiles returns all files owned by a user, newest first.
 func (ag *Agentize) ListUserFiles(userID string) ([]*model.UserFile, error) {
 	return ag.engine.ListUserFiles(userID)
