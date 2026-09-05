@@ -316,13 +316,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		if name == "" {
 			name = "browser-" + jobID + ".png"
 		}
-		file, err := e.RecordUserFile(
-			sessionID,
-			name,
-			mimeType,
-			model.FileSourceGenerated,
-			screenshot.Data,
-		)
+		file, err := e.recordUserFile(userID, sessionID, name, mimeType, model.FileSourceGenerated, "", screenshot.Data)
 		if err != nil {
 			return "", fmt.Errorf("save browser screenshot: %w", err)
 		}
@@ -399,7 +393,7 @@ func (e *Engine) executeBrowserUseTool(args map[string]interface{}) (string, err
 		if mimeType == "" {
 			mimeType = "application/octet-stream"
 		}
-		file, err := e.RecordUserFile(sessionID, name, mimeType, model.FileSourceGenerated, download.Data)
+		file, err := e.recordUserFile(userID, sessionID, name, mimeType, model.FileSourceGenerated, "", download.Data)
 		if err != nil {
 			return "", fmt.Errorf("save browser download: %w", err)
 		}

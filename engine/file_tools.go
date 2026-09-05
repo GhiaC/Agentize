@@ -440,7 +440,7 @@ func (e *Engine) manageFilesFunction() model.ToolFunction {
 			s, opErr := e.manageFilesGrep(userID, args)
 			return recordFileOp("grep", start, s, opErr)
 		case "save":
-			s, opErr := e.manageFilesSave(sessionID, args)
+			s, opErr := e.manageFilesSave(userID, sessionID, args)
 			return recordFileOp("save", start, s, opErr)
 		case "edit":
 			s, opErr := e.manageFilesEdit(userID, args)
@@ -579,7 +579,7 @@ func (e *Engine) manageFilesRead(userID string, args map[string]interface{}) (st
 		status = "error"
 		return errMsg, nil
 	}
-	data, _, err := e.ReadUserFile(fileID)
+	data, _, err := e.readStoredFile(meta)
 	if err != nil {
 		status = "error"
 		return fmt.Sprintf("Error reading file: %v", err), nil
@@ -670,7 +670,7 @@ func (e *Engine) manageFilesGrep(userID string, args map[string]interface{}) (st
 		if !isTextMIME(f.MIMEType) {
 			continue
 		}
-		data, _, err := e.ReadUserFile(f.FileID)
+		data, _, err := e.readStoredFile(f)
 		if err != nil {
 			continue
 		}
@@ -692,13 +692,13 @@ func (e *Engine) manageFilesGrep(userID string, args map[string]interface{}) (st
 }
 
 // manageFilesSave stores new text content as a generated file for the user.
-func (e *Engine) manageFilesSave(sessionID string, args map[string]interface{}) (string, error) {
+func (e *Engine) manageFilesSave(userID, sessionID string, args map[string]interface{}) (string, error) {
 	name, _ := args["name"].(string)
 	content, _ := args["content"].(string)
 	if name == "" {
 		return "Error: name is required for action=save.", errManageFiles
 	}
-	uf, err := e.RecordUserFile(sessionID, name, "", model.FileSourceGenerated, []byte(content))
+	uf, err := e.recordUserFile(userID, sessionID, name, "", model.FileSourceGenerated, "", []byte(content))
 	if err != nil {
 		return fmt.Sprintf("Error saving file: %v", err), err
 	}
@@ -719,7 +719,7 @@ func (e *Engine) manageFilesEdit(userID string, args map[string]interface{}) (st
 		return fmt.Sprintf("File %s (%s) is not a text file and cannot be edited as text. For images use action=edit_image.", meta.Name, meta.MIMEType), errManageFiles
 	}
 
-	data, _, err := e.ReadUserFile(fileID)
+	data, _, err := e.readStoredFile(meta)
 	if err != nil {
 		return fmt.Sprintf("Error reading file: %v", err), err
 	}
@@ -766,7 +766,7 @@ func (e *Engine) manageFilesEdit(userID string, args map[string]interface{}) (st
 		return "Error: provide old_string (+ new_string) for a targeted edit, or content to overwrite the whole file.", errManageFiles
 	}
 
-	uf, err := e.UpdateUserFileContent(fileID, []byte(updated))
+	uf, err := e.UpdateUserFileContentForUser(userID, fileID, []byte(updated))
 	if err != nil {
 		return fmt.Sprintf("Error writing file: %v", err), err
 	}
@@ -801,7 +801,7 @@ func (e *Engine) manageFilesEditImage(userID, sessionID string, args map[string]
 	}
 	name, _ := args["name"].(string)
 
-	uf, result, err := e.EditImageFile(sessionID, fileID, instruction, name)
+	uf, result, err := e.EditImageFile(userID, sessionID, fileID, instruction, name)
 	if err != nil {
 		return fmt.Sprintf("Error editing image: %v", err), err
 	}
@@ -831,7 +831,7 @@ func (e *Engine) manageFilesDelete(userID string, args map[string]interface{}) (
 		return fmt.Sprintf("Error deleting file bytes: %v", err), err
 	}
 	st, _ := e.userFiles()
-	if err := st.DeleteUserFile(meta.FileID); err != nil {
+	if err := st.DeleteUserFileForUser(userID, meta.FileID); err != nil {
 		return fmt.Sprintf("Error deleting file metadata: %v", err), err
 	}
 	return fmt.Sprintf("Deleted file %s (id=%s).", meta.Name, meta.FileID), nil
@@ -844,21 +844,14 @@ func (e *Engine) getOwnedFileMeta(userID, fileID string) (*model.UserFile, strin
 	if !ok {
 		return nil, "user files are not supported on this deployment."
 	}
-	meta, err := st.GetUserFile(fileID)
+	// Owner-scoped lookup: numeric file ids are unique per user, so an unscoped
+	// GetUserFile fail-closes once two users share the same number.
+	meta, err := st.GetUserFileForUser(userID, fileID)
 	if err != nil {
 		return nil, fmt.Sprintf("Error loading file: %v", err)
 	}
 	if meta == nil {
 		return nil, fmt.Sprintf("File not found: %s", fileID)
-	}
-	// Strict ownership: the file's owner must exactly equal the caller. Both are
-	// derived from session.UserID (file owner set at RecordUserFile, caller
-	// injected by executeTool), so a legitimate owner always matches — including
-	// the single-tenant/no-auth case where both are "". A blanket `userID != ""`
-	// escape hatch is intentionally NOT used: it would let a request that arrives
-	// with an empty user id read ANY user's file by id.
-	if meta.UserID != userID {
-		return nil, "Error: this file does not belong to you."
 	}
 	return meta, ""
 }

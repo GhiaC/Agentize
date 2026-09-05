@@ -238,8 +238,8 @@ func TestManageFilesTool_ReadEnforcesOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read action errored: %v", err)
 	}
-	if !strings.Contains(res, "does not belong to you") {
-		t.Fatalf("expected ownership refusal, got %q", res)
+	if !strings.Contains(res, "File not found") {
+		t.Fatalf("expected missing-file refusal, got %q", res)
 	}
 	if strings.Contains(res, "classified") {
 		t.Fatalf("ownership check leaked content: %q", res)
@@ -362,8 +362,8 @@ func TestManageFilesTool_DeleteEnforcesOwnershipAndRemovesBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(intruderResult, "does not belong to you") {
-		t.Fatalf("expected owner refusal, got %q", intruderResult)
+	if !strings.Contains(intruderResult, "File not found") {
+		t.Fatalf("expected missing-file refusal, got %q", intruderResult)
 	}
 
 	result, err := eng.Functions.Execute("manage_files", map[string]interface{}{
@@ -500,4 +500,74 @@ func extractFileID(t *testing.T, listing string) string {
 		return rest[:end]
 	}
 	return rest
+}
+
+func TestRecordUserFileForUser_NumericSessionIDsAcrossUsers(t *testing.T) {
+	t.Parallel()
+
+	sqliteStore, err := store.NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = sqliteStore.Close() })
+	fs, err := filestore.NewLocalFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("filestore: %v", err)
+	}
+	eng := &Engine{Sessions: sqliteStore, Files: fs, Functions: model.NewFunctionRegistry()}
+	eng.Executor = func(name string, args map[string]interface{}) (string, error) {
+		return eng.Functions.Execute(name, args)
+	}
+	eng.RegisterManageFilesTool()
+
+	alice := model.NewSessionWithType("alice", model.AgentTypeLow)
+	bob := model.NewSessionWithType("bob", model.AgentTypeLow)
+	if alice.SessionID != "1" || bob.SessionID != "1" {
+		t.Fatalf("numeric session ids = %q / %q, want 1 / 1", alice.SessionID, bob.SessionID)
+	}
+	if err := sqliteStore.Put(alice); err != nil {
+		t.Fatalf("put alice: %v", err)
+	}
+	if err := sqliteStore.Put(bob); err != nil {
+		t.Fatalf("put bob: %v", err)
+	}
+
+	aliceFile, err := eng.RecordUserFileForUser("alice", "Journals/BTCUSDT/screenshots/coinglass.png", "image/png", model.FileSourceGenerated, []byte("alice-png"))
+	if err != nil {
+		t.Fatalf("alice RecordUserFileForUser: %v", err)
+	}
+	bobFile, err := eng.RecordUserFileForUser("bob", "Journals/ETHUSDT/screenshots/coinglass.png", "image/png", model.FileSourceGenerated, []byte("bob-png"))
+	if err != nil {
+		t.Fatalf("bob RecordUserFileForUser: %v", err)
+	}
+	if aliceFile.UserID != "alice" || bobFile.UserID != "bob" {
+		t.Fatalf("owners = %q / %q", aliceFile.UserID, bobFile.UserID)
+	}
+	if aliceFile.FileID != bobFile.FileID {
+		t.Fatalf("expected colliding numeric file ids, got %q / %q", aliceFile.FileID, bobFile.FileID)
+	}
+
+	updated, err := eng.UpdateUserFileContentForUser("alice", aliceFile.FileID, []byte("alice-png-2"))
+	if err != nil {
+		t.Fatalf("alice update: %v", err)
+	}
+	if updated.Size != 11 {
+		t.Fatalf("alice size = %d", updated.Size)
+	}
+	aliceData, _, err := eng.ReadUserFileForUser("alice", aliceFile.FileID)
+	if err != nil || string(aliceData) != "alice-png-2" {
+		t.Fatalf("alice read = %q err=%v", aliceData, err)
+	}
+	bobData, _, err := eng.ReadUserFileForUser("bob", bobFile.FileID)
+	if err != nil || string(bobData) != "bob-png" {
+		t.Fatalf("bob read = %q err=%v", bobData, err)
+	}
+
+	save, err := eng.Functions.Execute("manage_files", map[string]interface{}{
+		"__user_id__": "alice", "__session_id__": alice.SessionID,
+		"action": "save", "name": "journal.md", "content": "thesis",
+	})
+	if err != nil || !strings.Contains(save, "Saved file") {
+		t.Fatalf("alice manage_files save = %q err=%v", save, err)
+	}
 }

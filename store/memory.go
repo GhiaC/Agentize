@@ -461,6 +461,10 @@ func (s *DBStore) DeleteUserFile(fileID string) error {
 	return s.sqliteStore.DeleteUserFile(fileID)
 }
 
+func (s *DBStore) DeleteUserFileForUser(userID, fileID string) error {
+	return s.sqliteStore.DeleteUserFileForUser(userID, fileID)
+}
+
 // GetSession is an alias for Get to match DebugStore interface
 func (s *DBStore) GetSession(sessionID string) (*model.Session, error) {
 	return s.Get(sessionID)

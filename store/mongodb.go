@@ -2059,6 +2059,25 @@ func (s *MongoDBStore) DeleteUserFile(fileID string) error {
 	return nil
 }
 
+// DeleteUserFileForUser removes the file owned by userID.
+func (s *MongoDBStore) DeleteUserFileForUser(userID, fileID string) error {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+
+	filter := bson.M{"user_id": userID, "_id": scopedMongoID(userID, fileID)}
+	res, err := s.userFilesCollection.DeleteOne(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("failed to delete user file: %w", err)
+	}
+	if res.DeletedCount == 0 {
+		if _, err := s.userFilesCollection.DeleteOne(ctx, bson.M{"user_id": userID, "_id": fileID}); err != nil {
+			return fmt.Errorf("failed to delete user file: %w", err)
+		}
+	}
+	auditDeletion("user_file", fileID, userID)
+	return nil
+}
+
 // toolCallDocument represents a tool call document in MongoDB.
 // _id is ToolID (our sequential key) so upserts and lookups use ToolID consistently.
 type toolCallDocument struct {

@@ -241,6 +241,11 @@ func (m *meteredStore) DeleteUserFile(fileID string) error {
 	return m.Store.DeleteUserFile(fileID)
 }
 
+func (m *meteredStore) DeleteUserFileForUser(userID, fileID string) error {
+	defer m.observe(m.begin("DeleteUserFileForUser"))
+	return m.Store.DeleteUserFileForUser(userID, fileID)
+}
+
 func (m *meteredStore) PutToolCall(toolCall *model.ToolCall) error {
 	defer m.observe(m.begin("PutToolCall"))
 	return m.Store.PutToolCall(toolCall)

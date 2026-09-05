@@ -22,8 +22,10 @@ import (
 type userFileStore interface {
 	PutUserFile(*model.UserFile) error
 	GetUserFile(string) (*model.UserFile, error)
+	GetUserFileForUser(userID, fileID string) (*model.UserFile, error)
 	GetUserFilesByUser(string) ([]*model.UserFile, error)
 	DeleteUserFile(string) error
+	DeleteUserFileForUser(userID, fileID string) error
 }
 
 // userFiles returns the store narrowed to the user-file methods. The bool is
@@ -62,7 +64,7 @@ func (e *Engine) SetImageEditor(editor ImageEditorFunc) {
 // source should be model.FileSourceUploaded for files the user sent, or
 // model.FileSourceGenerated for files produced for the user.
 func (e *Engine) RecordUserFile(sessionID, name, mimeType string, source model.FileSource, data []byte) (*model.UserFile, error) {
-	return e.recordUserFile(sessionID, name, mimeType, source, "", data)
+	return e.recordUserFile("", sessionID, name, mimeType, source, "", data)
 }
 
 // RecordUserFileForUser records a file without making a host choose an engine
@@ -91,12 +93,15 @@ func (e *Engine) RecordUserFileForUser(userID, name, mimeType string, source mod
 		}
 		sessionID = session.SessionID
 	}
-	return e.RecordUserFile(sessionID, name, mimeType, source, data)
+	return e.recordUserFile(userID, sessionID, name, mimeType, source, "", data)
 }
 
 // recordUserFile is the core implementation; parentFileID links a derived file
 // (e.g. an edited image) back to its original while keeping it independent.
-func (e *Engine) recordUserFile(sessionID, name, mimeType string, source model.FileSource, parentFileID string, data []byte) (*model.UserFile, error) {
+// userID must be passed whenever it is known: numeric session ids are unique
+// per user, and loadOwnedSession("", id) fail-closes when two users share the
+// same number.
+func (e *Engine) recordUserFile(userID, sessionID, name, mimeType string, source model.FileSource, parentFileID string, data []byte) (*model.UserFile, error) {
 	if e.Files == nil {
 		return nil, fmt.Errorf("file store not configured")
 	}
@@ -105,7 +110,7 @@ func (e *Engine) recordUserFile(sessionID, name, mimeType string, source model.F
 		return nil, fmt.Errorf("session store does not support user files")
 	}
 
-	session, err := e.loadOwnedSession("", sessionID)
+	session, err := e.loadOwnedSession(strings.TrimSpace(userID), sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load session: %w", err)
 	}
@@ -172,6 +177,10 @@ func (e *Engine) UpdateUserFileContent(fileID string, data []byte) (*model.UserF
 	if meta == nil {
 		return nil, fmt.Errorf("file not found: %s", fileID)
 	}
+	return e.updateOwnedFileContent(st, meta, data)
+}
+
+func (e *Engine) updateOwnedFileContent(st userFileStore, meta *model.UserFile, data []byte) (*model.UserFile, error) {
 	if _, err := e.Files.Save(meta.StorageKey, bytes.NewReader(data)); err != nil {
 		return nil, fmt.Errorf("failed to write file bytes: %w", err)
 	}
@@ -188,7 +197,8 @@ func (e *Engine) UpdateUserFileContentForUser(userID, fileID string, data []byte
 	if errMsg != "" {
 		return nil, fmt.Errorf("file not found: %s", fileID)
 	}
-	return e.UpdateUserFileContent(meta.FileID, data)
+	st, _ := e.userFiles()
+	return e.updateOwnedFileContent(st, meta, data)
 }
 
 // MoveUserFileForUser changes the virtual user-visible path without moving the
@@ -223,7 +233,7 @@ func (e *Engine) DeleteUserFileForUser(userID, fileID string) error {
 		}
 	}
 	st, _ := e.userFiles()
-	return st.DeleteUserFile(meta.FileID)
+	return st.DeleteUserFileForUser(userID, meta.FileID)
 }
 
 // EditImageFile edits the source image via the configured ImageEditor and saves
@@ -231,11 +241,11 @@ func (e *Engine) DeleteUserFileForUser(userID, fileID string) error {
 // It also returns the editor's *model.ImageEditResult so the caller (the
 // manage_files edit_image action) can attach the image-model usage to its
 // billing/usage event.
-func (e *Engine) EditImageFile(sessionID, sourceFileID, instruction, name string) (*model.UserFile, *model.ImageEditResult, error) {
+func (e *Engine) EditImageFile(userID, sessionID, sourceFileID, instruction, name string) (*model.UserFile, *model.ImageEditResult, error) {
 	if e.ImageEditor == nil {
 		return nil, nil, fmt.Errorf("image editor not configured")
 	}
-	data, meta, err := e.ReadUserFile(sourceFileID)
+	data, meta, err := e.ReadUserFileForUser(userID, sourceFileID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -258,7 +268,7 @@ func (e *Engine) EditImageFile(sessionID, sourceFileID, instruction, name string
 	if name == "" {
 		name = derivedImageName(meta.Name, editedMIME)
 	}
-	uf, err := e.recordUserFile(sessionID, name, editedMIME, model.FileSourceGenerated, meta.FileID, result.Data)
+	uf, err := e.recordUserFile(userID, sessionID, name, editedMIME, model.FileSourceGenerated, meta.FileID, result.Data)
 	if err != nil {
 		log.Log.Warnf("[Engine] ❌ edit_image save failed | source=%s | err=%v", sourceFileID, err)
 		return nil, result, err
@@ -286,6 +296,13 @@ func (e *Engine) ReadUserFile(fileID string) ([]byte, *model.UserFile, error) {
 		return nil, nil, fmt.Errorf("file not found: %s", fileID)
 	}
 
+	return e.readStoredFile(meta)
+}
+
+func (e *Engine) readStoredFile(meta *model.UserFile) ([]byte, *model.UserFile, error) {
+	if e.Files == nil {
+		return nil, meta, fmt.Errorf("file store not configured")
+	}
 	rc, err := e.Files.Open(meta.StorageKey)
 	if err != nil {
 		return nil, meta, fmt.Errorf("failed to open file bytes: %w", err)
@@ -309,11 +326,7 @@ func (e *Engine) ReadUserFileForUser(userID, fileID string) ([]byte, *model.User
 		// Do not reveal whether a file owned by another user exists.
 		return nil, nil, fmt.Errorf("file not found: %s", fileID)
 	}
-	data, _, err := e.ReadUserFile(meta.FileID)
-	if err != nil {
-		return nil, meta, err
-	}
-	return data, meta, nil
+	return e.readStoredFile(meta)
 }
 
 // ListUserFiles returns all files owned by the user, newest first.

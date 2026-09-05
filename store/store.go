@@ -77,6 +77,9 @@ type Store interface {
 	// numeric FileIDs that are not globally unique.
 	GetUserFileForUser(userID, fileID string) (*model.UserFile, error)
 	DeleteUserFile(fileID string) error
+	// DeleteUserFileForUser removes the file owned by userID. Required when
+	// numeric FileIDs collide across users.
+	DeleteUserFileForUser(userID, fileID string) error
 	PutToolCall(toolCall *model.ToolCall) error
 	UpdateToolCallResponse(toolID string, response string, execErr error) error
 	UpdateUserToolCallResponse(userID, sessionID, toolID string, response string, execErr error) error

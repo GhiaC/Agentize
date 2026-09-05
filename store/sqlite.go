@@ -2146,10 +2146,25 @@ func (s *SQLiteStore) DeleteUserFile(fileID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.errIfAmbiguousLocked("user_files", "file_id", fileID); err != nil {
+		return err
+	}
 	if _, err := s.execWrite("DELETE FROM user_files WHERE file_id = ?", fileID); err != nil {
 		return fmt.Errorf("failed to delete user file: %w", err)
 	}
 	auditDeletion("user_file", fileID, "")
+	return nil
+}
+
+// DeleteUserFileForUser removes the file owned by userID.
+func (s *SQLiteStore) DeleteUserFileForUser(userID, fileID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.execWrite("DELETE FROM user_files WHERE user_id = ? AND file_id = ?", userID, fileID); err != nil {
+		return fmt.Errorf("failed to delete user file: %w", err)
+	}
+	auditDeletion("user_file", fileID, userID)
 	return nil
 }
 
