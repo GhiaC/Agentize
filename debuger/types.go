@@ -40,6 +40,7 @@ type DebugStore interface {
 	// when not found; the list queries return newest-first.
 	GetRouteTraceByID(traceID string) (*model.RouteTrace, error)
 	GetRouteTracesBySession(sessionID string) ([]*model.RouteTrace, error)
+	GetUserRouteTracesBySession(userID, sessionID string) ([]*model.RouteTrace, error)
 	GetRouteTracesByUser(userID string) ([]*model.RouteTrace, error)
 	GetAllRouteTraces() ([]*model.RouteTrace, error)
 

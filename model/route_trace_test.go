@@ -176,3 +176,14 @@ func TestRouteTraceBuilder_ToolKeepsPersistedIDs(t *testing.T) {
 		t.Fatalf("turn identity = %+v", tr)
 	}
 }
+
+func TestRouteTraceBuilderSnapshotCopiesGraph(t *testing.T) {
+	s := NewSessionWithType("user-1", AgentTypeCore)
+	b := NewRouteTraceBuilder(s, "hello")
+	first := b.Snapshot(0)
+	b.Decision("Decision", "gpt-x", 10, 5, RouteStatusOK, "")
+	second := b.Snapshot(0)
+	if len(first.Nodes) == len(second.Nodes) {
+		t.Fatal("snapshot must not share the live node slice")
+	}
+}

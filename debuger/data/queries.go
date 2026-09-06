@@ -333,6 +333,17 @@ func (dp *DataProvider) GetRouteTracesBySession(sessionID string) ([]*model.Rout
 	return traces, nil
 }
 
+func (dp *DataProvider) GetUserRouteTracesBySession(userID, sessionID string) ([]*model.RouteTrace, error) {
+	traces, err := dp.store.GetUserRouteTracesBySession(userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(traces, func(i, j int) bool {
+		return traces[i].CreatedAt.After(traces[j].CreatedAt)
+	})
+	return traces, nil
+}
+
 func (dp *DataProvider) GetRouteTracesByUser(userID string) ([]*model.RouteTrace, error) {
 	traces, err := dp.store.GetRouteTracesByUser(userID)
 	if err != nil {

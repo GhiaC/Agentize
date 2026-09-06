@@ -41,7 +41,7 @@ func turnRecorderFrom(ctx context.Context) *model.RouteTraceBuilder {
 }
 
 func persistTurnTrace(st store.Store, b *model.RouteTraceBuilder, total time.Duration) {
-	trace := b.Build(total)
+	trace := b.Snapshot(total)
 	if trace == nil || st == nil {
 		return
 	}

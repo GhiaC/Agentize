@@ -226,6 +226,23 @@ func GetStyles() string {
         .table-light, .table-light > th, .table-light > td {
             --bs-table-bg: var(--surface-2); background: var(--surface-2); color: var(--text);
         }
+        .table-hover > tbody > tr.msg-expand-details,
+        .table-hover > tbody > tr.msg-expand-details:hover,
+        .table-hover > tbody > tr.msg-expand-details > *,
+        .table-hover > tbody > tr.msg-expand-details:hover > * {
+            --bs-table-bg-state: var(--surface-2);
+            --bs-table-accent-bg: transparent;
+            background: var(--surface-2) !important;
+            color: var(--text) !important;
+            box-shadow: none;
+        }
+        .btn-outline-secondary.msg-expand-btn:hover,
+        .btn-outline-secondary.msg-expand-btn:focus {
+            background: transparent;
+            color: var(--text-2);
+            border-color: var(--border);
+            filter: none;
+        }
 
         /* ============ Agent-type row accents ============ */
         /* Session rows are colour-coded by agent type with a slim rail on the

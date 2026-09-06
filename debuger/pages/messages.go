@@ -75,6 +75,25 @@ func RenderMessages(handler *debuger.DebugHandler, page int, userID, sessionID s
 		rowConfig := components.DefaultMessageRowConfig()
 		rowConfig.ShowUser = true
 		rowConfig.ShowSession = true
+		usersByID := map[string]*model.User{}
+		if users, userErr := dp.GetAllUsers(); userErr == nil {
+			for _, user := range users {
+				if user != nil && user.UserID != "" {
+					usersByID[user.UserID] = user
+				}
+			}
+		}
+		rowConfig.Users = usersByID
+		routeByMessage := map[string]string{}
+		if traces, traceErr := dp.GetAllRouteTraces(); traceErr == nil {
+			for _, tr := range traces {
+				if tr == nil || tr.UserMessageID == "" {
+					continue
+				}
+				routeByMessage[tr.UserMessageID] = debuger.RoutePath(tr.UserID, tr.SessionID, tr.TraceID)
+			}
+		}
+		rowConfig.RouteByMessageID = routeByMessage
 
 		columns := components.MessageTableColumns(rowConfig)
 		content += components.TableStartWithConfig(columns, components.DefaultTableConfig())

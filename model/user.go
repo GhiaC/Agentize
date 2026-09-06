@@ -57,6 +57,39 @@ type User struct {
 	UpdatedAt time.Time
 }
 
+// DisplayLabel is the operator-facing identity: name, then username, then UserID.
+func (u *User) DisplayLabel() string {
+	if u == nil {
+		return ""
+	}
+	name := strings.TrimSpace(u.Name)
+	username := strings.TrimSpace(u.Username)
+	switch {
+	case name != "" && username != "":
+		return name + " (@" + username + ")"
+	case name != "":
+		return name
+	case username != "":
+		return "@" + username
+	default:
+		return strings.TrimSpace(u.UserID)
+	}
+}
+
+// DisplayName is the preferred short name without wrapping the username.
+func (u *User) DisplayName() string {
+	if u == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(u.Name); name != "" {
+		return name
+	}
+	if username := strings.TrimSpace(u.Username); username != "" {
+		return username
+	}
+	return strings.TrimSpace(u.UserID)
+}
+
 // NewUser creates a new user. An empty userID is filled with a random 8-digit
 // Agentize user id. A host-supplied id is stored unchanged.
 func NewUser(userID string) *User {

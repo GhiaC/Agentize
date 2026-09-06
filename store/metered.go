@@ -503,6 +503,11 @@ func (m *meteredStore) GetRouteTracesBySession(sessionID string) ([]*model.Route
 	return m.Store.GetRouteTracesBySession(sessionID)
 }
 
+func (m *meteredStore) GetUserRouteTracesBySession(userID, sessionID string) ([]*model.RouteTrace, error) {
+	defer m.observe(m.begin("GetUserRouteTracesBySession"))
+	return m.Store.GetUserRouteTracesBySession(userID, sessionID)
+}
+
 func (m *meteredStore) GetRouteTracesByUser(userID string) ([]*model.RouteTrace, error) {
 	defer m.observe(m.begin("GetRouteTracesByUser"))
 	return m.Store.GetRouteTracesByUser(userID)

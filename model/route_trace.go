@@ -494,3 +494,20 @@ func (b *RouteTraceBuilder) Build(total time.Duration) *RouteTrace {
 	}
 	return b.trace
 }
+
+// Snapshot returns a copy of the in-progress DAG so callers can persist it
+// without racing later node appends on the live builder.
+func (b *RouteTraceBuilder) Snapshot(total time.Duration) *RouteTrace {
+	tr := b.Build(total)
+	if tr == nil {
+		return nil
+	}
+	out := *tr
+	if len(tr.Nodes) > 0 {
+		out.Nodes = append([]RouteNode(nil), tr.Nodes...)
+	}
+	if len(tr.Edges) > 0 {
+		out.Edges = append([]RouteEdge(nil), tr.Edges...)
+	}
+	return &out
+}

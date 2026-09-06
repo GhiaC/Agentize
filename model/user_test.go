@@ -2,6 +2,18 @@ package model
 
 import "testing"
 
+func TestDisplayLabelPrefersNameAndUsername(t *testing.T) {
+	if got := (&User{UserID: "12345678", Name: "Ada", Username: "ada"}).DisplayLabel(); got != "Ada (@ada)" {
+		t.Fatalf("label = %q", got)
+	}
+	if got := (&User{UserID: "12345678", Username: "ada"}).DisplayLabel(); got != "@ada" {
+		t.Fatalf("username label = %q", got)
+	}
+	if got := (&User{UserID: "12345678"}).DisplayLabel(); got != "12345678" {
+		t.Fatalf("id fallback = %q", got)
+	}
+}
+
 func TestResetAfterDataDelete(t *testing.T) {
 	u := NewUser("user-1")
 	u.ContextSummary = SummaryEntries{"durable fact"}

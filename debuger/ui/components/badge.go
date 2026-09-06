@@ -87,11 +87,14 @@ type agentTypeStyle struct {
 
 var agentTypeStyles = map[model.AgentType]agentTypeStyle{
 	model.AgentTypeCore:         {label: "Core", badge: "primary", rowClass: "row-agent-core"},
-	model.AgentTypeHigh:         {label: "High", badge: "success", rowClass: "row-agent-high"},
-	model.AgentTypeLow:          {label: "Low", badge: "info", rowClass: "row-agent-low"},
-	model.AgentTypeConversation: {label: "Conv", badge: "dark", rowClass: "row-agent-user"},
-	model.AgentTypeSub:          {label: "Sub", badge: "secondary", rowClass: "row-agent-low"},
-	model.AgentTypeUser:         {label: "User", badge: "warning", rowClass: "row-agent-user"},
+	model.AgentTypeSchedule:     {label: "Schedule", badge: "info", rowClass: "row-agent-low"},
+	model.AgentTypeAlert:        {label: "Alert", badge: "warning", rowClass: "row-agent-user"},
+	model.AgentTypeWorkflow:     {label: "Workflow", badge: "secondary", rowClass: "row-agent-low"},
+	model.AgentTypeHigh:         {label: "Core", badge: "primary", rowClass: "row-agent-core"},
+	model.AgentTypeLow:          {label: "Core", badge: "primary", rowClass: "row-agent-core"},
+	model.AgentTypeConversation: {label: "Core", badge: "primary", rowClass: "row-agent-core"},
+	model.AgentTypeSub:          {label: "Core", badge: "primary", rowClass: "row-agent-core"},
+	model.AgentTypeUser:         {label: "Core", badge: "primary", rowClass: "row-agent-core"},
 }
 
 // AgentTypeBadge generates a badge for agent types (string). Use AgentTypeBadgeFromModel for model.AgentType.
@@ -101,13 +104,17 @@ func AgentTypeBadge(agentType string) string {
 
 // AgentTypeBadgeFromModel returns a soft-pill badge for an agent type.
 func AgentTypeBadgeFromModel(agentType model.AgentType) string {
+	shown := model.CanonicalAgentType(agentType)
+	if s, ok := agentTypeStyles[shown]; ok {
+		return Badge(s.label, s.badge)
+	}
 	if s, ok := agentTypeStyles[agentType]; ok {
 		return Badge(s.label, s.badge)
 	}
 	if agentType == "" {
 		return Badge("-", "secondary")
 	}
-	return Badge(string(agentType), "secondary")
+	return Badge(string(shown), "secondary")
 }
 
 // AgentTypeBadgeFromString returns a badge for agent type from string.
@@ -120,6 +127,10 @@ func AgentTypeBadgeFromString(agentType string) string {
 // wash for Core, the primary agent). Empty or unknown types get no accent.
 // The classes are defined in debuger/ui/styles.go.
 func AgentTypeRowClass(agentType model.AgentType) string {
+	shown := model.CanonicalAgentType(agentType)
+	if s, ok := agentTypeStyles[shown]; ok {
+		return s.rowClass
+	}
 	if s, ok := agentTypeStyles[agentType]; ok {
 		return s.rowClass
 	}

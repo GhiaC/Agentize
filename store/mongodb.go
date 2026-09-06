@@ -1616,6 +1616,7 @@ func decodeMessageCursor(ctx context.Context, cursor *mongo.Cursor) ([]*model.Me
 		if err := unmarshalJSONOrBSON(doc.Data, message); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal message: %w", err)
 		}
+		message.HydrateUsageMeta()
 
 		messages = append(messages, message)
 	}
@@ -1661,6 +1662,7 @@ func (s *MongoDBStore) GetMessagesByUser(userID string) ([]*model.Message, error
 		if err := unmarshalJSONOrBSON(doc.Data, message); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal message: %w", err)
 		}
+		message.HydrateUsageMeta()
 
 		messages = append(messages, message)
 	}
@@ -1690,6 +1692,7 @@ func (s *MongoDBStore) GetAllMessages() ([]*model.Message, error) {
 		if err := unmarshalJSONOrBSON(doc.Data, message); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal message: %w", err)
 		}
+		message.HydrateUsageMeta()
 
 		messages = append(messages, message)
 	}
@@ -2580,6 +2583,10 @@ func (s *MongoDBStore) GetRouteTraceByID(traceID string) (*model.RouteTrace, err
 // GetRouteTracesBySession returns all traces for a session, newest first.
 func (s *MongoDBStore) GetRouteTracesBySession(sessionID string) ([]*model.RouteTrace, error) {
 	return s.queryRouteTraces(bson.M{"session_id": sessionID})
+}
+
+func (s *MongoDBStore) GetUserRouteTracesBySession(userID, sessionID string) ([]*model.RouteTrace, error) {
+	return s.queryRouteTraces(bson.M{"user_id": userID, "session_id": sessionID})
 }
 
 // GetRouteTracesByUser returns all traces for a user, newest first.

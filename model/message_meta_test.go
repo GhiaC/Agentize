@@ -25,6 +25,46 @@ func TestNewScheduleMessageMetaKeepsFullResultOffTheSummary(t *testing.T) {
 	}
 }
 
+func TestHydrateUsageMetaRoundTrip(t *testing.T) {
+	msg := &Message{CostCredits: 1.25, DurationMs: 840}
+	msg.HydrateUsageMeta()
+	if msg.Metadata[messageMetaCostCredits] != 1.25 {
+		t.Fatalf("cost meta = %#v", msg.Metadata)
+	}
+	loaded := &Message{Metadata: msg.Metadata}
+	loaded.HydrateUsageMeta()
+	if loaded.CostCredits != 1.25 || loaded.DurationMs != 840 {
+		t.Fatalf("hydrated = %+v", loaded)
+	}
+}
+
+func TestCanonicalAgentTypeAndMessageKind(t *testing.T) {
+	if CanonicalAgentType(AgentTypeLow) != AgentTypeCore || CanonicalAgentType(AgentTypeConversation) != AgentTypeCore {
+		t.Fatal("deprecated tiers must display as core")
+	}
+	if CanonicalAgentType(AgentTypeSchedule) != AgentTypeSchedule || CanonicalAgentType(AgentTypeAlert) != AgentTypeAlert {
+		t.Fatal("schedule and alert must stay distinct")
+	}
+	if AgentTypeForMessage(nil, AgentTypeUser) != AgentTypeCore {
+		t.Fatal("regular chat messages are core")
+	}
+	if AgentTypeForMessage(NewScheduleMessageMeta(&TaskSchedule{ScheduleID: "1", Name: "n"}), AgentTypeCore) != AgentTypeSchedule {
+		t.Fatal("schedule metadata must select schedule type")
+	}
+	if AgentTypeForMessage(NewAlertMessageMeta("a", "fired", "", nil), AgentTypeCore) != AgentTypeAlert {
+		t.Fatal("alert metadata must select alert type")
+	}
+}
+
+func TestSessionHasScheduleTag(t *testing.T) {
+	if (&Session{}).HasScheduleTag() || (&Session{Tags: []string{"chat"}}).HasScheduleTag() {
+		t.Fatal("untagged sessions are not schedule workers")
+	}
+	if !(&Session{Tags: []string{"schedule"}}).HasScheduleTag() || !(&Session{Tags: []string{"schedule:9"}}).HasScheduleTag() {
+		t.Fatal("schedule tags must match")
+	}
+}
+
 func TestNewAlertMessageMetaKeepsDetailOffTheSummary(t *testing.T) {
 	meta := NewAlertMessageMeta("BTCUSDT 1h close", "fired", "Price crossed 74000", map[string]any{
 		"symbol": "BTCUSDT", "interval": "1h", "rule_id": "rule-9", "conversation_id": "alice-c0001",

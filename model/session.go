@@ -146,6 +146,12 @@ type AgentType string
 
 const (
 	AgentTypeCore AgentType = "core"
+	// AgentTypeSchedule marks messages and sessions produced by a task schedule.
+	AgentTypeSchedule AgentType = "schedule"
+	// AgentTypeAlert marks messages produced by a fired alert.
+	AgentTypeAlert AgentType = "alert"
+	// Deprecated: high/low were model-tier names. New messages use Core plus
+	// the tools and LLM model on the session, or Schedule/Alert for automations.
 	AgentTypeHigh AgentType = "high"
 	AgentTypeLow  AgentType = "low"
 	AgentTypeUser AgentType = "user"
@@ -160,6 +166,33 @@ const (
 	// session type.
 	AgentTypeWorkflow AgentType = "workflow"
 )
+
+// CanonicalAgentType maps leftover high/low/conv/user/sub rows onto the types
+// operators should see: core for the chat agent, plus schedule and alert.
+func CanonicalAgentType(agentType AgentType) AgentType {
+	switch agentType {
+	case AgentTypeSchedule, AgentTypeAlert, AgentTypeCore, AgentTypeWorkflow:
+		return agentType
+	default:
+		return AgentTypeCore
+	}
+}
+
+// AgentTypeForMessage chooses the durable message type from origin metadata.
+// Regular chat traffic is Core. Schedule and alert keep distinct types so IDs
+// stay numeric while the kind lives on AgentType, not concatenated into MessageID.
+func AgentTypeForMessage(meta map[string]any, fallback AgentType) AgentType {
+	switch strings.ToLower(MessageMetaString(meta, "kind")) {
+	case MessageMetaKindSchedule:
+		return AgentTypeSchedule
+	case MessageMetaKindAlert:
+		return AgentTypeAlert
+	}
+	if fallback == "" {
+		return AgentTypeCore
+	}
+	return CanonicalAgentType(fallback)
+}
 
 // Session represents a user session in the agent system
 // All fields are flattened for simple database storage and loading
@@ -238,6 +271,20 @@ type Session struct {
 
 	// ==================== Internal (not persisted) ====================
 	seqMu sync.Mutex `bson:"-" json:"-"` // Mutex for thread-safe sequence operations
+}
+
+// HasScheduleTag reports whether this session is a dedicated schedule worker.
+func (s *Session) HasScheduleTag() bool {
+	if s == nil {
+		return false
+	}
+	for _, tag := range s.Tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "schedule" || strings.HasPrefix(tag, "schedule:") {
+			return true
+		}
+	}
+	return false
 }
 
 // NodeDigest is a lightweight representation of a node (for memory efficiency)

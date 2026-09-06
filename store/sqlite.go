@@ -1578,6 +1578,7 @@ func scanMessages(rows *sql.Rows) ([]*model.Message, error) {
 				msg.Metadata = meta
 			}
 		}
+		msg.HydrateUsageMeta()
 		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
@@ -2781,7 +2782,7 @@ func (s *SQLiteStore) GetRouteTraceByID(traceID string) (*model.RouteTrace, erro
 		return nil, err
 	}
 
-	var data string
+	var data []byte
 	err := s.db.QueryRow(`SELECT data FROM route_traces WHERE trace_id = ?`, traceID).Scan(&data)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -2790,7 +2791,7 @@ func (s *SQLiteStore) GetRouteTraceByID(traceID string) (*model.RouteTrace, erro
 		return nil, fmt.Errorf("failed to query route trace: %w", err)
 	}
 	trace := &model.RouteTrace{}
-	if err := json.Unmarshal([]byte(data), trace); err != nil {
+	if err := json.Unmarshal(data, trace); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal route trace: %w", err)
 	}
 	return trace, nil
@@ -2804,6 +2805,22 @@ func (s *SQLiteStore) GetRouteTracesBySession(sessionID string) ([]*model.RouteT
 	rows, err := s.db.Query(
 		`SELECT data FROM route_traces WHERE session_id = ? ORDER BY created_at DESC, trace_id DESC`,
 		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query route traces: %w", err)
+	}
+	defer rows.Close()
+	return scanRouteTraces(rows)
+}
+
+// GetUserRouteTracesBySession returns traces for one user-owned session.
+func (s *SQLiteStore) GetUserRouteTracesBySession(userID, sessionID string) ([]*model.RouteTrace, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(
+		`SELECT data FROM route_traces WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC, trace_id DESC`,
+		userID, sessionID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query route traces: %w", err)
@@ -2845,12 +2862,12 @@ func (s *SQLiteStore) GetAllRouteTraces() ([]*model.RouteTrace, error) {
 func scanRouteTraces(rows *sql.Rows) ([]*model.RouteTrace, error) {
 	var traces []*model.RouteTrace
 	for rows.Next() {
-		var data string
+		var data []byte
 		if err := rows.Scan(&data); err != nil {
 			return nil, fmt.Errorf("failed to scan route trace: %w", err)
 		}
 		trace := &model.RouteTrace{}
-		if err := json.Unmarshal([]byte(data), trace); err != nil {
+		if err := json.Unmarshal(data, trace); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal route trace: %w", err)
 		}
 		traces = append(traces, trace)

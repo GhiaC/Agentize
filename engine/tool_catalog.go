@@ -273,6 +273,7 @@ func (e *Engine) recordSearchToolsOnTurn(ctx context.Context, session *model.Ses
 	persister.Update(session, messageID, toolID, result, nil)
 	rec := turnRecorderFrom(ctx)
 	rec.Tool(model.RouteNodeToolCall, searchToolsName, "Search tools", toolCall.Function.Arguments, model.RouteStatusOK, 0, toolID, toolCall.ID)
+	persistTurnTrace(e.Sessions, rec, 0)
 }
 
 func appendUniqueTool(names []string, name string) []string {

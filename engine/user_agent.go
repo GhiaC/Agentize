@@ -520,8 +520,9 @@ func (w *openAIClientWrapperForSessionHandler) CreateChatCompletion(ctx context.
 // CreateSession initializes a fresh session anchored at the root node.
 // Uses store.GetNextSessionSeq for proper sequential ID generation
 func (e *Engine) CreateSession(userID string) (*model.Session, error) {
-	// Get next sequence number from store (default to AgentTypeLow for Engine sessions)
-	agentType := model.AgentTypeLow
+	// Get next sequence number from store (the Engine chat agent is Core;
+	// schedule/alert are separate types on automated messages).
+	agentType := model.AgentTypeCore
 	seq, err := e.Sessions.GetNextSessionSeq(userID, agentType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get next session seq: %w", err)
@@ -890,9 +891,16 @@ func (e *Engine) processMessageLocked(
 }
 
 func (e *Engine) drainSessionQueues(ctx context.Context, key, sessionID string) {
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
 	drained := false
 	var lastErr error
 	for {
+		if ctx != nil && ctx.Err() != nil {
+			lastErr = ctx.Err()
+			break
+		}
 		if item, ok := e.sessionProgress.TakeUser(key); ok {
 			drained = true
 			if _, _, qErr := e.processOneMessageBody(ctx, sessionID, incomingFromQueued(item, QueueUser)); qErr != nil {
@@ -962,6 +970,7 @@ func (e *Engine) processOneMessageBody(ctx context.Context, sessionID string, ms
 		ctx = withTurnRecorder(ctx, rec)
 		e.persistSessionRunState(session, StatusReceived, "", true, userMsg.MessageID)
 		traceStart := time.Now()
+		persistTurnTrace(e.Sessions, rec, 0)
 		defer func() { persistTurnTrace(e.Sessions, rec, time.Since(traceStart)) }()
 
 		response, tokens, err := e.processChatRequest(ctx, sessionID, msg.queueClass())
@@ -984,6 +993,7 @@ func (e *Engine) appendIncomingUserMessage(session *model.Session, msg IncomingM
 	userMsgID, userSeqID := session.GenerateMessageIDWithSeq()
 	userMsg := model.NewUserMessage(userMsgID, userSeqID, session.UserID, session.SessionID, msg.Content, model.ContentTypeText)
 	userMsg.Metadata = cloneIncomingMeta(msg.Metadata)
+	userMsg.AgentType = model.AgentTypeForMessage(userMsg.Metadata, model.AgentTypeUser)
 	if err := e.Sessions.Put(session); err != nil {
 		return nil, fmt.Errorf("failed to save session: %w", err)
 	}
@@ -1015,6 +1025,7 @@ func (e *Engine) absorbQueuedUserMessages(ctx context.Context, session *model.Se
 		userMsgID, userSeqID := session.GenerateMessageIDWithSeq()
 		userMsg := model.NewUserMessage(userMsgID, userSeqID, session.UserID, session.SessionID, item.Content, model.ContentTypeText)
 		userMsg.Metadata = cloneIncomingMeta(item.Metadata)
+		userMsg.AgentType = model.AgentTypeForMessage(userMsg.Metadata, model.AgentTypeUser)
 		if err := e.Sessions.Put(session); err != nil {
 			log.Log.Warnf("[Engine] ⚠️  Failed to save session after injecting user message | Error: %v", err)
 		}
@@ -1767,7 +1778,7 @@ func (e *Engine) processChatRequest(
 		}
 		totalTokenUsage += resp.Usage.TotalTokens
 
-		// Record usage callback
+		cost := 0.0
 		if e.Callback != nil {
 			ev := &UsageEvent{
 				UserID:       session.UserID,
@@ -1784,6 +1795,7 @@ func (e *Engine) processChatRequest(
 				ev.CachedInputTokens = resp.Usage.PromptTokensDetails.CachedTokens
 			}
 			e.Callback.AfterAction(ctx, ev)
+			cost = ev.Cost
 			session.AddUsage(ev.InputTokens, ev.OutputTokens, ev.Cost)
 		} else {
 			session.AddUsage(resp.Usage.PromptTokens, resp.Usage.CompletionTokens, 0)
@@ -1794,7 +1806,7 @@ func (e *Engine) processChatRequest(
 
 		// Save LLM message to DB
 		request := openai.ChatCompletionRequest{Model: modelName, Messages: reqMessages, Tools: openaiTools}
-		messageID := e.saveMessage(session, request, resp, choice)
+		messageID := e.saveMessage(session, request, resp, choice, cost, llmDuration.Milliseconds())
 		rec.Decision(
 			fmt.Sprintf("Decision %d", i+1),
 			modelName,
@@ -1803,6 +1815,7 @@ func (e *Engine) processChatRequest(
 			model.RouteStatusOK,
 			fmt.Sprintf("finish_reason=%s · tool_calls=%d", choice.FinishReason, len(choice.Message.ToolCalls)),
 		)
+		persistTurnTrace(e.Sessions, rec, 0)
 
 		// Handle tool calls
 		if choice.FinishReason == openai.FinishReasonToolCalls {
@@ -1890,6 +1903,8 @@ func (e *Engine) saveMessage(
 	request openai.ChatCompletionRequest,
 	response openai.ChatCompletionResponse,
 	choice openai.ChatCompletionChoice,
+	cost float64,
+	durationMs int64,
 ) string {
 	// Get user message content
 	content := choice.Message.Content
@@ -1897,7 +1912,10 @@ func (e *Engine) saveMessage(
 		content = FormatToolCallsContent(choice.Message.ToolCalls)
 	}
 
-	// Create message record
+	agentType := model.AgentTypeCore
+	if session != nil && session.HasScheduleTag() {
+		agentType = model.AgentTypeSchedule
+	}
 	messageID, seqID := session.GenerateMessageIDWithSeq()
 	msg := model.NewMessage(
 		messageID,
@@ -1906,14 +1924,16 @@ func (e *Engine) saveMessage(
 		session.SessionID,
 		openai.ChatMessageRoleAssistant,
 		content,
-		model.AgentTypeLow,
+		model.AgentTypeForMessage(nil, agentType),
 		model.ContentTypeText,
 		request,
 		response,
 		choice,
 	)
+	msg.CostCredits = cost
+	msg.DurationMs = durationMs
+	msg.HydrateUsageMeta()
 
-	// Save to database
 	if err := e.Sessions.PutMessage(msg); err != nil {
 		log.Log.Warnf("[Engine] ⚠️  Failed to save message | SessionID: %s | Error: %v", session.SessionID, err)
 	} else {
@@ -2068,6 +2088,7 @@ func (e *Engine) executeTool(
 	} else {
 		rec.Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, toolCall.Function.Arguments, model.RouteStatusOK, toolDuration.Milliseconds(), toolID, toolCall.ID)
 	}
+	persistTurnTrace(e.Sessions, rec, 0)
 
 	// Process result (truncate if needed). Pass the live session so an oversized
 	// result is stored on it and persisted by the caller's single Put(session);

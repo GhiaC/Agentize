@@ -524,6 +524,10 @@ func (s *DBStore) GetRouteTracesBySession(sessionID string) ([]*model.RouteTrace
 	return s.sqliteStore.GetRouteTracesBySession(sessionID)
 }
 
+func (s *DBStore) GetUserRouteTracesBySession(userID, sessionID string) ([]*model.RouteTrace, error) {
+	return s.sqliteStore.GetUserRouteTracesBySession(userID, sessionID)
+}
+
 // GetRouteTracesByUser returns route traces for a user (delegates to SQLiteStore)
 func (s *DBStore) GetRouteTracesByUser(userID string) ([]*model.RouteTrace, error) {
 	return s.sqliteStore.GetRouteTracesByUser(userID)

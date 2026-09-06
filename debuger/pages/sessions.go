@@ -82,17 +82,17 @@ func RenderSessions(handler *debuger.DebugHandler, page int) (string, error) {
 	} else {
 		// Configure session row display
 		rowConfig := components.DefaultSessionRowConfig()
-			rowConfig.ShowUser = true
-			rowConfig.GetFilesCount = func(userID, sessionID string) int {
-				files, _ := handler.GetStore().GetOpenedFilesByUser(userID)
-				n := 0
-				for _, file := range files {
-					if file != nil && file.SessionID == sessionID {
-						n++
-					}
+		rowConfig.ShowUser = true
+		rowConfig.GetFilesCount = func(userID, sessionID string) int {
+			files, _ := handler.GetStore().GetOpenedFilesByUser(userID)
+			n := 0
+			for _, file := range files {
+				if file != nil && file.SessionID == sessionID {
+					n++
 				}
-				return n
 			}
+			return n
+		}
 
 		columns := components.SessionTableColumns(rowConfig)
 		content += components.TableStartWithConfig(columns, components.TableConfig{
@@ -231,13 +231,15 @@ func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionI
 		}
 	}
 
+	user, _ := dp.GetUser(session.UserID)
+
 	content := ui.ContainerStart()
 
 	// Breadcrumb
 	content += components.Breadcrumb([]components.BreadcrumbItem{
 		{Label: "Dashboard", URL: "/agentize/debug"},
 		{Label: "Users", URL: "/agentize/debug/users"},
-		{Label: session.UserID, URL: "/agentize/debug/users/" + template.URLQueryEscaper(session.UserID)},
+		{Label: components.UserDisplayLabel(user, session.UserID), URL: "/agentize/debug/users/" + template.URLQueryEscaper(session.UserID)},
 		{Label: "Session", Active: true},
 	})
 
@@ -369,7 +371,7 @@ func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionI
 		inProgressBadge,
 		agentTypeBadge,
 		components.InlineCode(debuger.GetModelDisplay(session.Model)),
-		components.Link(session.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(session.UserID)),
+		components.Link(components.UserDisplayLabel(user, session.UserID), "/agentize/debug/users/"+template.URLQueryEscaper(session.UserID)),
 		summaryDisplay,
 		tagsDisplay,
 		components.Badge(fmt.Sprintf("%d active", activeMessagesCount), "primary"),
@@ -422,7 +424,6 @@ func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionI
 	content += components.RenderPromptArray(components.PromptEntriesFromSnapshot(systemPrompts))
 	content += collapsibleCardEnd()
 
-	user, _ := dp.GetUser(session.UserID)
 	content += renderUserContextCard(user)
 	content += renderSessionContextCard(session, nil)
 
@@ -433,9 +434,12 @@ func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionI
 		content += components.InfoAlert("No messages found for this session.")
 	} else {
 		rowConfig := components.DefaultMessageRowConfig()
-		rowConfig.ShowUser = false    // Already on session page, user is known
-		rowConfig.ShowSession = false // Already on session page
+		rowConfig.ShowUser = false
+		rowConfig.ShowSession = false
 		rowConfig.RouteByMessageID = routeByMessage
+		if user != nil {
+			rowConfig.Users = map[string]*model.User{user.UserID: user}
+		}
 
 		columns := components.MessageTableColumns(rowConfig)
 		content += components.TableStartWithConfig(columns, components.TableConfig{

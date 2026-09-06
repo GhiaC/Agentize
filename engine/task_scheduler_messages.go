@@ -14,8 +14,24 @@ func taskScheduleStatusMessageID(sourceSessionID, scheduleID string) string {
 	return sourceSessionID + "-schedule-" + scheduleID
 }
 
-func scheduleRunMessageID(sourceSessionID, runID, role string) string {
-	return strings.TrimSpace(sourceSessionID) + "-schrun-" + strings.TrimSpace(runID) + "-" + strings.TrimSpace(role)
+func (s *TaskScheduler) nextSourceMessage(userID, sessionID string) (id string, seq int) {
+	sessionID = strings.TrimSpace(sessionID)
+	userID = strings.TrimSpace(userID)
+	if s == nil || s.store == nil || sessionID == "" {
+		return "", 0
+	}
+	session, err := s.store.GetUserSession(userID, sessionID)
+	if err != nil || session == nil {
+		session, err = s.store.Get(sessionID)
+	}
+	if err != nil || session == nil {
+		return "", 0
+	}
+	id, seq = session.GenerateMessageIDWithSeq()
+	if putErr := s.store.Put(session); putErr != nil {
+		log.Log.Warnf("[TaskScheduler] failed to persist source message seq for %s: %v", sessionID, putErr)
+	}
+	return id, seq
 }
 
 // FormatTaskScheduleMessage is the one-line collapsed summary previously stored
@@ -63,14 +79,17 @@ func (s *TaskScheduler) publishRunPrompt(ctx context.Context, schedule *model.Ta
 		return
 	}
 	runID = strings.TrimSpace(runID)
-	if runID == "" {
-		runID = newTaskID("run")
+	_ = runID
+	userID, userSeq := s.nextSourceMessage(schedule.UserID, source)
+	if userID == "" {
+		log.Log.Warnf("[TaskScheduler] skipped run prompt: source session %s has no message id", source)
+		return
 	}
 	user := &model.Message{
-		MessageID: scheduleRunMessageID(source, runID, "1-user"),
-		UserID:    schedule.UserID, SessionID: source,
+		MessageID: userID, SeqID: userSeq,
+		UserID: schedule.UserID, SessionID: source,
 		Role: openai.ChatMessageRoleUser, Content: prompt,
-		AgentType: schedule.AgentType, ContentType: model.ContentTypeText,
+		AgentType: model.AgentTypeSchedule, ContentType: model.ContentTypeText,
 		Metadata:  model.NewScheduleMessageMeta(schedule),
 		CreatedAt: time.Now(),
 	}
@@ -85,9 +104,6 @@ func (s *TaskScheduler) publishRunTranscript(ctx context.Context, schedule *mode
 		return
 	}
 	runID = strings.TrimSpace(runID)
-	if runID == "" {
-		runID = newTaskID("run")
-	}
 	source := strings.TrimSpace(schedule.SourceSessionID)
 	sameSession := strings.TrimSpace(schedule.SessionID) == source
 	now := time.Now()
@@ -99,23 +115,29 @@ func (s *TaskScheduler) publishRunTranscript(ctx context.Context, schedule *mode
 		if user != nil || assistant != nil {
 			persist = false
 		} else {
-			user, assistant = s.synthesizeRunPair(schedule, runID, now)
+			user, assistant = s.synthesizeRunPair(schedule, now)
 		}
 	} else {
-		srcUser, srcAsst := s.latestVisibleRunPair(schedule.SessionID)
-		if srcUser != nil {
-			user = cloneMessageOntoSession(srcUser, source, scheduleRunMessageID(source, runID, "1-user"), now, schedule)
-		}
+		user = s.latestSourceUser(source)
+		_, srcAsst := s.latestVisibleRunPair(schedule.SessionID)
 		if srcAsst != nil {
-			assistant = cloneMessageOntoSession(srcAsst, source, scheduleRunMessageID(source, runID, "2-assistant"), now.Add(time.Millisecond), schedule)
+			id, seq := s.nextSourceMessage(schedule.UserID, source)
+			assistant = cloneMessageOntoSession(srcAsst, source, id, seq, now, schedule)
 		}
-		if user == nil && assistant == nil {
-			user, assistant = s.synthesizeRunPair(schedule, runID, now)
+		if assistant == nil {
+			assistant = s.synthesizeRunAssistant(schedule, now)
 		}
+		persist = assistant != nil
 	}
 
-	s.emitChatMessage(ctx, schedule, user, StatusCustom, true, persist)
+	if sameSession {
+		s.emitChatMessage(ctx, schedule, user, StatusCustom, true, persist)
+	}
 	s.emitChatMessage(ctx, schedule, assistant, StatusCompleted, true, persist)
+	if user == nil {
+		user = s.latestSourceUser(source)
+	}
+	s.mirrorRunAuditToSource(schedule, user)
 	s.publishScheduleState(ctx, schedule)
 }
 
@@ -145,12 +167,50 @@ func (s *TaskScheduler) latestVisibleRunPair(sessionID string) (user, assistant 
 	return user, assistant
 }
 
-func (s *TaskScheduler) synthesizeRunPair(schedule *model.TaskSchedule, runID string, now time.Time) (user, assistant *model.Message) {
+func (s *TaskScheduler) latestSourceUser(sessionID string) *model.Message {
+	if s == nil || s.store == nil || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	msgs, err := s.store.GetMessagesBySessionPage(sessionID, 40, 0)
+	if err != nil {
+		return nil
+	}
+	for _, item := range msgs {
+		if item != nil && item.Role == openai.ChatMessageRoleUser && strings.TrimSpace(item.Content) != "" {
+			return item
+		}
+	}
+	return nil
+}
+
+func (s *TaskScheduler) synthesizeRunPair(schedule *model.TaskSchedule, now time.Time) (user, assistant *model.Message) {
 	if schedule == nil {
 		return nil, nil
 	}
 	source := strings.TrimSpace(schedule.SourceSessionID)
 	prompt := strings.TrimSpace(schedule.Prompt)
+	if prompt != "" {
+		id, seq := s.nextSourceMessage(schedule.UserID, source)
+		if id != "" {
+			user = &model.Message{
+				MessageID: id, SeqID: seq,
+				UserID: schedule.UserID, SessionID: source,
+				Role: openai.ChatMessageRoleUser, Content: prompt,
+				AgentType: model.AgentTypeSchedule, ContentType: model.ContentTypeText,
+				Metadata:  model.NewScheduleMessageMeta(schedule),
+				CreatedAt: now,
+			}
+		}
+	}
+	assistant = s.synthesizeRunAssistant(schedule, now)
+	return user, assistant
+}
+
+func (s *TaskScheduler) synthesizeRunAssistant(schedule *model.TaskSchedule, now time.Time) *model.Message {
+	if schedule == nil {
+		return nil
+	}
+	source := strings.TrimSpace(schedule.SourceSessionID)
 	reply := strings.TrimSpace(schedule.LastOutput)
 	if reply == "" {
 		reply = strings.TrimSpace(schedule.LastConclusion)
@@ -158,42 +218,112 @@ func (s *TaskScheduler) synthesizeRunPair(schedule *model.TaskSchedule, runID st
 	if reply == "" {
 		reply = strings.TrimSpace(schedule.LastError)
 	}
-	if prompt != "" {
-		user = &model.Message{
-			MessageID: scheduleRunMessageID(source, runID, "1-user"),
-			UserID:    schedule.UserID, SessionID: source,
-			Role: openai.ChatMessageRoleUser, Content: prompt,
-			AgentType: schedule.AgentType, ContentType: model.ContentTypeText,
-			Metadata:  model.NewScheduleMessageMeta(schedule),
-			CreatedAt: now,
-		}
+	if reply == "" {
+		return nil
 	}
-	if reply != "" {
-		assistant = &model.Message{
-			MessageID: scheduleRunMessageID(source, runID, "2-assistant"),
-			UserID:    schedule.UserID, SessionID: source,
-			Role: openai.ChatMessageRoleAssistant, Content: reply,
-			AgentType: schedule.AgentType, ContentType: model.ContentTypeText,
-			Metadata:  model.NewScheduleMessageMeta(schedule),
-			CreatedAt: now.Add(time.Millisecond),
-		}
+	id, seq := s.nextSourceMessage(schedule.UserID, source)
+	if id == "" {
+		return nil
 	}
-	return user, assistant
+	return &model.Message{
+		MessageID: id, SeqID: seq,
+		UserID: schedule.UserID, SessionID: source,
+		Role: openai.ChatMessageRoleAssistant, Content: reply,
+		AgentType: model.AgentTypeSchedule, ContentType: model.ContentTypeText,
+		Metadata:  model.NewScheduleMessageMeta(schedule),
+		CreatedAt: now.Add(time.Millisecond),
+	}
 }
 
-func cloneMessageOntoSession(src *model.Message, sessionID, messageID string, now time.Time, schedule *model.TaskSchedule) *model.Message {
-	if src == nil {
+func cloneMessageOntoSession(src *model.Message, sessionID string, messageID string, seq int, now time.Time, schedule *model.TaskSchedule) *model.Message {
+	if src == nil || strings.TrimSpace(messageID) == "" {
 		return nil
 	}
 	out := *src
 	out.MessageID = messageID
+	out.SeqID = seq
 	out.SessionID = sessionID
 	out.CreatedAt = now
+	out.AgentType = model.AgentTypeSchedule
 	out.Metadata = model.NewScheduleMessageMeta(schedule)
+	out.HydrateUsageMeta()
 	if out.ContentType == model.ContentTypeWidget {
 		out.ContentType = model.ContentTypeText
 	}
 	return &out
+}
+
+func (s *TaskScheduler) mirrorRunAuditToSource(schedule *model.TaskSchedule, sourceUser *model.Message) {
+	if s == nil || s.store == nil || schedule == nil || sourceUser == nil {
+		return
+	}
+	source := strings.TrimSpace(sourceUser.SessionID)
+	worker := strings.TrimSpace(schedule.SessionID)
+	userID := strings.TrimSpace(schedule.UserID)
+	sourceUserID := strings.TrimSpace(sourceUser.MessageID)
+	if source == "" || worker == "" || source == worker || sourceUserID == "" {
+		return
+	}
+	traces, err := s.store.GetUserRouteTracesBySession(userID, worker)
+	if err != nil {
+		traces, err = s.store.GetRouteTracesBySession(worker)
+	}
+	var latest *model.RouteTrace
+	if err == nil {
+		for _, tr := range traces {
+			if tr == nil || (tr.Kind != "turn" && strings.TrimSpace(tr.Kind) != "") {
+				continue
+			}
+			if strings.TrimSpace(tr.UserID) != "" && tr.UserID != userID {
+				continue
+			}
+			latest = tr
+			break
+		}
+	}
+	workerUserMessageID := ""
+	if latest != nil {
+		workerUserMessageID = strings.TrimSpace(latest.UserMessageID)
+		cloned := *latest
+		if len(latest.Nodes) > 0 {
+			cloned.Nodes = append([]model.RouteNode(nil), latest.Nodes...)
+		}
+		if len(latest.Edges) > 0 {
+			cloned.Edges = append([]model.RouteEdge(nil), latest.Edges...)
+		}
+		if sess, sessErr := s.store.GetUserSession(userID, source); sessErr == nil && sess != nil {
+			cloned.TraceID = sess.GenerateRouteTraceID()
+			if putErr := s.store.Put(sess); putErr != nil {
+				log.Log.Warnf("[TaskScheduler] failed to persist source trace seq: %v", putErr)
+			}
+		}
+		cloned.SessionID = source
+		cloned.UserID = userID
+		cloned.UserMessageID = sourceUserID
+		cloned.Kind = "turn"
+		if putErr := s.store.PutRouteTrace(&cloned); putErr != nil {
+			log.Log.Warnf("[TaskScheduler] failed to copy turn DAG onto source chat: %v", putErr)
+		}
+	}
+	tools, toolErr := s.store.GetUserToolCallsBySession(userID, worker)
+	if toolErr != nil {
+		return
+	}
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		if workerUserMessageID != "" && strings.TrimSpace(tool.UserMessageID) != workerUserMessageID {
+			continue
+		}
+		copied := *tool
+		copied.SessionID = source
+		copied.UserMessageID = sourceUserID
+		copied.AgentType = model.AgentTypeSchedule
+		if putErr := s.store.PutToolCall(&copied); putErr != nil {
+			log.Log.Warnf("[TaskScheduler] failed to copy tool %s onto source chat: %v", tool.ToolID, putErr)
+		}
+	}
 }
 
 func (s *TaskScheduler) publishMessage(

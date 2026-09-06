@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"html/template"
+	"strings"
 
 	"github.com/ghiac/agentize/debuger"
 	"github.com/ghiac/agentize/model"
@@ -154,10 +155,11 @@ func formatTimeShort(t interface{ Format(string) string }) string {
 
 // MessageRowConfig holds configuration for message table row display
 type MessageRowConfig struct {
-	ShowUser          bool              // Show user column with link
-	ShowSession       bool              // Show session column with link
-	BaseURL           string            // Base URL for links
-	RouteByMessageID  map[string]string // messageID -> DAG href
+	ShowUser         bool              // Show user column with link
+	ShowSession      bool              // Show session column with link
+	BaseURL          string            // Base URL for links
+	RouteByMessageID map[string]string // messageID -> DAG href
+	Users            map[string]*model.User
 }
 
 // DefaultMessageRowConfig returns default configuration for message row
@@ -226,7 +228,7 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 
 	html := fmt.Sprintf(`<tr id="%s">
 		<td class="text-center">
-			<button class="btn btn-sm btn-outline-secondary" type="button" onclick="toggleMessageRow('%s', '%s')" id="%s">
+			<button class="btn btn-sm btn-outline-secondary msg-expand-btn" type="button" onclick="toggleMessageRow('%s', '%s')" id="%s">
 				<i class="bi bi-chevron-down"></i>
 			</button>
 		</td>
@@ -251,19 +253,35 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 	// Add user column if configured
 	if config.ShowUser {
 		html += fmt.Sprintf(`<td class="text-nowrap">%s</td>`,
-			TruncatedLink(msg.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(msg.UserID), 15))
+			messageUserLabel(msg.UserID, config))
 	}
 
 	html += fmt.Sprintf(`<td class="text-center">%s</td></tr>`, toolCallDisplay)
 
-	// Build the expanded details row (hidden by default)
-	// Base columns: expand, seq, time, agent, type, role, content, model, tools.
 	colSpan := 9
 	if config.ShowUser {
 		colSpan++
 	}
 
-	html += fmt.Sprintf(`<tr id="%s-details" style="display: none;" class="table-light">
+	userLabel := messageUserLabel(msg.UserID, config)
+	dagHref := ""
+	if config.RouteByMessageID != nil {
+		dagHref = config.RouteByMessageID[msg.MessageID]
+	}
+	dagCell := `<span class="text-muted">—</span>`
+	if dagHref != "" {
+		dagCell = fmt.Sprintf(`<a href="%s" class="btn btn-sm btn-outline-info">Load DAG</a>`, dagHref)
+	} else if msg.HasToolCalls && msg.UserID != "" && msg.SessionID != "" {
+		dagCell = fmt.Sprintf(`<a href="%s" class="btn btn-sm btn-outline-secondary">Session tools</a>`,
+			debuger.SessionToolCallsPath(msg.UserID, msg.SessionID))
+	}
+	costDisplay := sessionCostDisplay(msg.CostCredits)
+	durationDisplay := debuger.FormatDurationMs(msg.DurationMs)
+	if msg.DurationMs <= 0 {
+		durationDisplay = "—"
+	}
+
+	html += fmt.Sprintf(`<tr id="%s-details" style="display: none;" class="msg-expand-details">
 		<td colspan="%d">
 			<div class="p-3">
 				<div class="row">
@@ -272,9 +290,9 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 							<tr><th class="text-muted" style="width: 140px;">Message ID</th><td>%s</td></tr>
 							<tr><th class="text-muted">Seq ID</th><td>%d</td></tr>
 							<tr><th class="text-muted">Session ID</th><td>%s</td></tr>
-							<tr><th class="text-muted">User ID</th><td>%s</td></tr>
+							<tr><th class="text-muted">User</th><td>%s</td></tr>
 							<tr><th class="text-muted">Created At</th><td>%s</td></tr>
-							<tr><th class="text-muted">Agent Type</th><td>%s</td></tr>
+							<tr><th class="text-muted">Kind</th><td>%s</td></tr>
 							<tr><th class="text-muted">Content Type</th><td>%s</td></tr>
 							<tr><th class="text-muted">Role</th><td>%s</td></tr>
 						</table>
@@ -286,10 +304,13 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 							<tr><th class="text-muted">Prompt Tokens</th><td>%d</td></tr>
 							<tr><th class="text-muted">Completion Tokens</th><td>%d</td></tr>
 							<tr><th class="text-muted">Total Tokens</th><td>%d</td></tr>
+							<tr><th class="text-muted">Cost</th><td>%s</td></tr>
+							<tr><th class="text-muted">Reply duration</th><td>%s</td></tr>
 							<tr><th class="text-muted">Max Tokens</th><td>%d</td></tr>
 							<tr><th class="text-muted">Temperature</th><td>%.2f</td></tr>
 							<tr><th class="text-muted">Finish Reason</th><td>%s</td></tr>
 							<tr><th class="text-muted">Has Tool Calls</th><td>%s</td></tr>
+							<tr><th class="text-muted">Turn DAG</th><td>%s</td></tr>
 						</table>
 					</div>
 				</div>
@@ -304,7 +325,7 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 		EntityID(msg.MessageID),
 		msg.SeqID,
 		EntityIDLink(msg.SessionID, debuger.SessionPath(msg.UserID, msg.SessionID)),
-		TruncatedLink(msg.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(msg.UserID), 40),
+		userLabel,
 		msg.CreatedAt.Format("2006-01-02 15:04:05"),
 		agentBadge,
 		contentTypeBadge,
@@ -314,14 +335,40 @@ func MessageTableRow(msg *model.Message, config MessageRowConfig, rowIndex int) 
 		msg.PromptTokens,
 		msg.CompletionTokens,
 		msg.TotalTokens,
+		costDisplay,
+		template.HTMLEscapeString(durationDisplay),
 		msg.MaxTokens,
 		msg.Temperature,
 		getFinishReasonDisplay(msg.FinishReason),
 		getBoolBadge(msg.HasToolCalls),
+		dagCell,
 		template.HTMLEscapeString(msg.Content),
 	)
 
 	return html
+}
+
+func messageUserLabel(userID string, config MessageRowConfig) string {
+	userID = strings.TrimSpace(userID)
+	href := config.BaseURL + "/users/" + template.URLQueryEscaper(userID)
+	label := UserDisplayLabel(nil, userID)
+	if config.Users != nil {
+		label = UserDisplayLabel(config.Users[userID], userID)
+	}
+	if label == "" {
+		return `<span class="text-muted">—</span>`
+	}
+	return TruncatedLink(label, href, 28)
+}
+
+// UserDisplayLabel prefers name, then @username, then the raw id.
+func UserDisplayLabel(user *model.User, userID string) string {
+	if user != nil {
+		if label := user.DisplayLabel(); label != "" {
+			return label
+		}
+	}
+	return strings.TrimSpace(userID)
 }
 
 // MessageTableScript returns the JavaScript needed for expandable rows

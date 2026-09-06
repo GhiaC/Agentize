@@ -181,6 +181,12 @@ func assertSourceRunTranscript(t *testing.T, st *store.SQLiteStore, sessionID st
 		if strings.Contains(item.MessageID, "-schedule-") {
 			t.Fatalf("legacy widget id leaked into transcript: %q", item.MessageID)
 		}
+		if strings.Contains(item.MessageID, "schrun") || !model.IsNumericID(item.MessageID) {
+			t.Fatalf("schedule chat message id must stay numeric, got %q", item.MessageID)
+		}
+		if item.AgentType != model.AgentTypeSchedule {
+			t.Fatalf("schedule transcript type = %q, want schedule", item.AgentType)
+		}
 		if item.Role != want[i][0] || !strings.Contains(item.Content, want[i][1]) {
 			t.Fatalf("message %d = %s %q, want %s containing %q", i, item.Role, item.Content, want[i][0], want[i][1])
 		}
