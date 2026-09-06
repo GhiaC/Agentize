@@ -115,7 +115,7 @@ func (ch *CoreHandler) concludeScheduledTask(
 			UserID: schedule.UserID, SessionID: schedule.SessionID,
 			EventType: engine.EventLLMCall, Name: engine.EventNameLLMCall,
 			Model:    schedule.ConclusionModel,
-			Metadata: map[string]interface{}{"source": "task_scheduler_conclusion"},
+			Metadata: map[string]interface{}{"channel": engine.BillingChannelScheduler, "source": "task_scheduler_conclusion"},
 		}); err != nil {
 			return engine.ScheduledConclusion{}, err
 		}
@@ -140,7 +140,7 @@ func (ch *CoreHandler) concludeScheduledTask(
 			Model: schedule.ConclusionModel, Tokens: resp.Usage.TotalTokens,
 			InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens,
 			CachedInputTokens: cached, Duration: duration, Error: err,
-			Metadata: map[string]interface{}{"source": "task_scheduler_conclusion"},
+			Metadata: map[string]interface{}{"channel": engine.BillingChannelScheduler, "source": "task_scheduler_conclusion"},
 		})
 	}
 	if err != nil {

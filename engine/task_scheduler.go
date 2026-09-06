@@ -249,7 +249,7 @@ func (e *Engine) concludeScheduledTask(
 		if err := e.Callback.BeforeAction(ctx, &UsageEvent{
 			UserID: schedule.UserID, SessionID: schedule.SessionID,
 			EventType: EventLLMCall, Name: EventNameLLMCall, Model: schedule.ConclusionModel,
-			Metadata: map[string]interface{}{"source": "task_scheduler_conclusion"},
+			Metadata: map[string]interface{}{"channel": BillingChannelScheduler, "source": "task_scheduler_conclusion"},
 		}); err != nil {
 			return ScheduledConclusion{}, err
 		}
@@ -275,7 +275,7 @@ func (e *Engine) concludeScheduledTask(
 			Tokens: resp.Usage.TotalTokens, InputTokens: resp.Usage.PromptTokens,
 			OutputTokens: resp.Usage.CompletionTokens, CachedInputTokens: cached,
 			Duration: duration, Error: err,
-			Metadata: map[string]interface{}{"source": "task_scheduler_conclusion"},
+			Metadata: map[string]interface{}{"channel": BillingChannelScheduler, "source": "task_scheduler_conclusion"},
 		})
 	}
 	if err != nil {

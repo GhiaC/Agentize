@@ -967,6 +967,7 @@ func (e *Engine) processOneMessageBody(ctx context.Context, sessionID string, ms
 			log.Log.Warnf("[Engine] ⚠️  Failed to persist turn seq | SessionID: %s | Error: %v", sessionID, err)
 		}
 		ctx = WithUserMessageID(ctx, userMsg.MessageID)
+		ctx = withBillingChannel(ctx, billingChannelFromMeta(userMsg.Metadata, session))
 		ctx = withTurnRecorder(ctx, rec)
 		e.persistSessionRunState(session, StatusReceived, "", true, userMsg.MessageID)
 		traceStart := time.Now()
@@ -1666,6 +1667,9 @@ func (e *Engine) processChatRequest(
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to get session: %w", err)
 	}
+	if billingChannelFromCtx(ctx) == "" {
+		ctx = withBillingChannel(ctx, billingChannelFromMeta(nil, session))
+	}
 
 	// Get system prompts and tools. Keep the exact typed array on the session
 	// for the debug dashboard. Opening a node later in this turn refreshes both.
@@ -1742,6 +1746,7 @@ func (e *Engine) processChatRequest(
 				EventType: EventLLMCall,
 				Name:      EventNameLLMCall,
 				Model:     modelName,
+				Metadata:  usageBillingMeta(ctx, session, nil),
 			}); cbErr != nil {
 				return cbErr.Error(), totalTokenUsage, nil
 			}
@@ -1789,6 +1794,7 @@ func (e *Engine) processChatRequest(
 				OutputTokens: resp.Usage.CompletionTokens,
 				Model:        modelName,
 				Duration:     llmDuration,
+				Metadata:     usageBillingMeta(ctx, session, nil),
 			}
 			if resp.Usage.PromptTokensDetails != nil {
 				ev.CachedInputTokens = resp.Usage.PromptTokensDetails.CachedTokens
@@ -1994,7 +2000,7 @@ func (e *Engine) executeTool(
 			SessionID: sessionID,
 			EventType: EventToolCall,
 			Name:      toolCall.Function.Name,
-			Metadata:  toolActionMetadata(args),
+			Metadata:  usageBillingMeta(ctx, session, toolActionMetadata(args)),
 		}); cbErr != nil {
 			result := FormatBlockedActionResult(cbErr)
 			if persister != nil {
@@ -2065,7 +2071,7 @@ func (e *Engine) executeTool(
 			Name:      toolCall.Function.Name,
 			Duration:  toolDuration,
 			Error:     err,
-			Metadata:  toolActionMetadata(args),
+			Metadata:  usageBillingMeta(ctx, session, toolActionMetadata(args)),
 		}
 		if u, ok := args[usageArgKey].(*model.ImageEditResult); ok && u != nil {
 			ev.Model = u.Model
