@@ -9,6 +9,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 API, security & observability hardening (improvement roadmap
 [chapter 04](docs/improvements/04-api-security-observability.md)).
 
+### Changed
+- **Core Controller prompt is dispatch-only.** The embedded controller no longer
+  repeats tool tables, workflow prose, or session-management details that already
+  live in tool schemas. This cuts static prefix tokens on every Core turn.
+- **Session/user memory is a living fact list (max 20), not a recap.** The
+  summarizer updates or drops existing lines instead of appending near-duplicates.
+  Debug UI can delete facts and edit/delete tags. `manage_context` gained
+  `set_summary`, `remove_summary`, `set_tags`, `remove_tag`, and `edit_tag`.
+- **Debug lists show `@username` instead of raw user IDs.**
+- **Dashboard usage row** totals stored LLM tokens and session credits, with a
+  cost-by-session chart. Summarization metrics now include `summary_entries`
+  (cap 20) and log fact/tag counts instead of truncated recap text.
+
 ### Breaking changes
 
 - Removed the planning DAG subsystem and its public surface:

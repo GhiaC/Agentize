@@ -53,8 +53,9 @@ func RenderRoutes(handler *debuger.DebugHandler, page int) (string, error) {
 			{Header: "Graph", Center: true, NoWrap: true},
 		}
 		content += components.TableStartWithConfig(columns, components.TableConfig{Hover: true, Small: true, Responsive: true, AlignMiddle: true})
+		users := usersByID(handler)
 		for _, tr := range pageItems {
-			content += routeTraceRow(tr)
+			content += routeTraceRow(tr, users)
 		}
 		content += components.TableEnd(true)
 		content += components.PaginationSimple(page, total, components.DefaultItemsPerPage, routesNavPath)
@@ -65,7 +66,7 @@ func RenderRoutes(handler *debuger.DebugHandler, page int) (string, error) {
 	return ui.Header("Agentize Debug - Routing DAG") + ui.NavbarAndBody(routesNavPath, content) + ui.Footer(), nil
 }
 
-func routeTraceRow(tr *model.RouteTrace) string {
+func routeTraceRow(tr *model.RouteTrace, users map[string]*model.User) string {
 	detailURL := debuger.RoutePath(tr.UserID, tr.SessionID, tr.TraceID)
 
 	routed := `<span class="text-muted">— Core</span>`
@@ -89,7 +90,7 @@ func routeTraceRow(tr *model.RouteTrace) string {
 		template.HTMLEscapeString(debuger.FormatTime(tr.CreatedAt)),
 		template.HTMLEscapeString(debuger.FormatTimeAgo(tr.CreatedAt)),
 		components.EntityID(tr.TraceID),
-		components.TruncatedLink(tr.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(tr.UserID), 16),
+		userLink(users, tr.UserID),
 		components.EntityIDLink(tr.SessionID, debuger.SessionPath(tr.UserID, tr.SessionID)),
 		template.HTMLEscapeString(truncateRunes(tr.Message, 80)),
 		routed,
@@ -149,7 +150,7 @@ func RenderUserRouteDetail(handler *debuger.DebugHandler, userID, sessionID, tra
 	content += ui.CardStart("Routing Trace", "diagram-3")
 	content += `<div class="row"><div class="col-md-6"><table class="table table-sm">`
 	content += metaRow("Trace ID", components.EntityID(tr.TraceID))
-	content += metaRow("User", components.TruncatedLink(tr.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(tr.UserID), 30))
+	content += metaRow("User", userLink(usersByID(handler), tr.UserID))
 	content += metaRow("Session", components.EntityIDLink(tr.SessionID, debuger.SessionPath(tr.UserID, tr.SessionID)))
 	content += metaRow("Status", routeStatusBadge(tr.Status))
 	content += `</table></div><div class="col-md-6"><table class="table table-sm">`

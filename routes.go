@@ -74,6 +74,12 @@ func (ag *Agentize) RegisterRoutes(router *gin.Engine) {
 	router.GET("/agentize/debug/users", p(ag.handleDebugUsers))
 	router.GET("/agentize/debug/users/:userID", p(ag.handleDebugUserDetail))
 	router.POST("/agentize/debug/users/:userID/delete-data", p(ag.handleDebugUserDeleteData))
+	router.POST("/agentize/debug/users/:userID/context/summary/:index/delete", p(ag.handleDebugUserSummaryDelete))
+	router.POST("/agentize/debug/users/:userID/context/tag/delete", p(ag.handleDebugUserTagDelete))
+	router.POST("/agentize/debug/users/:userID/context/tag/edit", p(ag.handleDebugUserTagEdit))
+	router.POST("/agentize/debug/users/:userID/sessions/:sessionID/context/summary/:index/delete", p(ag.handleDebugSessionSummaryDelete))
+	router.POST("/agentize/debug/users/:userID/sessions/:sessionID/context/tag/delete", p(ag.handleDebugSessionTagDelete))
+	router.POST("/agentize/debug/users/:userID/sessions/:sessionID/context/tag/edit", p(ag.handleDebugSessionTagEdit))
 	router.GET("/agentize/debug/users/:userID/sessions/:sessionID", p(ag.handleDebugUserSessionDetail))
 	router.GET("/agentize/debug/users/:userID/sessions/:sessionID/messages", p(ag.handleDebugUserSessionMessages))
 	router.GET("/agentize/debug/users/:userID/sessions/:sessionID/tool-calls", p(ag.handleDebugUserSessionToolCalls))
@@ -263,6 +269,14 @@ func (ag *Agentize) createDebugHandler() (*debuger.DebugHandler, error) {
 	return handler, nil
 }
 
+func debugUsersByID(ag *Agentize) map[string]*model.User {
+	handler, err := ag.createDebugHandler()
+	if err != nil {
+		return map[string]*model.User{}
+	}
+	return pages.UsersByID(handler)
+}
+
 // getPageParam extracts page number from query params (defaults to 1)
 func getPageParam(c *gin.Context) int {
 	return getNamedPageParam(c, "page")
@@ -311,8 +325,13 @@ func (ag *Agentize) handleDebugSchedules(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	handler, err := ag.createDebugHandler()
+	var users map[string]*model.User
+	if err == nil {
+		users = pages.UsersByID(handler)
+	}
 	html := pages.RenderTaskSchedules(
-		schedules, scheduler.IsRunning(), c.Query("notice"), c.Query("error"),
+		schedules, scheduler.IsRunning(), c.Query("notice"), c.Query("error"), users,
 	)
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, html)
@@ -392,7 +411,7 @@ func (ag *Agentize) renderScheduleDetail(c *gin.Context, userID, scheduleID stri
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	html := pages.RenderTaskScheduleDetail(schedule, runs)
+	html := pages.RenderTaskScheduleDetail(schedule, runs, debugUsersByID(ag))
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, html)
 }
@@ -524,7 +543,7 @@ func (ag *Agentize) handleDebugReviews(c *gin.Context) {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to load reviews: %v", err)})
 		return
 	}
-	html, err := pages.RenderReviews(reviews)
+	html, err := pages.RenderReviews(reviews, debugUsersByID(ag))
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to generate reviews page: %v", err)})
 		return

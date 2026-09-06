@@ -21,6 +21,7 @@ func RenderTaskSchedules(
 	workerRunning bool,
 	notice string,
 	pageError string,
+	users map[string]*model.User,
 ) string {
 	content := ui.ContainerStart()
 	if notice != "" {
@@ -45,7 +46,7 @@ func RenderTaskSchedules(
 	content += ui.CardEnd()
 
 	content += renderScheduleCreateForm()
-	content += renderScheduleTable(schedules)
+	content += renderScheduleTable(schedules, users)
 	content += ui.ContainerEnd()
 	return ui.Header("Agentize Debug - Scheduler") +
 		ui.NavbarAndBody(schedulesNavPath, content) + ui.Footer()
@@ -98,7 +99,7 @@ func renderScheduleCreateForm() string {
 	return b.String()
 }
 
-func renderScheduleTable(schedules []*model.TaskSchedule) string {
+func renderScheduleTable(schedules []*model.TaskSchedule, users map[string]*model.User) string {
 	content := ui.CardStartWithCount("Schedules", "calendar3", len(schedules))
 	if len(schedules) == 0 {
 		content += components.InfoAlert("No task schedules exist yet. Create one above or ask the LLM to use manage_schedules.")
@@ -121,14 +122,14 @@ func renderScheduleTable(schedules []*model.TaskSchedule) string {
 		Hover: true, Small: true, Responsive: true, AlignMiddle: true,
 	})
 	for _, schedule := range schedules {
-		content += renderScheduleRow(schedule)
+		content += renderScheduleRow(schedule, users)
 	}
 	content += components.TableEnd(true)
 	content += ui.CardEnd()
 	return content
 }
 
-func renderScheduleRow(schedule *model.TaskSchedule) string {
+func renderScheduleRow(schedule *model.TaskSchedule, users map[string]*model.User) string {
 	esc := template.HTMLEscapeString
 	statusColor := "success"
 	if schedule.Status == model.TaskSchedulePaused {
@@ -191,7 +192,7 @@ func renderScheduleRow(schedule *model.TaskSchedule) string {
 		<td>%s</td>
 	</tr>`,
 		esc(schedule.Name), components.EntityIDText(schedule.ScheduleID),
-		esc(schedule.UserID), components.EntityIDText(schedule.SessionID),
+		esc(components.ListUserLabel(users[schedule.UserID], schedule.UserID)), components.EntityIDText(schedule.SessionID),
 		esc(kind),
 		statusColor, esc(string(schedule.Status)),
 		esc(schedule.Interval().String()),
@@ -213,7 +214,7 @@ func scheduleActionForm(userID, scheduleID, action, label, color string, confirm
 }
 
 // RenderTaskScheduleDetail renders configuration, latest output, and run history.
-func RenderTaskScheduleDetail(schedule *model.TaskSchedule, runs []*model.TaskScheduleRun) string {
+func RenderTaskScheduleDetail(schedule *model.TaskSchedule, runs []*model.TaskScheduleRun, users map[string]*model.User) string {
 	esc := template.HTMLEscapeString
 	content := ui.ContainerStart()
 	content += components.Breadcrumb([]components.BreadcrumbItem{
@@ -225,7 +226,7 @@ func RenderTaskScheduleDetail(schedule *model.TaskSchedule, runs []*model.TaskSc
 	content += `<div class="row"><div class="col-md-6"><table class="table table-sm"><tbody>`
 	content += scheduleMetaRow("Schedule ID", components.EntityID(schedule.ScheduleID))
 	content += scheduleMetaRow("Name", esc(schedule.Name))
-	content += scheduleMetaRow("User", esc(schedule.UserID))
+	content += scheduleMetaRow("User", userLink(users, schedule.UserID))
 	content += scheduleMetaRow("Dedicated session", components.EntityIDLink(schedule.SessionID, debuger.SessionPath(schedule.UserID, schedule.SessionID)))
 	content += scheduleMetaRow("Source session", components.EntityID(schedule.SourceSessionID))
 	content += scheduleMetaRow("Agent type", esc(string(schedule.AgentType)))

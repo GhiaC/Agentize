@@ -3,12 +3,45 @@ package pages
 import (
 	"fmt"
 	"html/template"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/ghiac/agentize/debuger"
+	"github.com/ghiac/agentize/debuger/data"
 	"github.com/ghiac/agentize/debuger/ui/components"
 	"github.com/ghiac/agentize/model"
 )
+
+type memoryEditor struct {
+	SummaryDeleteURL func(index int) string
+	TagDeleteURL     string
+	TagEditURL       string
+}
+
+func userMemoryEditor(userID string) memoryEditor {
+	base := "/agentize/debug/users/" + url.PathEscape(userID) + "/context"
+	confirm := "?confirm=" + url.QueryEscape(userID)
+	return memoryEditor{
+		SummaryDeleteURL: func(index int) string {
+			return fmt.Sprintf("%s/summary/%d/delete%s", base, index, confirm)
+		},
+		TagDeleteURL: base + "/tag/delete" + confirm,
+		TagEditURL:   base + "/tag/edit" + confirm,
+	}
+}
+
+func sessionMemoryEditor(userID, sessionID string) memoryEditor {
+	base := "/agentize/debug/users/" + url.PathEscape(userID) + "/sessions/" + url.PathEscape(sessionID) + "/context"
+	confirm := "?confirm=" + url.QueryEscape(sessionID)
+	return memoryEditor{
+		SummaryDeleteURL: func(index int) string {
+			return fmt.Sprintf("%s/summary/%d/delete%s", base, index, confirm)
+		},
+		TagDeleteURL: base + "/tag/delete" + confirm,
+		TagEditURL:   base + "/tag/edit" + confirm,
+	}
+}
 
 func renderUserContextCard(user *model.User) string {
 	count := 0
@@ -16,17 +49,18 @@ func renderUserContextCard(user *model.User) string {
 		count = len(user.ContextSummary) + len(user.ContextTags)
 	}
 	out := components.CollapsibleCardStartWithCount("User Context", "person-lines-fill", count, true)
-	out += `<p class="text-muted mb-3">Cross-conversation facts. The summarizer appends entries and tags; this is memory, not a new instruction.</p>`
+	out += `<p class="text-muted mb-3">Durable facts that must stay true across conversations. At most 20. Prefer updating an existing line over adding a similar one.</p>`
 	if user == nil || (len(user.ContextSummary) == 0 && len(user.ContextTags) == 0) {
 		out += components.InfoAlert("No cross-conversation facts yet. Entries appear here after conversations are summarized.")
 		out += components.CollapsibleCardEnd()
 		return out
 	}
+	editor := userMemoryEditor(user.UserID)
 	if len(user.ContextSummary) > 0 {
-		out += `<h6>Summary</h6>` + renderSummaryEntries(user.ContextSummary)
+		out += `<h6>Facts</h6>` + renderEditableSummary(user.ContextSummary, editor)
 	}
 	if len(user.ContextTags) > 0 {
-		out += `<h6>Tags</h6>` + components.TagBadges(user.ContextTags)
+		out += `<h6>Tags</h6>` + renderEditableTags(user.ContextTags, editor)
 	}
 	out += components.CollapsibleCardEnd()
 	return out
@@ -41,12 +75,12 @@ func renderSessionContextCard(session *model.Session, conversation *model.Conver
 		count += len(session.Summary) + len(session.Tags)
 	}
 	out := components.CollapsibleCardStartWithCount("Session Context", "journal-text", count, true)
-	out += `<p class="text-muted mb-3">Title, summary entries, and tags for the active conversation. Detailed history stays in messages and tools.</p>`
+	out += `<p class="text-muted mb-3">Specific facts for this conversation (max 20). Not a recap — only information that must persist in this session.</p>`
 	if conversation != nil {
 		out += fmt.Sprintf(`<p class="mb-2"><strong>Conversation:</strong> %s</p>`, components.EntityID(conversation.ConversationID))
 	}
 	if session == nil || (session.Title == "" && len(session.Summary) == 0 && len(session.Tags) == 0) {
-		out += components.InfoAlert("No title, summary, or tags on the active conversation yet.")
+		out += components.InfoAlert("No title, facts, or tags on the active conversation yet.")
 		out += components.CollapsibleCardEnd()
 		return out
 	}
@@ -55,29 +89,101 @@ func renderSessionContextCard(session *model.Session, conversation *model.Conver
 		title = "Untitled"
 	}
 	out += fmt.Sprintf(`<p class="mb-2"><strong>Title:</strong> %s</p>`, template.HTMLEscapeString(title))
+	editor := sessionMemoryEditor(session.UserID, session.SessionID)
 	if len(session.Summary) > 0 {
-		out += `<h6>Summary</h6>` + renderSummaryEntries(session.Summary)
+		out += `<h6>Facts</h6>` + renderEditableSummary(session.Summary, editor)
 	}
 	if len(session.Tags) > 0 {
-		out += `<h6>Tags</h6>` + components.TagBadges(session.Tags)
+		out += `<h6>Tags</h6>` + renderEditableTags(session.Tags, editor)
 	}
 	out += components.CollapsibleCardEnd()
 	return out
 }
 
-func renderSummaryEntries(entries model.SummaryEntries) string {
+func renderEditableSummary(entries model.SummaryEntries, editor memoryEditor) string {
 	if len(entries) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(`<ol class="mb-3 ps-3">`)
-	for _, entry := range entries {
-		b.WriteString(`<li class="mb-2">`)
+	for i, entry := range entries {
+		b.WriteString(`<li class="mb-2 d-flex gap-2 align-items-start">`)
+		b.WriteString(`<span class="flex-grow-1">`)
 		b.WriteString(template.HTMLEscapeString(entry))
+		b.WriteString(`</span>`)
+		if editor.SummaryDeleteURL != nil {
+			b.WriteString(fmt.Sprintf(
+				`<form method="POST" action="%s" class="d-inline" onsubmit="return confirm('Delete this fact?');"><button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete">×</button></form>`,
+				template.HTMLEscapeString(editor.SummaryDeleteURL(i)),
+			))
+		}
 		b.WriteString(`</li>`)
 	}
 	b.WriteString(`</ol>`)
 	return b.String()
+}
+
+func renderEditableTags(tags []string, editor memoryEditor) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="mb-3"><div class="tag-badges">`)
+	for _, tag := range tags {
+		esc := template.HTMLEscapeString(tag)
+		b.WriteString(`<span class="badge bg-info text-dark me-2 mb-2 d-inline-flex align-items-center gap-1">`)
+		if editor.TagEditURL != "" {
+			b.WriteString(fmt.Sprintf(
+				`<form method="POST" action="%s" class="d-inline-flex align-items-center gap-1 mb-0">`+
+					`<input type="hidden" name="old_tag" value="%s">`+
+					`<input type="text" name="new_tag" value="%s" class="form-control form-control-sm" style="width:9rem;display:inline-block">`+
+					`<button type="submit" class="btn btn-sm btn-light py-0 px-1" title="Save">Save</button></form>`,
+				template.HTMLEscapeString(editor.TagEditURL), esc, esc,
+			))
+		} else {
+			b.WriteString(esc)
+		}
+		if editor.TagDeleteURL != "" {
+			b.WriteString(fmt.Sprintf(
+				`<form method="POST" action="%s" class="d-inline mb-0" onsubmit="return confirm('Delete tag %s?');">`+
+					`<input type="hidden" name="tag" value="%s">`+
+					`<button type="submit" class="btn btn-sm btn-outline-light py-0 px-1" title="Delete">×</button></form>`,
+				template.HTMLEscapeString(editor.TagDeleteURL), strconv.Quote(tag), esc,
+			))
+		}
+		b.WriteString(`</span>`)
+	}
+	b.WriteString(`</div></div>`)
+	return b.String()
+}
+
+func renderSummaryEntries(entries model.SummaryEntries) string {
+	return renderEditableSummary(entries, memoryEditor{})
+}
+
+func UsersByID(handler *debuger.DebugHandler) map[string]*model.User {
+	return usersByID(handler)
+}
+
+func usersByID(handler *debuger.DebugHandler) map[string]*model.User {
+	out := map[string]*model.User{}
+	if handler == nil {
+		return out
+	}
+	users, err := data.NewDataProvider(handler.GetStore()).GetAllUsers()
+	if err != nil {
+		return out
+	}
+	for _, user := range users {
+		if user != nil && user.UserID != "" {
+			out[user.UserID] = user
+		}
+	}
+	return out
+}
+
+func userLink(users map[string]*model.User, userID string) string {
+	return components.UserDebugLink(users[userID], userID)
 }
 
 func renderOpenedToolsCard(handler *debuger.DebugHandler, session *model.Session, files []*model.OpenedFile) string {

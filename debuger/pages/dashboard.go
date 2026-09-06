@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/ghiac/agentize/debuger/data"
 	"github.com/ghiac/agentize/debuger/ui"
 	"github.com/ghiac/agentize/debuger/ui/components"
+	"github.com/ghiac/agentize/model"
 )
 
 // RenderDashboard generates the dashboard HTML page.
@@ -81,6 +83,8 @@ func RenderDashboard(handler *debuger.DebugHandler, sysInfo *debuger.SystemInfo)
 	content += `</div>`
 
 	content += `</div>`
+
+	content += renderUsageRow(stats, usersByID(handler))
 
 	// System Info panel (database, file store, runtime)
 	if sysInfo != nil {
@@ -227,4 +231,79 @@ func enabledBadge(enabled bool) string {
 		return components.Badge("enabled", "success")
 	}
 	return components.Badge("disabled", "secondary")
+}
+
+func renderUsageRow(stats *debuger.DashboardStats, users map[string]*model.User) string {
+	if stats == nil {
+		return ""
+	}
+	out := `<div class="row g-4 mb-4">`
+	out += `<div class="col-md-6 col-lg-3">` + components.StatCard(
+		fmt.Sprintf("%d", stats.TotalTokens),
+		"LLM tokens", "🪙", "warning",
+	) + `</div>`
+	out += `<div class="col-md-6 col-lg-3">` + components.StatCard(
+		fmt.Sprintf("%d / %d", stats.TotalPromptTokens, stats.TotalCompletionTokens),
+		"Prompt / completion", "📥", "info",
+	) + `</div>`
+	out += `<div class="col-md-6 col-lg-3">` + components.StatCard(
+		fmt.Sprintf("%.4f", stats.TotalCostCredits),
+		"Session cost (credits)", "💳", "success",
+	) + `</div>`
+	out += `</div>`
+	if len(stats.TopCostSessions) == 0 {
+		return out
+	}
+	labels := make([]string, 0, len(stats.TopCostSessions))
+	costs := make([]float64, 0, len(stats.TopCostSessions))
+	tokens := make([]int, 0, len(stats.TopCostSessions))
+	out += ui.CardStart("Cost by session", "graph-up")
+	out += `<p class="text-muted small">Highest stored session cost. Credits come from billed LLM calls on each session.</p>`
+	out += `<div id="usage-cost-chart" style="height:280px"></div>`
+	out += `<div class="table-responsive mt-3"><table class="table table-sm"><thead><tr><th>User</th><th>Session</th><th>Title</th><th class="text-end">Tokens</th><th class="text-end">Credits</th></tr></thead><tbody>`
+	for _, row := range stats.TopCostSessions {
+		label := components.ListUserLabel(users[row.UserID], row.UserID)
+		if label == "" {
+			label = row.UserID
+		}
+		labels = append(labels, label+" / "+row.Title)
+		costs = append(costs, row.CostCredits)
+		tokens = append(tokens, row.TotalTokens)
+		out += fmt.Sprintf(`<tr><td>%s</td><td>%s</td><td>%s</td><td class="text-end">%d</td><td class="text-end">%.4f</td></tr>`,
+			userLink(users, row.UserID),
+			components.EntityIDLink(row.SessionID, debuger.SessionPath(row.UserID, row.SessionID)),
+			template.HTMLEscapeString(row.Title),
+			row.TotalTokens,
+			row.CostCredits,
+		)
+	}
+	out += `</tbody></table></div>`
+	labelsJSON, _ := json.Marshal(labels)
+	costsJSON, _ := json.Marshal(costs)
+	tokensJSON, _ := json.Marshal(tokens)
+	out += fmt.Sprintf(`<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script>
+(function(){
+  var el = document.getElementById('usage-cost-chart');
+  if (!el || typeof echarts === 'undefined') return;
+  var chart = echarts.init(el);
+  chart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['Credits', 'Tokens'] },
+    grid: { left: 48, right: 48, top: 32, bottom: 72 },
+    xAxis: { type: 'category', data: %s, axisLabel: { rotate: 30 } },
+    yAxis: [
+      { type: 'value', name: 'Credits' },
+      { type: 'value', name: 'Tokens', splitLine: { show: false } }
+    ],
+    series: [
+      { name: 'Credits', type: 'bar', data: %s },
+      { name: 'Tokens', type: 'line', yAxisIndex: 1, data: %s }
+    ]
+  });
+  window.addEventListener('resize', function(){ chart.resize(); });
+})();
+</script>`, labelsJSON, costsJSON, tokensJSON)
+	out += ui.CardEnd()
+	return out
 }

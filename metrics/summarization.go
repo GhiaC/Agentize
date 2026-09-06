@@ -37,13 +37,19 @@ var (
 
 	summarizationChars = factory.NewHistogram(prometheus.HistogramOpts{
 		Namespace: namespace, Subsystem: "summarization", Name: "summary_chars",
-		Help: "Total character length of the append-only summary entries after a successful cycle.", Buckets: summCharBuckets,
+		Help: "Total character length of the durable fact list after a successful cycle.", Buckets: summCharBuckets,
 	})
 
 	summarizationGrowth = factory.NewHistogram(prometheus.HistogramOpts{
 		Namespace: namespace, Subsystem: "summarization", Name: "summary_growth_chars",
-		Help:    "Character growth vs the previous append-only summary (zero means no new important fact).",
+		Help:    "Character change vs the previous fact list (negative means compaction).",
 		Buckets: []float64{-400, -200, -50, 0, 25, 50, 100, 200, 400, 800},
+	})
+
+	summarizationEntries = factory.NewHistogram(prometheus.HistogramOpts{
+		Namespace: namespace, Subsystem: "summarization", Name: "summary_entries",
+		Help:    "Number of durable facts stored after a successful cycle (cap 20).",
+		Buckets: []float64{0, 1, 2, 4, 6, 8, 10, 12, 16, 20},
 	})
 
 	summarizationOffensive = factory.NewCounter(prometheus.CounterOpts{
@@ -106,4 +112,12 @@ func SummarizationResult(typ, status string, input, archived, retained, prevChar
 	if complTok > 0 {
 		summarizationTokens.WithLabelValues("completion").Add(float64(complTok))
 	}
+}
+
+// SummarizationMemory records how many durable facts remain after a successful cycle.
+func SummarizationMemory(entries int) {
+	if entries < 0 {
+		entries = 0
+	}
+	summarizationEntries.Observe(float64(entries))
 }

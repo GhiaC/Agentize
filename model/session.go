@@ -11,14 +11,26 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// SummaryEntries is the append-only memory produced by successive
-// summarization cycles.  Its JSON decoder accepts the legacy scalar string so
-// existing SQLite, PostgreSQL and MongoDB session rows migrate on read without
-// a destructive data migration.
+// MaxSummaryEntries is the hard cap on durable session and user-context facts.
+// The list is a living profile, not a recap: prefer updating an existing line
+// over appending a near-duplicate.
+const MaxSummaryEntries = 20
+
+// MaxSessionTags / MaxUserTags cap topic tags. Fewer specific tags are better.
+const (
+	MaxSessionTags = 7
+	MaxUserTags    = 20
+)
+
+// SummaryEntries is the durable fact list produced by summarization.
+// Its JSON decoder accepts the legacy scalar string so existing SQLite,
+// PostgreSQL and MongoDB session rows migrate on read without a destructive
+// data migration.
 type SummaryEntries []string
 
-// ContextDelta is a validated append-only proposal for cross-conversation user
-// memory. PendingUserContext makes scheduler delivery retryable across crashes.
+// ContextDelta is a proposed user-context snapshot (full replacement arrays).
+// Empty arrays mean "no change". PendingUserContext makes scheduler delivery
+// retryable across crashes.
 type ContextDelta struct {
 	Summary SummaryEntries `json:"summary"`
 	Tags    []string       `json:"tags"`
@@ -41,8 +53,7 @@ func (s *SummaryEntries) UnmarshalJSON(data []byte) error {
 	}
 	var entries []string
 	if err := json.Unmarshal(data, &entries); err == nil {
-		// Persisted entries are immutable history. Do not trim, reorder or
-		// deduplicate them while loading.
+		// Load persisted rows as-is. Normalization (dedupe, cap) happens on write.
 		*s = SummaryEntries(entries)
 		return nil
 	}
@@ -69,8 +80,52 @@ func (s SummaryEntries) Clone() SummaryEntries {
 	return append(SummaryEntries(nil), s...)
 }
 
-// AppendSummaryEntries preserves every existing item byte-for-byte and appends
-// only non-empty, non-duplicate new facts in their generated order.
+// NormalizeSummaryEntries trims, drops empties, case-insensitive-dedupes
+// (first occurrence wins), and caps at MaxSummaryEntries.
+func NormalizeSummaryEntries(entries []string) SummaryEntries {
+	out := make(SummaryEntries, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		key := strings.ToLower(entry)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		if len(out) >= MaxSummaryEntries {
+			break
+		}
+		seen[key] = struct{}{}
+		out = append(out, entry)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// ReplaceSummaryEntries is the complete updated fact list (max 20). Empty input
+// is a no-op signal at the call site; this helper still normalizes a non-empty
+// replacement.
+func ReplaceSummaryEntries(entries []string) SummaryEntries {
+	return NormalizeSummaryEntries(entries)
+}
+
+// CapSummaryEntries keeps at most max entries, dropping the oldest extras.
+func CapSummaryEntries(existing SummaryEntries, max int) SummaryEntries {
+	if max <= 0 {
+		max = MaxSummaryEntries
+	}
+	if len(existing) <= max {
+		return existing.Clone()
+	}
+	return existing[len(existing)-max:].Clone()
+}
+
+// AppendSummaryEntries appends non-empty, non-duplicate facts and caps at
+// MaxSummaryEntries by dropping the oldest extras.
 func AppendSummaryEntries(existing SummaryEntries, additions ...string) SummaryEntries {
 	out := existing.Clone()
 	seen := make(map[string]struct{}, len(out))
@@ -89,10 +144,53 @@ func AppendSummaryEntries(existing SummaryEntries, additions ...string) SummaryE
 		seen[key] = struct{}{}
 		out = append(out, entry)
 	}
+	return CapSummaryEntries(out, MaxSummaryEntries)
+}
+
+// RemoveSummaryEntry deletes the fact at index. Out-of-range is a no-op.
+func RemoveSummaryEntry(existing SummaryEntries, index int) SummaryEntries {
+	if index < 0 || index >= len(existing) {
+		return existing.Clone()
+	}
+	out := make(SummaryEntries, 0, len(existing)-1)
+	out = append(out, existing[:index]...)
+	out = append(out, existing[index+1:]...)
+	if len(out) == 0 {
+		return nil
+	}
 	return out
 }
 
-// AppendTags preserves the existing order and values and appends only new
+// NormalizeTags trims, lowercases, drops empties, dedupes, and caps.
+func NormalizeTags(tags []string, limit int) []string {
+	if limit <= 0 {
+		limit = MaxSessionTags
+	}
+	out := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(strings.ToLower(tag))
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		if len(out) >= limit {
+			break
+		}
+		seen[tag] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
+}
+
+// ReplaceTags is the complete updated tag list.
+func ReplaceTags(tags []string, limit int) []string {
+	return NormalizeTags(tags, limit)
+}
+
+// AppendTags preserves existing order and values and appends only new
 // case-insensitive tags. A positive limit caps the final list.
 func AppendTags(existing, additions []string, limit int) []string {
 	out := append([]string(nil), existing...)
@@ -101,19 +199,72 @@ func AppendTags(existing, additions []string, limit int) []string {
 		seen[strings.ToLower(strings.TrimSpace(tag))] = struct{}{}
 	}
 	for _, tag := range additions {
-		tag = strings.TrimSpace(tag)
-		key := strings.ToLower(tag)
+		tag = strings.TrimSpace(strings.ToLower(tag))
 		if tag == "" {
 			continue
 		}
-		if _, ok := seen[key]; ok {
+		if _, ok := seen[tag]; ok {
 			continue
 		}
 		if limit > 0 && len(out) >= limit {
 			break
 		}
-		seen[key] = struct{}{}
+		seen[tag] = struct{}{}
 		out = append(out, tag)
+	}
+	return out
+}
+
+// RemoveTag deletes a case-insensitive tag match.
+func RemoveTag(existing []string, tag string) []string {
+	tag = strings.TrimSpace(strings.ToLower(tag))
+	if tag == "" {
+		return append([]string(nil), existing...)
+	}
+	out := make([]string, 0, len(existing))
+	for _, item := range existing {
+		if strings.ToLower(strings.TrimSpace(item)) == tag {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// EditTag replaces an existing tag (case-insensitive) with newTag, or no-ops
+// if oldTag is missing. The result is still capped.
+func EditTag(existing []string, oldTag, newTag string, limit int) []string {
+	oldTag = strings.TrimSpace(strings.ToLower(oldTag))
+	newTag = strings.TrimSpace(strings.ToLower(newTag))
+	if oldTag == "" {
+		return append([]string(nil), existing...)
+	}
+	out := make([]string, 0, len(existing))
+	replaced := false
+	seen := make(map[string]struct{}, len(existing))
+	for _, item := range existing {
+		key := strings.ToLower(strings.TrimSpace(item))
+		if key == oldTag {
+			if newTag == "" || replaced {
+				continue
+			}
+			if _, ok := seen[newTag]; ok {
+				replaced = true
+				continue
+			}
+			out = append(out, newTag)
+			seen[newTag] = struct{}{}
+			replaced = true
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }
@@ -243,7 +394,7 @@ type Session struct {
 	// ==================== Summarization ====================
 	Tags    []string       // User-defined or auto-generated tags for categorization
 	Title   string         // Session title (auto-generated or user-set)
-	Summary SummaryEntries `json:"Summary"` // Append-only LLM-generated facts; legacy scalar JSON is accepted on load.
+	Summary SummaryEntries `json:"Summary"` // Durable fact list (max 20); summarization replaces, not appends. Legacy scalar JSON is accepted on load.
 	// SummaryInitialized distinguishes a valid no-op [] result from legacy rows
 	// that were marked summarized after an empty/invalid provider response.
 	SummaryInitialized bool
@@ -672,7 +823,7 @@ func (s *Session) PopulateFields(ctx context.Context, client LLMClient, model st
 	s.Title = title
 
 	// PopulateFields is a compatibility path. Preserve earlier entries and add
-	// its new compact result as one append-only item.
+	// its new compact result, capped at MaxSummaryEntries.
 	if len(s.Summary) == 0 {
 		summary, err := s.generateSummary(ctx, client, model, conversationText)
 		if err != nil {

@@ -424,13 +424,53 @@ func (dp *DataProvider) GetDashboardStats() (*debuger.DashboardStats, error) {
 		}
 	}
 
-	return &debuger.DashboardStats{
+	sessions, sessErr := dp.GetAllSessionsFlat()
+	if sessErr != nil {
+		return nil, sessErr
+	}
+
+	stats := &debuger.DashboardStats{
 		TotalUsers:     userCount,
 		TotalSessions:  sessionCount,
 		TotalMessages:  len(messages),
 		TotalFiles:     len(files),
 		TotalToolCalls: toolCallCount,
-	}, nil
+	}
+	ranked := append([]*model.Session(nil), sessions...)
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].CostCredits == ranked[j].CostCredits {
+			return ranked[i].TotalTokens > ranked[j].TotalTokens
+		}
+		return ranked[i].CostCredits > ranked[j].CostCredits
+	})
+	for _, session := range sessions {
+		if session == nil {
+			continue
+		}
+		stats.TotalPromptTokens += session.PromptTokens
+		stats.TotalCompletionTokens += session.CompletionTokens
+		stats.TotalTokens += session.TotalTokens
+		stats.TotalCostCredits += session.CostCredits
+	}
+	limit := 8
+	if len(ranked) < limit {
+		limit = len(ranked)
+	}
+	for _, session := range ranked[:limit] {
+		if session == nil || (session.CostCredits <= 0 && session.TotalTokens <= 0) {
+			continue
+		}
+		title := session.Title
+		if title == "" {
+			title = "Untitled"
+		}
+		stats.TopCostSessions = append(stats.TopCostSessions, debuger.CostSession{
+			UserID: session.UserID, SessionID: session.SessionID, Title: title,
+			CostCredits: session.CostCredits, TotalTokens: session.TotalTokens,
+		})
+	}
+
+	return stats, nil
 }
 
 // GetSummarizationStats returns statistics for summarization

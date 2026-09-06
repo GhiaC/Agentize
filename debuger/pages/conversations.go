@@ -41,8 +41,9 @@ func RenderConversations(handler *debuger.DebugHandler, page int) (string, error
 		content += components.TableStartWithConfig(columns, components.TableConfig{
 			Striped: false, Hover: true, Small: true, Responsive: true, AlignMiddle: true,
 		})
+		users := usersByID(handler)
 		for _, conv := range pageItems {
-			content += conversationRow(conv)
+			content += conversationRow(conv, users)
 		}
 		content += components.TableEnd(true)
 		content += components.PaginationSimple(page, totalItems, components.DefaultItemsPerPage, "/agentize/debug/conversations")
@@ -53,7 +54,7 @@ func RenderConversations(handler *debuger.DebugHandler, page int) (string, error
 	return ui.Header("Agentize Debug - Conversations") + ui.NavbarAndBody("/agentize/debug/conversations", content) + ui.Footer(), nil
 }
 
-func conversationRow(conv *model.Conversation) string {
+func conversationRow(conv *model.Conversation, users map[string]*model.User) string {
 	title := conv.Title
 	if title == "" {
 		title = "Untitled"
@@ -74,7 +75,7 @@ func conversationRow(conv *model.Conversation) string {
 			<td>%s</td>
 		</tr>`,
 		html.EscapeString(formatTimeAgo(conv.UpdatedAt)),
-		html.EscapeString(conv.UserID),
+		userLink(users, conv.UserID),
 		components.EntityID(conv.ConversationID),
 		html.EscapeString(title),
 		html.EscapeString(conv.Model),

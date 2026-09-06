@@ -139,11 +139,11 @@ The Core's long-term memory of a user is the **`Summary` + `Tags`** on each sess
 produced in the background by the `SessionScheduler`
 ([engine/schedules.go](../engine/schedules.go)):
 
-- `Session.Summary model.SummaryEntries` is an append-only string array. Legacy
-  scalar JSON loads as one entry without a destructive migration.
-- `summarizeSession` sends immutable earlier entries only as deduplication
-  context. The LLM returns a JSON array containing new important facts; validated
-  entries are appended without rewriting earlier items.
+- `Session.Summary model.SummaryEntries` is a durable fact list capped at 20.
+  Legacy scalar JSON loads as one entry without a destructive migration.
+- `summarizeSession` asks the model for the complete updated fact list. `[]`
+  means no change (existing facts are only capped). A non-empty array replaces
+  the previous list so stale or duplicate lines can be dropped.
   (prompt: `DefaultSummarizationPrompts` [engine/schedules.go](../engine/schedules.go)).
   Raw messages are not lost — older ones move to `ArchivedMsgs` while a rolling
   window of the most recent stays in `Msgs` (`splitRollingWindow`

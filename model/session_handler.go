@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -500,8 +501,8 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 	if titleErr == nil && strings.TrimSpace(title) != "" {
 		session.Title = strings.TrimSpace(title)
 	}
-	if generatedTags, tagErr := session.generateTags(ctx, sh.llmClient, sh.config.SummaryModel, conversationText); tagErr == nil {
-		session.Tags = AppendTags(session.Tags, generatedTags, 7)
+	if generatedTags, tagErr := session.generateTags(ctx, sh.llmClient, sh.config.SummaryModel, conversationText); tagErr == nil && len(generatedTags) > 0 {
+		session.Tags = ReplaceTags(generatedTags, MaxSessionTags)
 	}
 
 	// Runtime system context remains active and is never transcript history.
@@ -521,7 +522,7 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 	}
 	session.ArchivedMsgs = archived
 	session.Msgs = activeSystem
-	session.Summary = AppendSummaryEntries(session.Summary, summary)
+	session.Summary = applyDurableSummaryResponse(session.Summary, summary)
 	session.SummaryInitialized = true
 	session.SummarizedAt = time.Now()
 	session.UpdatedAt = time.Now()
@@ -638,28 +639,34 @@ func (sh *SessionHandler) getAgentTypeOrder(byType map[AgentType][]*Session) []A
 	return order
 }
 
+// applyDurableSummaryResponse replaces the fact list when the model returned a
+// non-empty JSON array. `[]` or a non-array recap leaves the existing facts
+// (capped at 20) so this path cannot accumulate duplicate paragraphs.
+func applyDurableSummaryResponse(existing SummaryEntries, raw string) SummaryEntries {
+	var entries []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &entries); err != nil {
+		return CapSummaryEntries(existing, MaxSummaryEntries)
+	}
+	if len(entries) == 0 {
+		return CapSummaryEntries(existing, MaxSummaryEntries)
+	}
+	return ReplaceSummaryEntries(entries)
+}
+
 // generateConversationSummary uses LLM to generate a summary of the conversation
 func (sh *SessionHandler) generateConversationSummary(ctx context.Context, conversationText string, summLog *SummarizationLog) (string, error) {
-	systemPrompt := `You are a conversation summarizer.
-Generate a concise summary (2-3 sentences) that captures the main topics and outcomes of this conversation.
+	systemPrompt := `You maintain a small durable fact list for this session. It is not a recap. Store only facts that must still be true later. Maximum 20 strings. Prefer updating or dropping existing lines. Returning [] is correct and common.
 
-Requirements:
-- Focus on key topics discussed and any decisions or conclusions reached
-- Be specific about what was accomplished or discussed
-- Maximum 200 characters
-- Use present or past tense appropriately
+OUTPUT: a JSON array of compact strings, nothing else.`
 
-Example: "Debugged Kubernetes pod restart issue. Found memory limits too low. Applied fix and verified pod stability."
-`
-
-	fullPrompt := systemPrompt + "\n\nSummarize this conversation:\n\n" + conversationText
+	fullPrompt := systemPrompt + "\n\nReturn only the JSON array:\n\n" + conversationText
 	summLog.PromptSent = fullPrompt
 
 	resp, err := sh.llmClient.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: sh.config.SummaryModel,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
-			{Role: openai.ChatMessageRoleUser, Content: "Summarize this conversation:\n\n" + conversationText},
+			{Role: openai.ChatMessageRoleUser, Content: "Return only the JSON array:\n\n" + conversationText},
 		},
 		MaxTokens: sh.config.SummaryMaxTokens,
 	})

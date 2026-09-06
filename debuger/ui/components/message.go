@@ -353,7 +353,7 @@ func messageUserLabel(userID string, config MessageRowConfig) string {
 	href := config.BaseURL + "/users/" + template.URLQueryEscaper(userID)
 	label := UserDisplayLabel(nil, userID)
 	if config.Users != nil {
-		label = UserDisplayLabel(config.Users[userID], userID)
+		label = ListUserLabel(config.Users[userID], userID)
 	}
 	if label == "" {
 		return `<span class="text-muted">—</span>`
@@ -369,6 +369,35 @@ func UserDisplayLabel(user *model.User, userID string) string {
 		}
 	}
 	return strings.TrimSpace(userID)
+}
+
+// ListUserLabel is the short identity for tables: @username, then name, then id.
+func ListUserLabel(user *model.User, userID string) string {
+	if user != nil {
+		if username := strings.TrimSpace(user.Username); username != "" {
+			return "@" + username
+		}
+		if name := strings.TrimSpace(user.Name); name != "" {
+			return name
+		}
+		if id := strings.TrimSpace(user.UserID); id != "" {
+			return id
+		}
+	}
+	return strings.TrimSpace(userID)
+}
+
+// UserDebugLink renders a username (preferred) linking to the user detail page.
+func UserDebugLink(user *model.User, userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return `<span class="text-muted">-</span>`
+	}
+	label := ListUserLabel(user, userID)
+	if label == "" {
+		return `<span class="text-muted">-</span>`
+	}
+	return TruncatedLink(label, "/agentize/debug/users/"+template.URLQueryEscaper(userID), 28)
 }
 
 // MessageTableScript returns the JavaScript needed for expandable rows

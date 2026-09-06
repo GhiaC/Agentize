@@ -51,61 +51,63 @@ func TestBuildUserFilesPrompt_ListsFiles(t *testing.T) {
 func TestGenerateSystemPrompt_CachesUntilInvalidated(t *testing.T) {
 	ch, sqliteStore := newTestCoreHandler(t, []string{"researcher"})
 
-	// First build: no files yet, so the file must not be listed. This populates the
-	// cache. (We assert on the file ID, not a "# User Files" header — the controller
-	// prompt itself documents a "## User Files" section, which contains that substring.)
-	const fileID = "u1-low-s0001-uf0001"
 	first, err := ch.generateSystemPrompt("u1", nil)
 	if err != nil {
 		t.Fatalf("generateSystemPrompt (first): %v", err)
 	}
-	if strings.Contains(strings.Join(first, " "), fileID) {
-		t.Fatal("did not expect any file listed before one was added")
+	if strings.Contains(strings.Join(first, " "), "prefers Go") {
+		t.Fatal("did not expect user context before it was stored")
 	}
 
-	// A file arrives, but the cache is still fresh → it must NOT appear yet.
-	putUserFile(t, sqliteStore, "u1", fileID, "report.pdf")
+	user, err := sqliteStore.GetOrCreateUser("u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.ContextSummary = model.SummaryEntries{"prefers Go"}
+	if err := sqliteStore.PutUser(user); err != nil {
+		t.Fatal(err)
+	}
 	cached, err := ch.generateSystemPrompt("u1", nil)
 	if err != nil {
 		t.Fatalf("generateSystemPrompt (cached): %v", err)
 	}
-	if strings.Contains(strings.Join(cached, " "), fileID) {
-		t.Error("cached system prompt should not reflect the new file until invalidated")
+	if strings.Contains(strings.Join(cached, " "), "prefers Go") {
+		t.Error("cached system prompt should not reflect new user context until invalidated")
 	}
 
-	// After invalidation the next build picks up the new file.
 	ch.invalidateSystemPrompt("u1")
 	rebuilt, err := ch.generateSystemPrompt("u1", nil)
 	if err != nil {
 		t.Fatalf("generateSystemPrompt (rebuilt): %v", err)
 	}
-	if !strings.Contains(strings.Join(rebuilt, " "), "report.pdf") {
-		t.Error("after invalidation the system prompt should list the new file")
+	if !strings.Contains(strings.Join(rebuilt, " "), "prefers Go") {
+		t.Error("after invalidation the system prompt should include user context")
 	}
 }
 
 func TestGenerateSystemPrompt_RebuildsWhenCoreSessionSummarized(t *testing.T) {
-	ch, sqliteStore := newTestCoreHandler(t, []string{"researcher"})
+	ch, _ := newTestCoreHandler(t, []string{"researcher"})
 
-	cs := &model.Session{UserID: "u1", AgentType: model.AgentTypeCore}
+	cs := &model.Session{UserID: "u1", AgentType: model.AgentTypeCore, Summary: model.SummaryEntries{"old fact"}}
+	ch.coreSessions["u1"] = cs
 
-	if _, err := ch.generateSystemPrompt("u1", cs); err != nil {
+	first, err := ch.generateSystemPrompt("u1", cs)
+	if err != nil {
 		t.Fatalf("generateSystemPrompt (first): %v", err)
 	}
+	if !strings.Contains(strings.Join(first, " "), "old fact") {
+		t.Fatal("expected initial session fact in the prompt")
+	}
 
-	// New file + still-fresh cache + no new summarization → it stays absent.
-	const fileID = "u1-low-s0001-uf0001"
-	putUserFile(t, sqliteStore, "u1", fileID, "report.pdf")
+	cs.Summary = model.SummaryEntries{"updated fact"}
 	cached, _ := ch.generateSystemPrompt("u1", cs)
-	if strings.Contains(strings.Join(cached, " "), fileID) {
+	if strings.Contains(strings.Join(cached, " "), "updated fact") {
 		t.Error("expected cached prompt while SummarizedAt is unchanged")
 	}
 
-	// A background summarization advances SummarizedAt past the cache build time →
-	// the memory is stale, so the prompt must be rebuilt even within the TTL.
 	cs.SummarizedAt = time.Now().Add(time.Hour)
 	rebuilt, _ := ch.generateSystemPrompt("u1", cs)
-	if !strings.Contains(strings.Join(rebuilt, " "), "report.pdf") {
+	if !strings.Contains(strings.Join(rebuilt, " "), "updated fact") {
 		t.Error("a newer SummarizedAt should force a rebuild of the cached system prompt")
 	}
 }

@@ -16,6 +16,11 @@ import (
 func RenderMessages(handler *debuger.DebugHandler, page int, userID, sessionID string) (string, error) {
 	dp := data.NewDataProvider(handler.GetStore())
 
+	var userLabel string
+	if userID != "" {
+		userLabel = components.ListUserLabel(usersByID(handler)[userID], userID)
+	}
+
 	var messages []*model.Message
 	var err error
 	var title string
@@ -32,7 +37,7 @@ func RenderMessages(handler *debuger.DebugHandler, page int, userID, sessionID s
 		baseURL = "/agentize/debug/messages?session=" + template.URLQueryEscaper(sessionID)
 	} else if userID != "" {
 		messages, err = dp.GetMessagesByUser(userID)
-		title = "Messages for User: " + userID
+		title = "Messages for User: " + userLabel
 		baseURL = "/agentize/debug/messages?user=" + template.URLQueryEscaper(userID)
 	} else {
 		messages, err = dp.GetAllMessages()
@@ -62,7 +67,7 @@ func RenderMessages(handler *debuger.DebugHandler, page int, userID, sessionID s
 		content += components.Breadcrumb([]components.BreadcrumbItem{
 			{Label: "Dashboard", URL: "/agentize/debug"},
 			{Label: "Users", URL: "/agentize/debug/users"},
-			{Label: userID, URL: "/agentize/debug/users/" + template.URLQueryEscaper(userID)},
+			{Label: userLabel, URL: "/agentize/debug/users/" + template.URLQueryEscaper(userID)},
 			{Label: "Messages", Active: true},
 		})
 	}

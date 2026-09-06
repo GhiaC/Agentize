@@ -70,6 +70,7 @@ func RenderToolCalls(handler *debuger.DebugHandler, page int, userID, sessionID 
 		// Configure tool call row display
 		rowConfig := components.DefaultToolCallRowConfig()
 		rowConfig.ShowUser = true
+		rowConfig.Users = usersByID(handler)
 		rowConfig.BaseURL = "/agentize/debug"
 
 		columns := components.ToolCallTableColumns(rowConfig)
@@ -183,7 +184,7 @@ func RenderUserToolCallDetail(handler *debuger.DebugHandler, userID, sessionID, 
 	content += `<div class="col-md-6">`
 	content += `<table class="table table-sm">`
 	content += fmt.Sprintf(`<tr><th class="w-25">User</th><td>%s</td></tr>`,
-		components.TruncatedLink(tc.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(tc.UserID), 30))
+		userLink(usersByID(handler), tc.UserID))
 	content += fmt.Sprintf(`<tr><th>Session</th><td>%s</td></tr>`,
 		components.EntityIDLink(tc.SessionID, debuger.SessionPath(tc.UserID, tc.SessionID)))
 	content += fmt.Sprintf(`<tr><th>Message ID</th><td>%s</td></tr>`, components.EntityID(tc.MessageID))

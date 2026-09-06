@@ -32,6 +32,7 @@ func RenderWorkflows(handler *debuger.DebugHandler, page int) (string, error) {
 	} else {
 		content += `<div class="table-responsive"><table class="table table-sm table-hover align-middle">
 			<thead><tr><th>Workflow</th><th>Owner</th><th>Source</th><th>Tasks</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>`
+		users := usersByID(handler)
 		for _, workflow := range pageItems {
 			source := `<span class="text-muted">immediate</span>`
 			if workflow.ScheduleID != "" {
@@ -50,7 +51,7 @@ func RenderWorkflows(handler *debuger.DebugHandler, page int) (string, error) {
 				template.HTMLEscapeString(workflow.Name),
 				components.EntityIDText(workflow.WorkflowID),
 				template.URLQueryEscaper(workflow.UserID),
-				template.HTMLEscapeString(workflow.UserID),
+				template.HTMLEscapeString(components.ListUserLabel(users[workflow.UserID], workflow.UserID)),
 				components.EntityIDText(workflow.SessionID),
 				source, len(workflow.Tasks), workflowStatusBadge(workflow.Status),
 				template.HTMLEscapeString(debuger.FormatTime(workflow.CreatedAt)),
@@ -103,7 +104,7 @@ func RenderUserWorkflowDetail(handler *debuger.DebugHandler, userID, workflowID 
 	content += `<div class="row"><div class="col-md-6"><table class="table table-sm"><tbody>`
 	content += workflowMetaRow("Workflow ID", components.EntityID(workflow.WorkflowID))
 	content += workflowMetaRow("Name", template.HTMLEscapeString(workflow.Name))
-	content += workflowMetaRow("User", components.TruncatedLink(workflow.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(workflow.UserID), 30))
+	content += workflowMetaRow("User", userLink(usersByID(handler), workflow.UserID))
 	content += workflowMetaRow("Session", components.EntityIDLink(workflow.SessionID, debuger.SessionPath(workflow.UserID, workflow.SessionID)))
 	content += `</tbody></table></div><div class="col-md-6"><table class="table table-sm"><tbody>`
 	content += workflowMetaRow("Status", workflowStatusBadge(workflow.Status))

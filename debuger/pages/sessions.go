@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"html/template"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/ghiac/agentize/debuger"
@@ -83,6 +82,7 @@ func RenderSessions(handler *debuger.DebugHandler, page int) (string, error) {
 		// Configure session row display
 		rowConfig := components.DefaultSessionRowConfig()
 		rowConfig.ShowUser = true
+		rowConfig.Users = usersByID(handler)
 		rowConfig.GetFilesCount = func(userID, sessionID string) int {
 			files, _ := handler.GetStore().GetOpenedFilesByUser(userID)
 			n := 0
@@ -239,7 +239,7 @@ func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionI
 	content += components.Breadcrumb([]components.BreadcrumbItem{
 		{Label: "Dashboard", URL: "/agentize/debug"},
 		{Label: "Users", URL: "/agentize/debug/users"},
-		{Label: components.UserDisplayLabel(user, session.UserID), URL: "/agentize/debug/users/" + template.URLQueryEscaper(session.UserID)},
+		{Label: components.ListUserLabel(user, session.UserID), URL: "/agentize/debug/users/" + template.URLQueryEscaper(session.UserID)},
 		{Label: "Session", Active: true},
 	})
 
@@ -273,15 +273,7 @@ func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionI
 
 	summaryDisplay := "-"
 	if len(session.Summary) > 0 {
-		var items strings.Builder
-		items.WriteString(`<ol class="mb-0 ps-3 summary-entries">`)
-		for _, entry := range session.Summary {
-			items.WriteString(`<li class="mb-2">`)
-			items.WriteString(template.HTMLEscapeString(entry))
-			items.WriteString(`</li>`)
-		}
-		items.WriteString(`</ol>`)
-		summaryDisplay = items.String()
+		summaryDisplay = renderEditableSummary(session.Summary, sessionMemoryEditor(session.UserID, session.SessionID))
 	}
 
 	summarizedAtDisplay := "-"
@@ -291,7 +283,7 @@ func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionI
 
 	tagsDisplay := "-"
 	if len(session.Tags) > 0 {
-		tagsDisplay = components.TagBadges(session.Tags)
+		tagsDisplay = renderEditableTags(session.Tags, sessionMemoryEditor(session.UserID, session.SessionID))
 	}
 
 	content += fmt.Sprintf(`
@@ -371,7 +363,7 @@ func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionI
 		inProgressBadge,
 		agentTypeBadge,
 		components.InlineCode(debuger.GetModelDisplay(session.Model)),
-		components.Link(components.UserDisplayLabel(user, session.UserID), "/agentize/debug/users/"+template.URLQueryEscaper(session.UserID)),
+		components.Link(components.ListUserLabel(user, session.UserID), "/agentize/debug/users/"+template.URLQueryEscaper(session.UserID)),
 		summaryDisplay,
 		tagsDisplay,
 		components.Badge(fmt.Sprintf("%d active", activeMessagesCount), "primary"),

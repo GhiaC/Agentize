@@ -478,16 +478,6 @@ func (ch *CoreHandler) runCoreToolImpl(
 func (ch *CoreHandler) manageContextTool(userID string, session *model.Session, args map[string]interface{}) (string, error) {
 	action, _ := args["action"].(string)
 	scope, _ := args["scope"].(string)
-	stringsFrom := func(key string) []string {
-		raw, _ := args[key].([]interface{})
-		out := make([]string, 0, len(raw))
-		for _, value := range raw {
-			if s, ok := value.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
 	encode := func(summary model.SummaryEntries, tags []string, title string) string {
 		payload := map[string]interface{}{"summary": []string(summary), "tags": tags}
 		if title != "" {
@@ -501,14 +491,8 @@ func (ch *CoreHandler) manageContextTool(userID string, session *model.Session, 
 		if err != nil {
 			return "", err
 		}
-		switch action {
-		case "get":
-		case "add_summary":
-			user.ContextSummary = model.AppendSummaryEntries(user.ContextSummary, stringsFrom("entries")...)
-		case "add_tags":
-			user.ContextTags = model.AppendTags(user.ContextTags, stringsFrom("tags"), 20)
-		default:
-			return "", fmt.Errorf("unsupported context action %q", action)
+		if err := engine.ApplyUserContextAction(user, action, args); err != nil {
+			return "", err
 		}
 		if action != "get" {
 			if err := ch.saveUser(user); err != nil {
@@ -521,15 +505,8 @@ func (ch *CoreHandler) manageContextTool(userID string, session *model.Session, 
 	if scope != "session" || session == nil {
 		return "", fmt.Errorf("unsupported context scope %q", scope)
 	}
-	switch action {
-	case "get":
-	case "add_summary":
-		session.Summary = model.AppendSummaryEntries(session.Summary, stringsFrom("entries")...)
-		session.SummaryInitialized = true
-	case "add_tags":
-		session.Tags = model.AppendTags(session.Tags, stringsFrom("tags"), 20)
-	default:
-		return "", fmt.Errorf("unsupported context action %q", action)
+	if err := engine.ApplySessionContextAction(session, action, args); err != nil {
+		return "", err
 	}
 	if action != "get" {
 		if err := ch.saveCoreSession(session); err != nil {

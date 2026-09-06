@@ -55,7 +55,7 @@ func RenderSummarized(handler *debuger.DebugHandler, page int) (string, error) {
 		content += components.ConfigCard("Scheduler Configuration", configItems)
 		if prompt := strings.TrimSpace(config.SummarySystemPrompt); prompt != "" {
 			content += collapsibleCardStart("Summarization Prompt", "chat-quote-fill", 1, true)
-			content += `<p class="text-muted mb-3">This prompt is sent to the summary model. Memory is an append-only array: the model can only add new durable facts, or return <code>[]</code> when nothing new is worth keeping. It cannot edit existing entries.</p>`
+			content += `<p class="text-muted mb-3">This prompt is sent to the summary model. Memory is a living fact list (max 20): update existing lines, drop stale ones, or return <code>[]</code> when nothing changed.</p>`
 			content += fmt.Sprintf(`<pre class="bg-light border rounded p-3" style="white-space: pre-wrap; word-wrap: break-word;">%s</pre>`, template.HTMLEscapeString(prompt))
 			content += collapsibleCardEnd()
 		}
@@ -315,6 +315,7 @@ func RenderSummarizedMessages(handler *debuger.DebugHandler) (string, error) {
 
 		content += components.ListGroupStart()
 
+		users := usersByID(handler)
 		for _, msgInfo := range allSummarizedMessages {
 			contentDisplay := components.ExpandableWithPreview(msgInfo.Content, 500)
 
@@ -342,7 +343,7 @@ func RenderSummarizedMessages(handler *debuger.DebugHandler) (string, error) {
 				components.RoleBadge(msgInfo.Role),
 				toolCallBadge,
 				components.ButtonOutlineSmall("Open Session", debuger.SessionPath(msgInfo.UserID, msgInfo.SessionID), "primary"),
-				components.Badge("User: "+debuger.TruncateString(msgInfo.UserID, 20), "info"),
+				components.Badge("User: "+components.ListUserLabel(users[msgInfo.UserID], msgInfo.UserID), "info"),
 				debuger.FormatTime(msgInfo.SummarizedAt),
 				contentDisplay,
 			)
@@ -527,7 +528,7 @@ func RenderUserSummarizationLogDetail(handler *debuger.DebugHandler, userID, ses
 		typeBadge,
 		components.EntityIDLink(log.SessionID, debuger.SessionPath(log.UserID, log.SessionID)),
 		template.HTMLEscapeString(log.SessionTitle),
-		components.Link(log.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(log.UserID)),
+		components.Link(components.ListUserLabel(usersByID(handler)[log.UserID], log.UserID), "/agentize/debug/users/"+template.URLQueryEscaper(log.UserID)),
 		components.InlineCode(log.ModelUsed),
 		components.InlineCode(log.RequestedModel),
 		durationDisplay,

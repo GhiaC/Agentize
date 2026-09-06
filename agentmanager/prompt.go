@@ -347,12 +347,12 @@ func (am *AgentManager) BuildSessionContextPrompt(
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("## Session Context for %s\n\n", displayName))
 	if len(session.Summary) > 0 {
-		sb.WriteString("### Summary\n")
+		sb.WriteString("### Facts\n")
 		sb.WriteString(session.Summary.Text())
 		sb.WriteString("\n\n")
 	}
 	if len(session.Tags) > 0 {
-		sb.WriteString("### Topics\n")
+		sb.WriteString("### Tags\n")
 		sb.WriteString(strings.Join(session.Tags, ", "))
 		sb.WriteString("\n")
 	}

@@ -107,7 +107,7 @@ type contextResolver interface {
 func emptySectionNote(key string) string {
 	switch key {
 	case SectionUserContext:
-		return "No cross-conversation facts yet. The summarizer appends summary entries and tags after conversations are summarized."
+		return "No cross-conversation facts yet. The summarizer stores at most 20 durable facts and tags after conversations are summarized."
 	case SectionCoreSessionContext:
 		return "No title, summary, or tags on the active conversation yet. Open a conversation or wait for summarization."
 	default:

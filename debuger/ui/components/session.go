@@ -13,6 +13,7 @@ type SessionRowConfig struct {
 	ShowUser      bool                               // Show user column with link
 	BaseURL       string                             // Base URL for links
 	GetFilesCount func(userID, sessionID string) int // Function to get files count
+	Users         map[string]*model.User
 }
 
 // DefaultSessionRowConfig returns default configuration for session row
@@ -114,7 +115,7 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 	// Add user column if configured
 	if config.ShowUser {
 		html += fmt.Sprintf(`<td class="text-nowrap">%s</td>`,
-			TruncatedLink(session.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(session.UserID), 15))
+			UserDebugLink(sessionRowUser(config, session.UserID), session.UserID))
 	}
 
 	html += fmt.Sprintf(`
@@ -173,7 +174,7 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 					<div class="col-md-6">
 						<table class="table table-sm table-borderless mb-0">
 							<tr><th class="text-muted" style="width: 140px;">Session ID</th><td>%s</td></tr>
-							<tr><th class="text-muted">User ID</th><td>%s</td></tr>
+							<tr><th class="text-muted">User</th><td>%s</td></tr>
 							<tr><th class="text-muted">Agent Type</th><td>%s</td></tr>
 							<tr><th class="text-muted">Model</th><td>%s</td></tr>
 							<tr><th class="text-muted">Title</th><td>%s</td></tr>
@@ -210,7 +211,7 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 	</tr>`,
 		rowID, colSpan,
 		EntityID(session.SessionID),
-		TruncatedLink(session.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(session.UserID), 40),
+		UserDebugLink(sessionRowUser(config, session.UserID), session.UserID),
 		agentBadge,
 		InlineCode(session.Model),
 		template.HTMLEscapeString(session.Title),
@@ -233,6 +234,13 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 	)
 
 	return html
+}
+
+func sessionRowUser(config SessionRowConfig, userID string) *model.User {
+	if config.Users == nil {
+		return nil
+	}
+	return config.Users[userID]
 }
 
 func sessionCostDisplay(cost float64) string {

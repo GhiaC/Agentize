@@ -66,6 +66,22 @@ func TestSystemPromptSectionsFor_KeysAndClassification(t *testing.T) {
 	}
 }
 
+func TestCoreControllerPromptIsDispatchOnly(t *testing.T) {
+	if len(coreControllerPrompt) > 2000 {
+		t.Fatalf("controller prompt is %d bytes; keep it dispatch-only", len(coreControllerPrompt))
+	}
+	for _, banned := range []string{"## User Files", "Session Management", "Ban Policy"} {
+		if strings.Contains(coreControllerPrompt, banned) {
+			t.Errorf("controller still documents %q", banned)
+		}
+	}
+	for _, want := range []string{"dispatch-only", "send_conversation", "create_conversation"} {
+		if !strings.Contains(coreControllerPrompt, want) {
+			t.Errorf("controller missing %q", want)
+		}
+	}
+}
+
 func TestPreviewSystemPromptUsesPersistedUserAndActiveConversationContext(t *testing.T) {
 	st, err := store.NewSQLiteStore(":memory:")
 	if err != nil {

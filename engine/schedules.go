@@ -132,78 +132,47 @@ type conversationMetadataStore interface {
 // DefaultSummarizationPrompts returns default prompts for summarization
 func DefaultSummarizationPrompts() SummarizationPrompts {
 	return SummarizationPrompts{
-		SummarySystemPrompt: `You are the permanent-memory writer for this application. The application stores memory as an append-only JSON array of strings. You cannot edit, rewrite, merge, reorder, correct, or delete anything that is already in that array. You can only append new strings, or return [] and add nothing.
+		SummarySystemPrompt: `You maintain a small durable fact list for this session. It is not a recap. Store only facts that must still be true later, when the original messages are gone. Maximum 20 strings. Prefer updating or dropping existing lines over adding new ones. Returning [] is correct and common.
 
-CONTENT VIOLATION (check first): If the user's messages contain offensive, vulgar, abusive, or clearly inappropriate language (insults, slurs, explicit content, hate speech, etc.), respond with ONLY this exact word, nothing else: OFFENSIVE_CONTENT. No explanation, no other text.
+CONTENT VIOLATION (check first): If the user's messages contain offensive, vulgar, abusive, or clearly inappropriate language, respond with ONLY this exact word: OFFENSIVE_CONTENT
 
-WHAT THIS MEMORY IS FOR:
-This is not a conversation recap. It is the AI's long-term memory: facts that will still matter in a future session when the original messages are gone. If knowing this later would not change how the AI helps the user, do not store it.
+STORE: names, stable preferences, decisions, configurations, identifiers, constraints.
+DO NOT STORE: greetings, thanks, process chatter, restated existing facts, generic Q&A, temporary calculations, anything useful only for this turn.
 
-APPEND-ONLY CONSEQUENCES:
-- Existing entries are immutable history. Never repeat them.
-- You have no edit capability. A wrong or generic line would sit in memory forever, so be extremely selective.
-- If nothing genuinely new and durable was said, return [] — that is the correct and expected result.
-- If a fact changed, append a new entry describing the change; do not rewrite the old one.
+OUTPUT: a JSON array of compact strings, nothing else.
+- If existing memory is already complete and the new messages add nothing, return [].
+- If a fact changed or existing lines are redundant, return the complete updated list (max 20), with each fact once, most important first.
+- Never pad the list. Fewer precise facts beat many similar paragraphs.
 
-STORE ONLY NEW, SPECIFIC, DURABLE FACTS, for example:
-- A proper name that was not already stored (person, company, product, place)
-- A personal detail that will stay true (age, role, preference, relationship, constraint)
-- A decision, commitment, goal, or configuration the user made
-- A notable action that actually happened (opened an account, placed a trade, changed a setting)
-- An identifier, date, or number the user defined and will need later
+Example: existing ["Ali is 28."] + "I turned 29 and joined TechCorp" => ["Ali is 29.","Ali joined TechCorp."]
+Example: existing ["Ali is 29.","Master Watch: 10-minute alerts."] + "ok thanks" => []`,
 
-NEVER STORE:
-- Greetings, thanks, acknowledgments, small talk
-- Restating what is already in the existing entries
-- Generic Q&A, how-tos, weather, time, unit conversions, temporary calculations
-- Process chatter ("the user asked…", "I explained…", "we discussed…")
-- Anything that is only useful for this turn
-
-OUTPUT:
-- Return a valid JSON array of compact strings and nothing else.
-- Each string is one independently useful new fact.
-- Return [] when there is nothing important to append.
-
-Example: existing ["User Ali is 28."] + new "I turned 29 and joined TechCorp" => ["User Ali turned 29.","User Ali joined TechCorp."]
-Example: existing ["User Ali is 28."] + new "ok thanks, what is 2+2?" => []`,
-
-		SummaryUserPromptTemplate: `{{if .PreviousSummary}}IMMUTABLE EXISTING MEMORY ENTRIES (you cannot edit these; do not repeat them):
+		SummaryUserPromptTemplate: `{{if .PreviousSummary}}EXISTING FACTS (return [] if still complete; otherwise return the full updated list, max 20):
 {{.PreviousSummary}}
 
-NEW conversation to inspect. Append only facts that should live in permanent memory. If nothing new is worth remembering, return []:
+NEW messages. Update existing facts in place. Do not repeat them as extra lines.
 {{end}}{{.ConversationText}}
 
-Return only the JSON array of NEW durable facts to append, or []:`,
+Return only the JSON array:`,
 
-		TagSystemPrompt: `You are a conversation tagger that identifies SPECIFIC topics only.
+		TagSystemPrompt: `Return specific topic tags for this conversation.
 
-WHAT TO TAG (specific topics):
-- Named entities (people, companies, products)
-- Technical projects or systems being worked on
-- Personal topics (health, family, work)
-- Specific domains the user is interested in
+TAG: named entities, projects, systems, stable domains.
+DO NOT TAG: questions, help, chat, math, greetings, generic actions.
 
-WHAT NOT TO TAG (generic topics):
-- "questions", "help", "conversation"
-- "math", "calculations", "conversions" (unless it's a recurring theme)
-- "greetings", "chat"
-- Any generic action words
+Rules:
+1. Return the complete desired tag list, lowercase hyphenated, at most 7.
+2. Drop generic or duplicate tags. Edit a tag by returning the corrected form and omitting the old one.
+3. Empty response means keep existing tags unchanged.
 
-CRITICAL RULES:
-1. Existing tags are immutable; never return them again
-2. Return only new tags for genuinely specific new topics
-3. The application will append at most enough tags to reach 7 total
-4. Be very selective - fewer specific tags are better than many generic ones
+Examples: kubernetes, project-alpha, master-watch`,
 
-Format: lowercase, hyphenated (e.g., "kubernetes", "project-alpha", "user-preferences")
-Return only new tags, comma-separated, no quotes or extra text. Return an empty response when none are new.`,
+		TagUserPromptTemplate: `{{if .ExistingTags}}EXISTING TAGS: {{.ExistingTags}}
 
-		TagUserPromptTemplate: `{{if .ExistingTags}}EXISTING TAGS (preserve these unless completely irrelevant): {{.ExistingTags}}
-
-{{end}}NEW CONVERSATION CONTENT:
+{{end}}CONVERSATION:
 {{.ConversationText}}
 
-		Generate only NEW tags for SPECIFIC topics (ignore generic questions and small talk):`,
+Return the complete tag list (comma-separated) or empty to keep existing:`,
 
 		TitleSystemPrompt: `Generate a short title (3-5 words) for this conversation.
 Focus on the SPECIFIC topic or person discussed, not generic actions.
@@ -757,8 +726,8 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	// Track what we generate
 	var generatedSummary, generatedTags, generatedTitle string
 
-	// Generate only the delta and append it to immutable prior entries.
 	previousSummary := session.Summary.Clone()
+	previousSummaryInitialized := session.SummaryInitialized
 	previousTitle := session.Title
 	previousTags := append([]string(nil), session.Tags...)
 	previousPendingUserContext := session.PendingUserContext
@@ -820,10 +789,14 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		metrics.SummarizationResult(summarizationType, "failed", msgCount, 0, 0, len(previousSummary.Text()), 0, 0, 0)
 		return fmt.Errorf("invalid summary response: %w", err)
 	}
-	session.Summary = model.AppendSummaryEntries(previousSummary, newEntries...)
-	previousSummaryInitialized := session.SummaryInitialized
+	if len(newEntries) > 0 {
+		session.Summary = model.ReplaceSummaryEntries(newEntries)
+		generatedSummary = strings.Join([]string(session.Summary), "\n")
+	} else {
+		session.Summary = model.CapSummaryEntries(previousSummary, model.MaxSummaryEntries)
+		generatedSummary = ""
+	}
 	session.SummaryInitialized = true
-	generatedSummary = strings.Join(newEntries, "\n")
 
 	// Generate and merge tags
 	existingTags := session.Tags
@@ -834,8 +807,8 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		}
 	} else {
 		session.Tags = mergedTags
-		if len(mergedTags) > len(existingTags) {
-			generatedTags = strings.Join(mergedTags[len(existingTags):], ", ")
+		if generated := strings.Join(mergedTags, ", "); generated != strings.Join(existingTags, ", ") {
+			generatedTags = generated
 		}
 	}
 
@@ -949,6 +922,7 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 
 	metrics.SummarizationResult(summarizationType, "ok", msgCount, movedCount, retainedCount,
 		len(previousSummary.Text()), len(session.Summary.Text()), summLog.PromptTokens, summLog.CompletionTokens)
+	metrics.SummarizationMemory(len(session.Summary))
 
 	// Record how stale the previous summary was when we refreshed it. Skipped on
 	// the first-ever summarization, where there is no previous summary to age.
@@ -957,9 +931,9 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 	}
 
 	if !ss.config.DisableLogs {
-		log.Log.Infof("[SessionScheduler] ✅ Session %s summarized | Type: %s | Moved: %d msgs | Retained: %d | Archived: %d | Summary: %s | Tags: %v | Duration: %dms",
+		log.Log.Infof("[SessionScheduler] ✅ Session %s summarized | Type: %s | Moved: %d msgs | Retained: %d | Archived: %d | Facts: %d | Tags: %d | Duration: %dms",
 			session.SessionID, summarizationType, movedCount, retainedCount, len(session.ArchivedMsgs),
-			truncateStringForLog(session.Summary.Text(), 50), session.Tags, summLog.DurationMs)
+			len(session.Summary), len(session.Tags), summLog.DurationMs)
 	}
 
 	// Notify the host (e.g. so the Core drops this user's cached system prompt and
@@ -981,7 +955,7 @@ func (ss *SessionScheduler) generateUserContextDelta(ctx context.Context, sessio
 		return nil, err
 	}
 	existing, _ := json.Marshal(map[string]interface{}{"summary": user.ContextSummary, "tags": user.ContextTags})
-	systemPrompt := `Extract only stable facts about the user that will remain useful across future, unrelated conversations (preferences, constraints, durable profile facts). Do not copy task progress, one-off requests, secrets, credentials, or transient details. Return exactly one JSON object: {"summary":["new fact"],"tags":["new-tag"]}. Both arrays may be empty. Return only NEW items not already present.`
+	systemPrompt := `Extract only stable facts about the user that will remain useful across future, unrelated conversations (preferences, constraints, durable profile facts). Do not copy task progress, one-off requests, secrets, credentials, or transient details. Return exactly one JSON object: {"summary":["fact"],"tags":["tag"]}. Return the complete updated arrays (max 20 facts, max 20 tags). Update stale facts in place. Empty arrays mean no change. Never pad.`
 	userPrompt := "Existing user context:\n" + string(existing) + "\n\nNew conversation window:\n" + conversationText
 	request := openai.ChatCompletionRequest{Model: ss.config.SummaryModel, Messages: []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: systemPrompt}, {Role: openai.ChatMessageRoleUser, Content: userPrompt}}, MaxCompletionTokens: ss.config.MetadataMaxCompletionTokens, ReasoningEffort: ss.summaryReasoningEffort()}
 	if request.MaxCompletionTokens <= 0 {
@@ -999,8 +973,8 @@ func (ss *SessionScheduler) generateUserContextDelta(ctx context.Context, sessio
 	if err := json.Unmarshal([]byte(raw), &delta); err != nil {
 		return nil, fmt.Errorf("invalid user-context JSON: %w", err)
 	}
-	delta.Summary = model.AppendSummaryEntries(nil, delta.Summary...)
-	delta.Tags = model.AppendTags(nil, delta.Tags, 20)
+	delta.Summary = model.ReplaceSummaryEntries(delta.Summary)
+	delta.Tags = model.ReplaceTags(delta.Tags, model.MaxUserTags)
 	return &delta, nil
 }
 
@@ -1016,8 +990,14 @@ func (ss *SessionScheduler) applyPendingUserContext(sessionStore model.SessionSt
 	if err != nil {
 		return err
 	}
-	user.ContextSummary = model.AppendSummaryEntries(user.ContextSummary, session.PendingUserContext.Summary...)
-	user.ContextTags = model.AppendTags(user.ContextTags, session.PendingUserContext.Tags, 20)
+	if len(session.PendingUserContext.Summary) > 0 {
+		user.ContextSummary = model.ReplaceSummaryEntries(session.PendingUserContext.Summary)
+	}
+	if len(session.PendingUserContext.Tags) > 0 {
+		user.ContextTags = model.ReplaceTags(session.PendingUserContext.Tags, model.MaxUserTags)
+	} else if len(user.ContextTags) > model.MaxUserTags {
+		user.ContextTags = model.ReplaceTags(user.ContextTags, model.MaxUserTags)
+	}
 	if err := users.PutUser(user); err != nil {
 		return err
 	}
@@ -1179,7 +1159,8 @@ func (ss *SessionScheduler) generateAndMergeTags(ctx context.Context, existingTa
 		return nil, fmt.Errorf("no response from LLM")
 	}
 
-	// Existing tags are immutable. Parse only the delta, then append in order.
+	// Existing tags stay if the model returns empty. A non-empty list is the
+	// complete updated set (max MaxSessionTags).
 	tagsStr := getMessageContentString(resp.Choices[0].Message)
 	if tagsStr == "" {
 		retryRequest := request
@@ -1203,7 +1184,10 @@ func (ss *SessionScheduler) generateAndMergeTags(ctx context.Context, existingTa
 			additions = append(additions, tag)
 		}
 	}
-	return model.AppendTags(existingTags, additions, 7), nil
+	if len(additions) == 0 {
+		return existingTags, nil
+	}
+	return model.ReplaceTags(additions, model.MaxSessionTags), nil
 }
 
 func parseSummaryEntries(raw string) ([]string, error) {
@@ -1215,7 +1199,7 @@ func parseSummaryEntries(raw string) ([]string, error) {
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return nil, fmt.Errorf("expected JSON string array: %w", err)
 	}
-	return []string(model.AppendSummaryEntries(nil, entries...)), nil
+	return []string(model.NormalizeSummaryEntries(entries)), nil
 }
 
 func (ss *SessionScheduler) summaryReasoningEffort() string {

@@ -180,7 +180,8 @@ Emitted by the built-in OpenRouter image editor (`imageedit/`) on every
 | `summarization_messages_archived` | histogram | — (evicted from the rolling window) |
 | `summarization_messages_retained` | histogram | — (kept active in the rolling window) |
 | `summarization_summary_chars` | histogram | — (resulting summary length) |
-| `summarization_summary_growth_chars` | histogram | — (append-only character growth; zero means no new fact) |
+| `summarization_summary_growth_chars` | histogram | — (character change vs previous fact list; negative means compaction) |
+| `summarization_summary_entries` | histogram | — (durable fact count after a successful cycle, cap 20) |
 | `summarization_tokens_total` | counter | `type` (prompt/completion) |
 | `summarization_offensive_total` | counter | — |
 | `summary_age_seconds` | histogram | — (age of the previous summary when a session is re-summarized; high = summaries go stale before refresh. First-ever summarization is not counted.) |
@@ -192,9 +193,9 @@ Dashboard: [`grafana/agentize-summarization-dashboard.json`](./grafana/agentize-
   most recent `SchedulerConfig.RetainRecentMessages` messages (default **10**) stay
   in `Msgs`; only older messages move to `ArchivedMsgs`. Messages rotate out one
   window at a time instead of the session going suddenly blank.
-- **Append-style summary:** the summary is *merged*, not replaced. The model keeps
-  every previously captured specific, adds only new specifics, and updates a fact
-  only when the new conversation corrects it (soft cap ~800 chars with compaction).
+- **Updatable fact list:** at most 20 durable facts. The model returns `[]` when
+  nothing changed, or the complete updated list when a fact should be rewritten
+  or dropped. This is memory, not a recap.
 
 ## Example PromQL
 

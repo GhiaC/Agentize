@@ -5,21 +5,22 @@ import (
 	"testing"
 )
 
-func TestDefaultSummarizationPromptIsAppendOnlyDurableMemory(t *testing.T) {
+func TestDefaultSummarizationPromptIsUpdatableDurableMemory(t *testing.T) {
 	prompts := DefaultSummarizationPrompts()
 	system := prompts.SummarySystemPrompt
 	for _, want := range []string{
-		"append-only",
-		"cannot edit",
+		"Maximum 20",
+		"Prefer updating",
 		"return []",
-		"proper name",
-		"notable action",
 	} {
-		if !strings.Contains(strings.ToLower(system), strings.ToLower(want)) {
+		if !strings.Contains(system, want) {
 			t.Errorf("summary system prompt missing %q", want)
 		}
 	}
-	if !strings.Contains(prompts.SummaryUserPromptTemplate, "permanent memory") {
-		t.Fatal("user template must tell the model this is permanent memory")
+	if strings.Contains(strings.ToLower(system), "append-only") || strings.Contains(strings.ToLower(system), "cannot edit") {
+		t.Fatal("summary prompt must allow updating existing facts")
+	}
+	if !strings.Contains(prompts.SummaryUserPromptTemplate, "full updated list") {
+		t.Fatal("user template must ask for the complete updated list")
 	}
 }

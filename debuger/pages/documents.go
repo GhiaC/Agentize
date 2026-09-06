@@ -48,6 +48,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 		}
 		content += components.TableStartWithConfig(columns, components.DefaultTableConfig())
 
+		users := usersByID(handler)
 		for _, f := range paginatedFiles {
 			derived := "-"
 			if f.ParentFileID != "" {
@@ -98,7 +99,7 @@ func RenderDocuments(handler *debuger.DebugHandler, page int) (string, error) {
 				formatBytes(f.Size),
 				derived,
 				debuger.FormatTime(f.CreatedAt),
-				components.TruncatedLink(f.UserID, "/agentize/debug/users/"+template.URLQueryEscaper(f.UserID), 20),
+				userLink(users, f.UserID),
 				components.EntityIDLink(f.SessionID, debuger.SessionPath(f.UserID, f.SessionID)),
 				actions,
 			)

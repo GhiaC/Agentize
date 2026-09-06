@@ -11,7 +11,7 @@ can explain the request without reconstructing it from transcript messages.
 Durable memory is split by ownership:
 
 - **User context**: facts and tags that remain useful across conversations.
-- **Session context**: title, append-only summary entries, and tags for one
+- **Session context**: title, durable fact list (max 20, updated in place), and tags for one
   session/conversation.
 - **Knowledge state**: opened node identities are runtime capability state. A
   compact usage catalog of currently open nodes is included in the prompt so
@@ -95,9 +95,11 @@ when required for compatibility. Neither collection is a prompt section.
 
 ## Summarization and memory writes
 
-The summarization scheduler is the only automatic memory writer. Its existing
-session-summary and session-tag generators produce append-only Session deltas.
-A separate classifier returns the cross-conversation proposal:
+The summarization scheduler is the only automatic memory writer. Its session
+fact and tag generators return a complete updated snapshot (max 20 facts).
+Empty arrays mean no change. A non-empty list replaces the previous facts so
+stale or duplicate lines can be dropped. A separate classifier returns the
+cross-conversation snapshot:
 
 ```json
 {
@@ -106,19 +108,14 @@ A separate classifier returns the cross-conversation proposal:
 }
 ```
 
-The scheduler validates the shape, normalizes only new tags, performs
-case-insensitive deduplication, preserves previous entries byte-for-byte and
-applies configured limits. It first persists the user delta on the Session as a
-retryable outbox, then idempotently merges it into User and clears the outbox.
-This remains recoverable without requiring a cross-document transaction. An
-empty array is a valid no-op. Provider text never directly mutates storage.
+The scheduler validates the shape, case-insensitive-dedupes, and caps at 20
+facts. A non-empty snapshot replaces stored user context; empty arrays are a
+no-op. It first persists the snapshot on the Session as a retryable outbox,
+then applies it to User and clears the outbox.
 
 Interactive agents may receive a `manage_context` tool with `get`,
-`add_summary`, and `add_tags` actions scoped to `user` or `session`. These calls
-use injected identities and the same merge service as the scheduler. The
-scheduler itself does not run as an unconstrained tool-using agent: proposed
-changes plus an application-owned commit is easier to audit, retry and make
-idempotent.
+`add_summary`, `set_summary`, `remove_summary`, `add_tags`, `set_tags`,
+`remove_tag`, and `edit_tag` actions scoped to `user` or `session`.
 
 ## PostgreSQL and compatibility
 

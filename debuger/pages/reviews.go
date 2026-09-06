@@ -13,7 +13,7 @@ import (
 // RenderReviews renders the pending human-in-the-loop reviews with inline
 // approve/reject forms. Both buttons POST to the SAME Resolve endpoint with a
 // different decision value — the one entry point every frontend uses.
-func RenderReviews(reviews []*model.ReviewRequest) (string, error) {
+func RenderReviews(reviews []*model.ReviewRequest, users map[string]*model.User) (string, error) {
 	content := ui.ContainerStart()
 	content += ui.CardStartWithCount("Pending Reviews", "person-check", len(reviews))
 	if len(reviews) == 0 {
@@ -36,7 +36,7 @@ func RenderReviews(reviews []*model.ReviewRequest) (string, error) {
 				template.HTMLEscapeString(r.ID),
 				template.HTMLEscapeString(r.Kind),
 				template.HTMLEscapeString(r.RefID),
-				template.HTMLEscapeString(r.UserID),
+				userLink(users, r.UserID),
 				template.HTMLEscapeString(truncateRunes(r.Title, 60)),
 				r.CreatedAt.Format("2006-01-02 15:04"),
 				reviewDecisionForms(r),

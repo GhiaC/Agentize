@@ -5,6 +5,7 @@ import (
 	"html/template"
 
 	"github.com/ghiac/agentize/debuger"
+	"github.com/ghiac/agentize/model"
 )
 
 // ToolCallRowConfig holds configuration for tool call table row display
@@ -13,6 +14,7 @@ type ToolCallRowConfig struct {
 	ShowSession bool   // Show session column with link
 	ShowMessage bool   // Show message column with link
 	BaseURL     string // Base URL for links
+	Users       map[string]*model.User
 }
 
 // DefaultToolCallRowConfig returns default configuration for tool call row
@@ -126,7 +128,7 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 	// Add user column if configured
 	if config.ShowUser {
 		html += fmt.Sprintf(`<td class="text-nowrap">%s</td>`,
-			TruncatedLink(tc.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(tc.UserID), 15))
+			UserDebugLink(toolCallRowUser(config, tc.UserID), tc.UserID))
 	}
 
 	// Add session column if configured
@@ -174,7 +176,7 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 							<tr><th class="text-muted">Function</th><td>%s</td></tr>
 							<tr><th class="text-muted">Label</th><td>%s</td></tr>
 							<tr><th class="text-muted">Agent Type</th><td>%s</td></tr>
-							<tr><th class="text-muted">User ID</th><td>%s</td></tr>
+							<tr><th class="text-muted">User</th><td>%s</td></tr>
 							<tr><th class="text-muted">Session ID</th><td>%s</td></tr>
 							<tr><th class="text-muted">Message ID</th><td>%s</td></tr>
 						</table>
@@ -211,7 +213,7 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 		InlineCode(tc.FunctionName),
 		InlineCode(displayName),
 		agentBadge,
-		TruncatedLink(tc.UserID, config.BaseURL+"/users/"+template.URLQueryEscaper(tc.UserID), 40),
+		UserDebugLink(toolCallRowUser(config, tc.UserID), tc.UserID),
 		EntityIDLink(tc.SessionID, debuger.SessionPath(tc.UserID, tc.SessionID)),
 		EntityID(tc.MessageID),
 		createdAtDisplay,
@@ -227,6 +229,13 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 	)
 
 	return html
+}
+
+func toolCallRowUser(config ToolCallRowConfig, userID string) *model.User {
+	if config.Users == nil {
+		return nil
+	}
+	return config.Users[userID]
 }
 
 // ToolCallTableScript returns the JavaScript needed for expandable tool call rows

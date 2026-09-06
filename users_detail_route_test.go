@@ -84,9 +84,10 @@ func TestUserDetailPage_CoreSystemPromptCard(t *testing.T) {
 		"remembers the user prefers Go", // the seeded Core summary surfaced
 		"prefers concise answers",       // persisted User Context surfaced
 		"Conversations",                 // user-facing list replaces raw sessions
-		"<details",                      // native collapsible markup
-		"Cross-conversation facts",      // dedicated User Context card
-		"class=\"tag-badges\"",          // tags wrap instead of overflowing mobile scroll
+		"<details", // native collapsible markup
+		"Durable facts that must stay true across conversations.",
+		"Delete this fact?",
+		"class=\"tag-badges\"", // tags wrap instead of overflowing mobile scroll
 		">Ali<",                         // host display name
 		">alice<",                       // host username
 		">Delete all</button>",          // compact wipe control; details live in confirm
@@ -106,5 +107,60 @@ func TestUserDetailPage_CoreSystemPromptCard(t *testing.T) {
 		if strings.Contains(body, removed) {
 			t.Errorf("removed user-page section leaked: %q", removed)
 		}
+	}
+}
+
+func TestUserContextFactDelete(t *testing.T) {
+	knowledge := createTestKnowledgeTree(t)
+	defer os.RemoveAll(knowledge)
+	dbStore, err := store.NewDBStoreWithPath(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag, err := NewWithOptions(knowledge, &Options{SessionStore: dbStore, FileStoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := dbStore.GetOrCreateUser("user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.ContextSummary = model.SummaryEntries{"keep this", "drop this"}
+	user.ContextTags = []string{"keep-tag", "drop-tag"}
+	if err := dbStore.PutUser(user); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTIZE_DEBUG_UNSAFE", "1")
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	ag.RegisterRoutes(router)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agentize/debug/users/user-1/context/summary/1/delete?confirm=user-1", nil)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound && rec.Code != http.StatusOK {
+		t.Fatalf("delete fact status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	user, _ = dbStore.GetUser("user-1")
+	if len(user.ContextSummary) != 1 || user.ContextSummary[0] != "keep this" {
+		t.Fatalf("summary after delete = %#v", user.ContextSummary)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/agentize/debug/users/user-1/context/tag/delete?confirm=user-1", strings.NewReader("tag=drop-tag"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(rec, req)
+	user, _ = dbStore.GetUser("user-1")
+	if len(user.ContextTags) != 1 || user.ContextTags[0] != "keep-tag" {
+		t.Fatalf("tags after delete = %#v", user.ContextTags)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/agentize/debug/users/user-1/context/tag/edit?confirm=user-1", strings.NewReader("old_tag=keep-tag&new_tag=renamed"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(rec, req)
+	user, _ = dbStore.GetUser("user-1")
+	if len(user.ContextTags) != 1 || user.ContextTags[0] != "renamed" {
+		t.Fatalf("tags after edit = %#v", user.ContextTags)
 	}
 }

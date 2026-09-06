@@ -113,11 +113,25 @@ type PageData struct {
 
 // DashboardStats holds statistics for the dashboard
 type DashboardStats struct {
-	TotalUsers     int
-	TotalSessions  int
-	TotalMessages  int
-	TotalFiles     int
-	TotalToolCalls int
+	TotalUsers             int
+	TotalSessions          int
+	TotalMessages          int
+	TotalFiles             int
+	TotalToolCalls         int
+	TotalPromptTokens      int
+	TotalCompletionTokens  int
+	TotalTokens            int
+	TotalCostCredits       float64
+	TopCostSessions        []CostSession
+}
+
+// CostSession is one session in the dashboard cost ranking.
+type CostSession struct {
+	UserID      string
+	SessionID   string
+	Title       string
+	CostCredits float64
+	TotalTokens int
 }
 
 // SessionStats holds statistics for sessions

@@ -84,7 +84,6 @@ func RenderUsers(handler *debuger.DebugHandler, page int) (string, error) {
 		content += components.InfoAlert("No users found.")
 	} else {
 		columns := []components.ColumnConfig{
-			{Header: "User ID", NoWrap: true},
 			{Header: "User", NoWrap: true},
 			{Header: "Sessions", Center: true, NoWrap: true},
 			{Header: "Last Activity", NoWrap: true},
@@ -109,18 +108,7 @@ func RenderUsers(handler *debuger.DebugHandler, page int) (string, error) {
 				banStatus = components.BadgeWithIcon(banText, "🚫", "danger")
 			}
 
-			// Combined identity: name on top, @username muted below. Falls back
-			// to whichever is present, or "-" when the user has neither.
-			userCell := `<span class="text-muted">-</span>`
-			switch {
-			case user.Name != "" && user.Username != "":
-				userCell = fmt.Sprintf(`%s<br><small class="text-muted">@%s</small>`,
-					template.HTMLEscapeString(user.Name), template.HTMLEscapeString(user.Username))
-			case user.Name != "":
-				userCell = template.HTMLEscapeString(user.Name)
-			case user.Username != "":
-				userCell = fmt.Sprintf(`<span class="text-muted">@%s</span>`, template.HTMLEscapeString(user.Username))
-			}
+			userCell := components.UserDebugLink(user, user.UserID)
 
 			// Session count is a compact operational indicator.
 			sessionsCell := `<span class="text-muted">0</span>`
@@ -129,14 +117,12 @@ func RenderUsers(handler *debuger.DebugHandler, page int) (string, error) {
 			}
 			content += fmt.Sprintf(`<tr>
                 <td>%s</td>
-                <td>%s</td>
                 <td class="text-center">%s</td>
                 <td class="text-nowrap">%s</td>
                 <td class="text-nowrap">%s</td>
 				<td class="text-center">%s</td>
                 <td class="text-center">%s</td>
             </tr>`,
-				components.InlineCode(template.HTMLEscapeString(user.UserID)),
 				userCell,
 				sessionsCell,
 				relativeTimeCell(userLastActivity(user, userSessions), false),
@@ -193,10 +179,11 @@ func RenderUserDetailPage(handler *debuger.DebugHandler, userID string, showDele
 	content := ui.ContainerStart()
 
 	// Breadcrumb
+	crumbLabel := components.ListUserLabel(user, userID)
 	content += components.Breadcrumb([]components.BreadcrumbItem{
 		{Label: "Dashboard", URL: "/agentize/debug"},
 		{Label: "Users", URL: "/agentize/debug/users"},
-		{Label: userID, Active: true},
+		{Label: crumbLabel, Active: true},
 	})
 
 	if showDeleted {
@@ -462,7 +449,7 @@ func RenderUserDetailPage(handler *debuger.DebugHandler, userID string, showDele
 
 	content += components.CollapsibleCardEnd()
 	content += ui.ContainerEnd()
-	return ui.Header("Agentize Debug - User: "+template.HTMLEscapeString(userID)) + ui.NavbarAndBody("/agentize/debug/users", content) + ui.Footer(), nil
+	return ui.Header("Agentize Debug - User: "+template.HTMLEscapeString(crumbLabel)) + ui.NavbarAndBody("/agentize/debug/users", content) + ui.Footer(), nil
 }
 
 func userConversationRow(conv *model.Conversation) string {

@@ -204,8 +204,9 @@ func TestSearchToolsReturnsNodePathWithoutActivating(t *testing.T) {
 	}
 }
 
-func TestManageContextIsAppendOnlyAndOwnerScoped(t *testing.T) {
+func TestManageContextIsOwnerScopedAndUpdatable(t *testing.T) {
 	eng, st := contextTestEngine(t)
+	eng.RegisterManageContextTool()
 	session := model.NewSessionWithID("u1", "s1", model.AgentTypeConversation)
 	if err := st.Put(session); err != nil {
 		t.Fatal(err)
@@ -218,6 +219,22 @@ func TestManageContextIsAppendOnlyAndOwnerScoped(t *testing.T) {
 	user, _ := st.GetUser("u1")
 	if len(user.ContextSummary) != 1 {
 		t.Fatalf("summary must dedupe: %v", user.ContextSummary)
+	}
+	base["action"], base["entries"] = "set_summary", []interface{}{"prefers Go"}
+	if _, err := eng.Functions.Execute("manage_context", base); err != nil {
+		t.Fatal(err)
+	}
+	user, _ = st.GetUser("u1")
+	if len(user.ContextSummary) != 1 || user.ContextSummary[0] != "prefers Go" {
+		t.Fatalf("set_summary should replace: %v", user.ContextSummary)
+	}
+	base["action"], base["index"] = "remove_summary", 0
+	if _, err := eng.Functions.Execute("manage_context", base); err != nil {
+		t.Fatal(err)
+	}
+	user, _ = st.GetUser("u1")
+	if len(user.ContextSummary) != 0 {
+		t.Fatalf("remove_summary should delete: %v", user.ContextSummary)
 	}
 	foreign := map[string]interface{}{"__user_id__": "u2", "__session_id__": "s1", "scope": "session", "action": "get"}
 	if _, err := eng.Functions.Execute("manage_context", foreign); err == nil {

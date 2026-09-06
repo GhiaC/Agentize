@@ -10,10 +10,10 @@ migration is required.
 
 The invariants are:
 
-1. Existing summary entries are immutable. A cycle may only append new,
-   non-empty, non-duplicate important facts.
-2. Existing tags keep their value and order. A cycle may only append a new
-   case-insensitive tag, up to seven tags.
+1. A cycle may replace the fact list with a compact snapshot of at most 20
+   entries. `[]` means no change. A non-empty array is the complete new list.
+2. Tags may be rewritten as a complete list, or left unchanged when empty.
+   Session tags cap at 7; user tags cap at 20.
 3. A syntactically empty provider response is a failed cycle: messages are not
    archived and `SummarizedAt` is not advanced. A valid JSON `[]` is a successful
    no-op and sets `SummaryInitialized`, preventing a retry loop.
@@ -26,11 +26,9 @@ The invariants are:
 ## Cycle
 
 The scheduler locks and reloads the session, formats only user messages, asks
-the model for a JSON array containing only new facts, validates the response,
-appends facts and tags, regenerates the title, and then rolls the transcript
-window. The session is persisted before the linked conversation is synchronized.
-Conversation sync is retried naturally by every later cycle and a failure is
-logged without discarding the already durable session memory.
+the model for a JSON array of durable facts (the complete updated list, or
+`[]` for no change), validates the response, replaces or caps the fact list,
+updates tags, regenerates the title, and then rolls the transcript window.
 
 ### Reasoning-model output budgets
 
