@@ -58,6 +58,8 @@ type RouteNode struct {
 	Status     RouteNodeStatus `json:"status,omitempty"`
 	Agent      string          `json:"agent,omitempty"` // target agent for dispatch/escalation
 	Tool       string          `json:"tool,omitempty"`  // tool/function name
+	ToolID     string          `json:"tool_id,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
 	Model      string          `json:"model,omitempty"` // model name for decision nodes
 	Tokens     int             `json:"tokens,omitempty"`
 	DurationMs int64           `json:"duration_ms,omitempty"`
@@ -268,7 +270,9 @@ func (b *RouteTraceBuilder) Decision(label, model string, tokens int, durationMs
 }
 
 // Tool records a non-routing tool execution under the current decision.
-func (b *RouteTraceBuilder) Tool(nodeType RouteNodeType, toolName, label, detail string, status RouteNodeStatus, durationMs int64) {
+// refs, when present, are the persisted ToolID and provider ToolCallID so the
+// live DAG can join this node to the exact tool-call row.
+func (b *RouteTraceBuilder) Tool(nodeType RouteNodeType, toolName, label, detail string, status RouteNodeStatus, durationMs int64, refs ...string) {
 	if b == nil {
 		return
 	}
@@ -281,10 +285,19 @@ func (b *RouteTraceBuilder) Tool(nodeType RouteNodeType, toolName, label, detail
 	if parent == "" {
 		parent = b.spineTailID
 	}
+	toolID, toolCallID := "", ""
+	if len(refs) > 0 {
+		toolID = strings.TrimSpace(refs[0])
+	}
+	if len(refs) > 1 {
+		toolCallID = strings.TrimSpace(refs[1])
+	}
 	id := b.addNodeLocked(RouteNode{
 		Type:       nodeType,
 		Label:      label,
 		Tool:       toolName,
+		ToolID:     toolID,
+		ToolCallID: toolCallID,
 		Detail:     truncateRouteText(detail),
 		Status:     status,
 		DurationMs: durationMs,

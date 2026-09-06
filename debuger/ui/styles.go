@@ -169,7 +169,7 @@ func GetStyles() string {
         .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
         #sidebar-toggle { display: none; }
 
-        .content-scroll { flex: 1; overflow-y: auto; padding: 24px; position: relative; transition: opacity 0.14s ease; }
+        .content-scroll { flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 24px; position: relative; transition: opacity 0.14s ease; }
         .content-scroll.is-loading { cursor: progress; }
         .content-scroll.is-loading > * { opacity: 0.42; pointer-events: none; }
         .content-scroll.is-loading::after {
@@ -255,6 +255,14 @@ func GetStyles() string {
         .badge {
             font-weight: 600; border-radius: 99px; padding: 0.34em 0.72em;
             font-size: 11px; border: 1px solid transparent; line-height: 1.5;
+        }
+        .tag-badges {
+            display: flex; flex-wrap: wrap; gap: 0.3rem 0.4rem;
+            max-width: 100%; min-width: 0;
+        }
+        .tag-badges .badge {
+            white-space: normal; overflow-wrap: anywhere; word-break: break-word;
+            max-width: 100%;
         }
         .badge.bg-primary   { background: var(--accent-soft) !important; color: var(--accent) !important; }
         .badge.bg-success   { background: var(--ok-soft) !important;     color: var(--ok) !important; }

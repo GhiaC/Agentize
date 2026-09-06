@@ -223,7 +223,7 @@ func (t *Tool) SetActive() {
 
 // ToolCall represents a tool call execution record
 type ToolCall struct {
-	// ToolID is the per-message numeric increment (FormatID(seq)).
+	// ToolID is the session-wide numeric increment (FormatID(seq)).
 	// UserID, SessionID, and MessageID identify the parent; they are not concatenated.
 	ToolID string
 

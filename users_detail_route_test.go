@@ -38,7 +38,9 @@ func TestUserDetailPage_CoreSystemPromptCard(t *testing.T) {
 		t.Fatalf("seed user: %v", err)
 	}
 	user.ContextSummary = model.SummaryEntries{"prefers concise answers"}
-	user.ContextTags = []string{"concise"}
+	user.ContextTags = []string{"concise", "very-long-context-tag-that-must-wrap-on-mobile"}
+	user.Name = "Ali"
+	user.Username = "alice"
 	user.ActiveConversationID = "user-1-c0001"
 	if err := dbStore.PutUser(user); err != nil {
 		t.Fatalf("save user: %v", err)
@@ -84,6 +86,9 @@ func TestUserDetailPage_CoreSystemPromptCard(t *testing.T) {
 		"Conversations",                 // user-facing list replaces raw sessions
 		"<details",                      // native collapsible markup
 		"Cross-conversation facts",      // dedicated User Context card
+		"class=\"tag-badges\"",          // tags wrap instead of overflowing mobile scroll
+		">Ali<",                         // host display name
+		">alice<",                       // host username
 		">Delete all</button>",          // compact wipe control; details live in confirm
 		"summarization logs",            // confirm lists logs + user context
 		"user context (cross-conversation summary and tags)",

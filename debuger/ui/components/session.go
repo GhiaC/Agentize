@@ -10,8 +10,8 @@ import (
 
 // SessionRowConfig holds configuration for session table row display
 type SessionRowConfig struct {
-	ShowUser      bool                                 // Show user column with link
-	BaseURL       string                               // Base URL for links
+	ShowUser      bool                               // Show user column with link
+	BaseURL       string                             // Base URL for links
 	GetFilesCount func(userID, sessionID string) int // Function to get files count
 }
 
@@ -181,6 +181,8 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 							<tr><th class="text-muted">Archived Messages</th><td>%s</td></tr>
 							<tr><th class="text-muted">Message Seq</th><td>%d</td></tr>
 							<tr><th class="text-muted">Tool Seq</th><td>%d</td></tr>
+							<tr><th class="text-muted">Tokens</th><td>%s</td></tr>
+							<tr><th class="text-muted">Cost</th><td>%s</td></tr>
 							<tr><th class="text-muted">Opened Nodes</th><td>%s</td></tr>
 						</table>
 					</div>
@@ -216,6 +218,8 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 		CountBadge(archivedMsgs, "secondary"),
 		session.MessageSeq,
 		session.ToolSeq,
+		TokenBadge(session.TotalTokens, session.PromptTokens, session.CompletionTokens),
+		sessionCostDisplay(session.CostCredits),
 		CountBadge(filesCount, "info"),
 		debuger.FormatDateTime(session.CreatedAt),
 		debuger.FormatDateTime(session.UpdatedAt),
@@ -229,6 +233,13 @@ func SessionTableRow(session *model.Session, config SessionRowConfig, rowIndex i
 	)
 
 	return html
+}
+
+func sessionCostDisplay(cost float64) string {
+	if cost <= 0 {
+		return `<span class="text-muted">0</span>`
+	}
+	return InlineCode(fmt.Sprintf("%.4f credits", cost))
 }
 
 // SessionTableScript returns the JavaScript needed for expandable session rows

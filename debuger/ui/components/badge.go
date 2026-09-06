@@ -147,14 +147,16 @@ func ActiveInactiveBadge(active bool) string {
 	return BadgeWithIcon("Inactive", "❌", "secondary")
 }
 
-// TagBadges generates multiple badges from tags
+// TagBadges generates multiple badges from tags. They wrap instead of sitting
+// on one nowrap row, which otherwise overflows the debug shell on mobile.
 func TagBadges(tags []string) string {
 	if len(tags) == 0 {
 		return "-"
 	}
-	html := ""
+	html := `<div class="tag-badges">`
 	for _, tag := range tags {
-		html += Badge(tag, "info") + " "
+		html += Badge(tag, "info")
 	}
+	html += `</div>`
 	return html
 }

@@ -155,3 +155,24 @@ func TestRouteTraceBuilder_ApprovalAndUserMessageID(t *testing.T) {
 		t.Errorf("expected decision->approval edge, edges=%+v", tr.Edges)
 	}
 }
+
+func TestRouteTraceBuilder_ToolKeepsPersistedIDs(t *testing.T) {
+	s := NewSessionWithType("user-1", AgentTypeConversation)
+	b := NewRouteTraceBuilder(s, "alert")
+	b.SetUserMessageID("user-msg-9")
+	b.SetKind("turn")
+	b.Decision("Decision 1", "mimo", 10, 4, RouteStatusOK, "tool_calls")
+	b.Tool(RouteNodeToolCall, "create_alert", "Create alert", `{"symbol":"BTC"}`, RouteStatusOK, 12, "7", "call-7")
+	b.Response("created", false, RouteStatusOK)
+	tr := b.Build(0)
+	tool := findNode(tr, RouteNodeToolCall)
+	if tool == nil {
+		t.Fatal("missing tool node")
+	}
+	if tool.ToolID != "7" || tool.ToolCallID != "call-7" {
+		t.Fatalf("tool refs = %+v", tool)
+	}
+	if tr.UserMessageID != "user-msg-9" || tr.Kind != "turn" {
+		t.Fatalf("turn identity = %+v", tr)
+	}
+}

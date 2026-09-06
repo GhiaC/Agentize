@@ -68,7 +68,7 @@ func (p *ToolCallPersister) Save(
 	messageID string,
 	toolCall openai.ToolCall,
 ) string {
-	return p.SaveForTurn(session, messageID, "", toolCall)
+	return p.SaveForTurn(session, messageID, "", toolCall, "")
 }
 
 // SaveForTurn persists a tool call owned by a specific user-message turn.
@@ -76,6 +76,7 @@ func (p *ToolCallPersister) SaveForTurn(
 	session *model.Session,
 	messageID, userMessageID string,
 	toolCall openai.ToolCall,
+	displayLabel string,
 ) string {
 	if p == nil || p.store == nil {
 		return ""
@@ -92,6 +93,7 @@ func (p *ToolCallPersister) SaveForTurn(
 		UserID:        session.UserID,
 		AgentType:     session.AgentType,
 		FunctionName:  toolCall.Function.Name,
+		DisplayLabel:  strings.TrimSpace(displayLabel),
 		Arguments:     toolCall.Function.Arguments,
 		Response:      "",
 		Status:        model.ToolCallStatusPending,

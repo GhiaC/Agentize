@@ -1566,6 +1566,80 @@ func sanitizeOrphanedToolResults(msgs []openai.ChatCompletionMessage) []openai.C
 	return out
 }
 
+// collapseCompletedTurnTools drops prior-turn tool-call/tool-result pairs from
+// the LLM request. Those calls belong to their own user-message DAG; sending
+// them again (especially with reused ids like "1") mixes the next turn.
+func collapseCompletedTurnTools(msgs []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	lastUser := -1
+	for i, m := range msgs {
+		if m.Role == openai.ChatMessageRoleUser {
+			lastUser = i
+		}
+	}
+	if lastUser <= 0 {
+		return msgs
+	}
+	out := make([]openai.ChatCompletionMessage, 0, len(msgs))
+	for i, m := range msgs {
+		if i >= lastUser {
+			out = append(out, m)
+			continue
+		}
+		if m.Role == openai.ChatMessageRoleTool {
+			continue
+		}
+		if m.Role == openai.ChatMessageRoleAssistant && len(m.ToolCalls) > 0 {
+			content := strings.TrimSpace(m.Content)
+			if content == "" {
+				content = FormatToolCallsContent(m.ToolCalls)
+			}
+			m.ToolCalls = nil
+			m.FunctionCall = nil
+			m.Content = content
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// uniquifyToolCallIDs rewrites empty or duplicate provider tool_call ids so
+// parallel calls (common with mimo) do not all persist as "1".
+func uniquifyToolCallIDs(calls []openai.ToolCall) {
+	seen := make(map[string]int, len(calls))
+	for i := range calls {
+		id := strings.TrimSpace(calls[i].ID)
+		if id == "" {
+			id = fmt.Sprintf("call-%d", i+1)
+		}
+		seen[id]++
+		if seen[id] > 1 {
+			calls[i].ID = fmt.Sprintf("%s-%d", id, i+1)
+			continue
+		}
+		calls[i].ID = id
+	}
+}
+
+func estimateChatUsage(req []openai.ChatCompletionMessage, choice openai.ChatCompletionChoice) (prompt, completion int) {
+	for _, m := range req {
+		prompt += (len(m.Content) + 3) / 4
+		for _, tc := range m.ToolCalls {
+			prompt += (len(tc.Function.Name) + len(tc.Function.Arguments) + 3) / 4
+		}
+	}
+	completion += (len(choice.Message.Content) + 3) / 4
+	for _, tc := range choice.Message.ToolCalls {
+		completion += (len(tc.Function.Name) + len(tc.Function.Arguments) + 3) / 4
+	}
+	if prompt < 1 {
+		prompt = 1
+	}
+	if completion < 1 && (strings.TrimSpace(choice.Message.Content) != "" || len(choice.Message.ToolCalls) > 0) {
+		completion = 1
+	}
+	return prompt, completion
+}
+
 // processChatRequest processes an LLM chat request with support for tool calls.
 // SIMPLIFIED: Uses a single session object and local messages list throughout the loop.
 // Only saves to DB at key points (after tool calls, and at the end).
@@ -1640,7 +1714,7 @@ func (e *Engine) processChatRequest(
 				})
 			}
 		}
-		reqMessages = append(reqMessages, localMsgs...)
+		reqMessages = append(reqMessages, collapseCompletedTurnTools(localMsgs)...)
 		reqMessages = append(reqMessages, pendingImages...)
 
 		openaiTools := toolsForLLMRequest(allTools, catalogMode, discoveredTools)
@@ -1683,6 +1757,14 @@ func (e *Engine) processChatRequest(
 		}
 
 		choice := resp.Choices[0]
+		uniquifyToolCallIDs(choice.Message.ToolCalls)
+		resp.Choices[0] = choice
+		if resp.Usage.PromptTokens == 0 && resp.Usage.CompletionTokens == 0 && resp.Usage.TotalTokens == 0 {
+			promptTok, completionTok := estimateChatUsage(reqMessages, choice)
+			resp.Usage.PromptTokens = promptTok
+			resp.Usage.CompletionTokens = completionTok
+			resp.Usage.TotalTokens = promptTok + completionTok
+		}
 		totalTokenUsage += resp.Usage.TotalTokens
 
 		// Record usage callback
@@ -1702,6 +1784,12 @@ func (e *Engine) processChatRequest(
 				ev.CachedInputTokens = resp.Usage.PromptTokensDetails.CachedTokens
 			}
 			e.Callback.AfterAction(ctx, ev)
+			session.AddUsage(ev.InputTokens, ev.OutputTokens, ev.Cost)
+		} else {
+			session.AddUsage(resp.Usage.PromptTokens, resp.Usage.CompletionTokens, 0)
+		}
+		if err := e.Sessions.Put(session); err != nil {
+			log.Log.Warnf("[Engine] ⚠️  Failed to persist session usage | SessionID: %s | Error: %v", sessionID, err)
 		}
 
 		// Save LLM message to DB
@@ -1858,11 +1946,18 @@ func (e *Engine) executeTool(
 
 	log.Log.Infof("[Engine] 🔧 executeTool | Function=%s | SessionID=%s", toolCall.Function.Name, sessionID)
 
+	toolDetail := toolCall.Function.Name
+	if e.Functions != nil {
+		if d := e.Functions.GetDisplayName(toolCall.Function.Name); d != "" {
+			toolDetail = d
+		}
+	}
+
 	// Save tool call to DB
 	persister := NewToolCallPersister(e.Sessions, "Engine")
 	toolID := ""
 	if persister != nil {
-		toolID = persister.SaveForTurn(session, messageID, UserMessageIDFrom(ctx), toolCall)
+		toolID = persister.SaveForTurn(session, messageID, UserMessageIDFrom(ctx), toolCall, toolDetail)
 	}
 
 	// Parse args
@@ -1872,13 +1967,6 @@ func (e *Engine) executeTool(
 	}
 	args["__user_id__"] = session.UserID
 	args["__session_id__"] = sessionID
-
-	toolDetail := toolCall.Function.Name
-	if e.Functions != nil {
-		if d := e.Functions.GetDisplayName(toolCall.Function.Name); d != "" {
-			toolDetail = d
-		}
-	}
 	// Check callback before execution. Expose a tool's "action" arg (e.g.
 	// manage_files edit_image) so the host can pre-block expensive media actions.
 	if e.Callback != nil {
@@ -1976,9 +2064,9 @@ func (e *Engine) executeTool(
 	NotifyStatus(ctx, session.UserID, sessionID, StatusToolDone, toolDetail)
 	rec := turnRecorderFrom(ctx)
 	if err != nil {
-		rec.Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, toolCall.Function.Arguments, model.RouteStatusError, toolDuration.Milliseconds())
+		rec.Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, toolCall.Function.Arguments, model.RouteStatusError, toolDuration.Milliseconds(), toolID, toolCall.ID)
 	} else {
-		rec.Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, toolCall.Function.Arguments, model.RouteStatusOK, toolDuration.Milliseconds())
+		rec.Tool(model.RouteNodeToolCall, toolCall.Function.Name, toolDetail, toolCall.Function.Arguments, model.RouteStatusOK, toolDuration.Milliseconds(), toolID, toolCall.ID)
 	}
 
 	// Process result (truncate if needed). Pass the live session so an oversized

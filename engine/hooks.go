@@ -104,6 +104,9 @@ type UsageEvent struct {
 	Duration          time.Duration
 	Error             error
 	Metadata          map[string]interface{}
+	// Cost is filled by the billing callback after a successful LLM/tool call
+	// so the session can accumulate what was actually charged.
+	Cost float64
 }
 
 // EventType classifies the kind of metered action

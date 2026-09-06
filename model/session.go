@@ -221,13 +221,20 @@ type Session struct {
 	// rows). Parent identity lives on UserID, never inside SessionID.
 	Seq                 int
 	MessageSeq          int            // Sequence counter for messages (per session)
-	ToolSeq             int            // Deprecated: session-wide tool counter; new tool ids increment per message.
-	ToolSeqByMessage    map[string]int // Per-message tool-call increment
+	ToolSeq             int            // Session-wide tool-call increment; ToolID is FormatID(ToolSeq).
+	ToolSeqByMessage    map[string]int // Count of tool calls issued under each assistant/user message.
 	OpenedFileSeq       int            // Deprecated: opened-file ids now increment on User.FileSeq.
 	UserFileSeq         int            // Deprecated: user-file ids now increment on User.FileSeq.
 	SummarizationLogSeq int            // Sequence counter for summarization logs (per session)
 	TraceSeq            int            // Sequence counter for route traces (per session)
 	ResultSeq           int            // Sequence counter for buffered tool-result ids (per session)
+
+	// PromptTokens / CompletionTokens / TotalTokens / CostCredits accumulate
+	// every billed LLM call in this session for the debug session list.
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	CostCredits      float64
 
 	// ==================== Internal (not persisted) ====================
 	seqMu sync.Mutex `bson:"-" json:"-"` // Mutex for thread-safe sequence operations
@@ -347,8 +354,6 @@ func (s *Session) GenerateMessageIDWithSeq() (string, int) {
 }
 
 // NextToolSeq increments and returns the next session-wide tool sequence.
-//
-// Deprecated: tool ids increment per message via GenerateToolIDForMessage.
 func (s *Session) NextToolSeq() int {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
@@ -356,14 +361,13 @@ func (s *Session) NextToolSeq() int {
 }
 
 // GenerateToolID returns the next numeric tool id when the parent message is unknown.
-//
-// Deprecated: prefer GenerateToolIDForMessage so the counter is per message.
 func (s *Session) GenerateToolID() string {
 	return s.GenerateToolIDForMessage("")
 }
 
-// GenerateToolIDForMessage returns the next numeric tool-call id inside messageID.
-// UserID, SessionID, and MessageID stay on ToolCall fields; they are not concatenated.
+// GenerateToolIDForMessage returns the next session-wide numeric tool-call id.
+// IDs do not restart at 1 for each message: operators and the live DAG need a
+// stable identity that cannot collide with a later alert or user turn.
 func (s *Session) GenerateToolIDForMessage(messageID string) string {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
@@ -371,11 +375,29 @@ func (s *Session) GenerateToolIDForMessage(messageID string) string {
 		s.ToolSeqByMessage = make(map[string]int)
 	}
 	key := strings.TrimSpace(messageID)
-	n := s.ToolSeqByMessage[key]
-	n = NextSeq(&n)
-	s.ToolSeqByMessage[key] = n
-	s.ToolSeq++
-	return FormatID(n)
+	s.ToolSeqByMessage[key]++
+	return FormatID(NextSeq(&s.ToolSeq))
+}
+
+// AddUsage records billed token counts and credit cost on the session totals.
+func (s *Session) AddUsage(prompt, completion int, cost float64) {
+	if s == nil {
+		return
+	}
+	s.seqMu.Lock()
+	defer s.seqMu.Unlock()
+	if prompt < 0 {
+		prompt = 0
+	}
+	if completion < 0 {
+		completion = 0
+	}
+	s.PromptTokens += prompt
+	s.CompletionTokens += completion
+	s.TotalTokens += prompt + completion
+	if cost > 0 {
+		s.CostCredits += cost
+	}
 }
 
 // GenerateToolIDWithSeq returns a numeric tool id and the session-wide tool seq.
@@ -495,6 +517,10 @@ func (s *Session) Clone() *Session {
 		SummarizationLogSeq: s.SummarizationLogSeq,
 		TraceSeq:            s.TraceSeq,
 		ResultSeq:           s.ResultSeq,
+		PromptTokens:        s.PromptTokens,
+		CompletionTokens:    s.CompletionTokens,
+		TotalTokens:         s.TotalTokens,
+		CostCredits:         s.CostCredits,
 		// seqMu is NOT copied - new mutex for the clone
 	}
 

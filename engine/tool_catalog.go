@@ -86,7 +86,6 @@ func searchToolsDefinition() openai.Tool {
 func alwaysOnToolNames() map[string]bool {
 	return map[string]bool{
 		searchToolsName:    true,
-		"update_status":    true,
 		"collect_result":   true,
 		"inspect_result":   true,
 		"manage_files":     true,
@@ -270,10 +269,10 @@ func (e *Engine) executeSearchTools(all []openai.Tool, arguments string, discove
 
 func (e *Engine) recordSearchToolsOnTurn(ctx context.Context, session *model.Session, messageID string, toolCall openai.ToolCall, result string) {
 	persister := NewToolCallPersister(e.Sessions, "Engine")
-	toolID := persister.SaveForTurn(session, messageID, UserMessageIDFrom(ctx), toolCall)
+	toolID := persister.SaveForTurn(session, messageID, UserMessageIDFrom(ctx), toolCall, "Search tools")
 	persister.Update(session, messageID, toolID, result, nil)
 	rec := turnRecorderFrom(ctx)
-	rec.Tool(model.RouteNodeToolCall, searchToolsName, "Search tools", toolCall.Function.Arguments, model.RouteStatusOK, 0)
+	rec.Tool(model.RouteNodeToolCall, searchToolsName, "Search tools", toolCall.Function.Arguments, model.RouteStatusOK, 0, toolID, toolCall.ID)
 }
 
 func appendUniqueTool(names []string, name string) []string {

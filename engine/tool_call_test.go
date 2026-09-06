@@ -390,8 +390,8 @@ func TestToolCallPersister_SaveGeneratesSequentialToolIDs(t *testing.T) {
 	if toolID1 != "1" || toolID2 != "2" {
 		t.Errorf("same-message tool ids = %s, %s, want 1, 2", toolID1, toolID2)
 	}
-	if toolID3 != "1" {
-		t.Errorf("per-message tool id = %s, want 1", toolID3)
+	if toolID3 != "3" {
+		t.Errorf("session-wide tool id = %s, want 3", toolID3)
 	}
 
 	// Verify sequence incremented
@@ -415,8 +415,8 @@ func TestToolCallPersister_UpdateCompletesPerMessageDuplicateIDs(t *testing.T) {
 
 	first := persister.Save(session, "m1", openai.ToolCall{ID: "call_a", Function: openai.FunctionCall{Name: "search"}})
 	second := persister.Save(session, "m2", openai.ToolCall{ID: "call_b", Function: openai.FunctionCall{Name: "search"}})
-	if first != "1" || second != "1" {
-		t.Fatalf("tool ids = %s, %s, want 1, 1", first, second)
+	if first != "1" || second != "2" {
+		t.Fatalf("tool ids = %s, %s, want 1, 2", first, second)
 	}
 
 	persister.Update(session, "m1", first, "one", nil)

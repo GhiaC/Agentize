@@ -758,6 +758,41 @@ func (ag *Agentize) CreateSession(userID string) (*model.Session, error) {
 	return ag.engine.CreateSession(userID)
 }
 
+// UpdateUserIdentity copies the host's display name and username onto the
+// persisted Agentize user row. Empty values are ignored so a partial lookup
+// cannot wipe a previously stored identity. No-op when nothing changed.
+func (ag *Agentize) UpdateUserIdentity(userID, name, username string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("user id is required")
+	}
+	if ag == nil || ag.engine == nil || ag.engine.Sessions == nil {
+		return fmt.Errorf("session store is not configured")
+	}
+	user, err := ag.engine.Sessions.GetOrCreateUser(userID)
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return fmt.Errorf("user %s was not created", userID)
+	}
+	name = strings.TrimSpace(name)
+	username = strings.TrimSpace(username)
+	changed := false
+	if name != "" && user.Name != name {
+		user.Name = name
+		changed = true
+	}
+	if username != "" && user.Username != username {
+		user.Username = username
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return ag.engine.Sessions.PutUser(user)
+}
+
 func (ag *Agentize) CreateConversation(input engine.CreateConversationInput) (*model.Conversation, error) {
 	return ag.engine.CreateConversation(input)
 }
