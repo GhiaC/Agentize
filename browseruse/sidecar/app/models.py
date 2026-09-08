@@ -269,6 +269,10 @@ class BrowserDebugResponse(BaseModel):
 	max_concurrent_jobs: int
 	live_sessions: int = 0
 	total_tabs: int = 0
+	live_tabs: int = 0
+	persisted_tabs: int = 0
+	tab_ttl_seconds: int = 900
+	expiring_tabs: int = 0
 	jobs: list[DebugJobResponse] = Field(default_factory=list)
 	sessions: list[DebugSessionResponse] = Field(default_factory=list)
 

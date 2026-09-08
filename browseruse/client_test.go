@@ -275,6 +275,8 @@ func TestClientDebugRequestsBoundedMetadata(t *testing.T) {
 			"queued_jobs":0,
 			"max_jobs":1000,
 			"max_concurrent_jobs":2,
+			"live_tabs":2,
+			"persisted_tabs":3,
 			"jobs":[{
 				"id":"job-1",
 				"status":"succeeded",
@@ -298,7 +300,7 @@ func TestClientDebugRequestsBoundedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.TotalJobs != 1 || snapshot.QueuedJobs != 0 || len(snapshot.Jobs) != 1 || snapshot.Jobs[0].LoadCount != 1 {
+	if snapshot.TotalJobs != 1 || snapshot.QueuedJobs != 0 || snapshot.LiveTabs != 2 || snapshot.PersistedTabs != 3 || len(snapshot.Jobs) != 1 || snapshot.Jobs[0].LoadCount != 1 {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 }

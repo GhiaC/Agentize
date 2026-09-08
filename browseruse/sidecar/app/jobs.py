@@ -39,6 +39,7 @@ class BrowserRunner(Protocol):
 TAB_LOCK_TIMEOUT_SECONDS = 2.0
 TAB_OP_TIMEOUT_SECONDS = 25.0
 BUSY_LOG_INTERVAL_SECONDS = 15.0
+TAB_EXPIRY_RETRY_SECONDS = 5.0
 LOGGER = logging.getLogger("browser-use.jobs")
 
 
@@ -82,6 +83,7 @@ class JobManager:
 		self._session_locks: dict[str, asyncio.Lock] = {}
 		self._active_job_ids: dict[str, str] = {}
 		self._busy_log_at: dict[tuple[str, str], float] = {}
+		self._tab_expiry_tasks: dict[tuple[str, str], asyncio.Task] = {}
 		self._store = BrowserStore(
 			settings.data_dir / "browser.db",
 			max_jobs=settings.db_max_jobs,
@@ -207,13 +209,16 @@ class JobManager:
 		lister = getattr(self.runner, "tabs", None)
 		if lister is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support tabs")
-		return await self._with_tab_lock(session_id, lambda: lister(session_id), "tabs")
+		tabs = await self._with_tab_lock(session_id, lambda: lister(session_id), "tabs")
+		self._track_tab_expiry(session_id, tabs)
+		return tabs
 
 	async def open_tab(self, session_id: str, url: str) -> list[BrowserTab]:
 		opener = getattr(self.runner, "open_tab", None)
 		if opener is None:
 			raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="browser runner does not support opening tabs")
 		tabs = await self._with_tab_lock(session_id, lambda: opener(session_id, url), "open_tab", exclusive=True)
+		self._track_tab_expiry(session_id, tabs)
 		self._store.touch_session(session_id)
 		LOGGER.info("tab opened session=%s tabs=%d", _session_ref(session_id), len(tabs))
 		return tabs
@@ -293,7 +298,10 @@ class JobManager:
 			except BrowserTabUnavailable as exc:
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
 
-		return await self._with_tab_lock(session_id, close, "close_tab", exclusive=True)
+		tabs = await self._with_tab_lock(session_id, close, "close_tab", exclusive=True)
+		self._cancel_tab_expiry(session_id, tab_id)
+		self._track_tab_expiry(session_id, tabs)
+		return tabs
 
 	def viewport(self, session_id: str):
 		reader = getattr(self.runner, "viewport_state", None)
@@ -338,14 +346,17 @@ class JobManager:
 
 		sessions = await self._debug_sessions(session_limit)
 		live_sessions = sum(1 for item in sessions if item.persistent)
-		total_tabs = sum(item.tab_count for item in sessions)
+		live_tabs = sum(item.tab_count for item in sessions if item.persistent)
+		persisted_tabs = sum(item.tab_count for item in sessions if not item.persistent)
+		total_tabs = live_tabs + persisted_tabs
 		LOGGER.info(
-			"debug_snapshot total=%d running=%d queued=%d live_sessions=%d tabs=%d",
+			"debug_snapshot total=%d running=%d queued=%d live_sessions=%d live_tabs=%d persisted_tabs=%d",
 			total_jobs,
 			running_jobs,
 			queued_jobs,
 			live_sessions,
-			total_tabs,
+			live_tabs,
+			persisted_tabs,
 		)
 		return BrowserDebugResponse(
 			total_jobs=total_jobs,
@@ -355,6 +366,10 @@ class JobManager:
 			max_concurrent_jobs=self.settings.max_concurrent_jobs,
 			live_sessions=live_sessions,
 			total_tabs=total_tabs,
+			live_tabs=live_tabs,
+			persisted_tabs=persisted_tabs,
+			tab_ttl_seconds=self.settings.tab_ttl_seconds,
+			expiring_tabs=sum(1 for task in self._tab_expiry_tasks.values() if not task.done()),
 			jobs=debug_jobs,
 			sessions=sessions,
 		)
@@ -405,6 +420,7 @@ class JobManager:
 				detail="browser runner does not support killing sessions",
 			)
 		await self._with_tab_lock(session_id, lambda: killer(session_id), "kill_session")
+		self._cancel_session_tab_expiry(session_id)
 		self._store.touch_session(session_id)
 		self._store.append_log("session:" + session_id, "warn", "operator killed persistent browser session")
 		return await self.debug_session(session_id)
@@ -521,9 +537,74 @@ class JobManager:
 			task.cancel()
 		if tasks:
 			await asyncio.gather(*tasks, return_exceptions=True)
+		expiry_tasks = [task for task in self._tab_expiry_tasks.values() if not task.done()]
+		self._tab_expiry_tasks.clear()
+		for task in expiry_tasks:
+			task.cancel()
+		if expiry_tasks:
+			await asyncio.gather(*expiry_tasks, return_exceptions=True)
 		shutdown_runner = getattr(self.runner, "shutdown", None)
 		if shutdown_runner is not None:
 			await shutdown_runner()
+
+	def _track_tab_expiry(self, session_id: str, tabs: list[BrowserTab]) -> None:
+		live_ids = {tab.id for tab in tabs if tab.id}
+		for tab_id in live_ids:
+			key = (session_id, tab_id)
+			task = self._tab_expiry_tasks.get(key)
+			if task is None or task.done():
+				self._tab_expiry_tasks[key] = asyncio.create_task(
+					self._expire_tab(session_id, tab_id),
+					name=f"browser-tab-expiry:{_session_ref(session_id)}",
+				)
+		for tracked_session, tracked_tab in list(self._tab_expiry_tasks):
+			if tracked_session == session_id and tracked_tab not in live_ids:
+				self._cancel_tab_expiry(tracked_session, tracked_tab)
+
+	def _cancel_tab_expiry(self, session_id: str, tab_id: str) -> None:
+		task = self._tab_expiry_tasks.pop((session_id, tab_id), None)
+		if task is not None and task is not asyncio.current_task() and not task.done():
+			task.cancel()
+
+	def _cancel_session_tab_expiry(self, session_id: str) -> None:
+		for tracked_session, tab_id in list(self._tab_expiry_tasks):
+			if tracked_session == session_id:
+				self._cancel_tab_expiry(tracked_session, tab_id)
+
+	async def _expire_tab(self, session_id: str, tab_id: str) -> None:
+		key = (session_id, tab_id)
+		try:
+			await asyncio.sleep(self.settings.tab_ttl_seconds)
+			while True:
+				closer = getattr(self.runner, "close_tab", None)
+				if closer is None:
+					return
+
+				async def close():
+					try:
+						return await closer(session_id, tab_id)
+					except KeyError:
+						lister = getattr(self.runner, "tabs", None)
+						return await lister(session_id) if lister is not None else []
+					except BrowserTabUnavailable as exc:
+						raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
+
+				try:
+					tabs = await self._with_tab_lock(session_id, close, "expire_tab", exclusive=True)
+				except HTTPException as exc:
+					if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+						await asyncio.sleep(TAB_EXPIRY_RETRY_SECONDS)
+						continue
+					raise
+				self._store.touch_session(session_id)
+				LOGGER.info("tab expired session=%s ttl_s=%d tabs=%d", _session_ref(session_id), self.settings.tab_ttl_seconds, len(tabs))
+				self._track_tab_expiry(session_id, tabs)
+				return
+		except asyncio.CancelledError:
+			raise
+		finally:
+			if self._tab_expiry_tasks.get(key) is asyncio.current_task():
+				self._tab_expiry_tasks.pop(key, None)
 
 	async def _execute(self, job: _Job) -> None:
 		try:

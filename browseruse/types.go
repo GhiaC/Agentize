@@ -215,6 +215,10 @@ type DebugSnapshot struct {
 	MaxConcurrentJobs int            `json:"max_concurrent_jobs"`
 	LiveSessions      int            `json:"live_sessions"`
 	TotalTabs         int            `json:"total_tabs"`
+	LiveTabs          int            `json:"live_tabs"`
+	PersistedTabs     int            `json:"persisted_tabs"`
+	TabTTLSeconds     int            `json:"tab_ttl_seconds"`
+	ExpiringTabs      int            `json:"expiring_tabs"`
 	Jobs              []DebugJob     `json:"jobs"`
 	Sessions          []DebugSession `json:"sessions,omitempty"`
 }

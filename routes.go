@@ -990,11 +990,13 @@ func (ag *Agentize) handleDebugBrowserLive(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"live_sessions": snapshot.LiveSessions,
-		"total_tabs":    snapshot.TotalTabs,
-		"sessions":      snapshot.Sessions,
-		"running_jobs":  snapshot.RunningJobs,
-		"queued_jobs":   snapshot.QueuedJobs,
+		"live_sessions":  snapshot.LiveSessions,
+		"total_tabs":     snapshot.TotalTabs,
+		"live_tabs":      snapshot.LiveTabs,
+		"persisted_tabs": snapshot.PersistedTabs,
+		"sessions":       snapshot.Sessions,
+		"running_jobs":   snapshot.RunningJobs,
+		"queued_jobs":    snapshot.QueuedJobs,
 	})
 }
 

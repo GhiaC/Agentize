@@ -197,6 +197,7 @@ validate_config() {
 	validate_integer BROWSER_USE_MAX_STEPS 50 1 500
 	validate_integer BROWSER_USE_JOB_TIMEOUT_SECONDS 600 30 7200
 	validate_integer BROWSER_USE_JOB_TTL_SECONDS 3600 60 86400
+	validate_integer BROWSER_USE_TAB_TTL_SECONDS 900 60 86400
 	validate_integer BROWSER_USE_MAX_JOBS 1000 10 10000
 	validate_boolean BROWSER_USE_AUTO_START_DOCKER true
 	validate_boolean BROWSER_USE_HEADLESS true

@@ -55,6 +55,7 @@ def settings() -> Settings:
 		max_steps=20,
 		job_timeout_seconds=30,
 		job_ttl_seconds=60,
+		tab_ttl_seconds=900,
 		max_jobs=20,
 		db_max_jobs=100,
 		db_max_logs_per_job=100,
@@ -510,6 +511,8 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
 		snapshot = await manager.debug(job_limit=10, load_limit=0, session_limit=50)
 		self.assertEqual(snapshot.live_sessions, 0)
 		self.assertEqual(snapshot.total_tabs, 1)
+		self.assertEqual(snapshot.live_tabs, 0)
+		self.assertEqual(snapshot.persisted_tabs, 1)
 		session = next(item for item in snapshot.sessions if item.session_id == "user:owner-1")
 		self.assertFalse(session.persistent)
 		self.assertEqual(session.tabs[0].url, "https://example.com")
@@ -522,9 +525,23 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
 		snapshot = await manager.debug(job_limit=10, load_limit=0, session_limit=50)
 		self.assertEqual(snapshot.live_sessions, 1)
 		self.assertEqual(snapshot.total_tabs, 1)
+		self.assertEqual(snapshot.live_tabs, 1)
+		self.assertEqual(snapshot.persisted_tabs, 0)
+		self.assertEqual(snapshot.tab_ttl_seconds, 900)
+		self.assertEqual(snapshot.expiring_tabs, 1)
 		session = next(item for item in snapshot.sessions if item.session_id == "user:owner-1")
 		self.assertTrue(session.persistent)
 		self.assertEqual(session.tabs[0].url, "https://example.com")
+		await manager.shutdown()
+
+	async def test_live_tab_is_closed_when_fifteen_minute_policy_expires(self):
+		runner = TabRunner()
+		manager = JobManager(replace(settings(), tab_ttl_seconds=0), runner)
+		await manager.open_tab("user:owner-1", "https://example.com")
+		await asyncio.sleep(0.05)
+		self.assertEqual(runner.closed, "tab-2")
+		self.assertEqual(runner.current, [])
+		self.assertEqual(len(manager._tab_expiry_tasks), 0)
 		await manager.shutdown()
 
 	async def test_debug_snapshot_does_not_block_on_hung_live_tabs(self):

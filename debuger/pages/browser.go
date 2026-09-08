@@ -168,7 +168,7 @@ func browserStats(snapshot *browseruse.DebugSnapshot) string {
 			<div class="text-muted small">Live sessions</div><div class="fs-4 fw-semibold" id="browser-live-sessions">%d</div>
 		</div></div></div>
 		<div class="col-6 col-lg"><div class="card h-100"><div class="card-body">
-			<div class="text-muted small">Open tabs</div><div class="fs-4 fw-semibold" id="browser-live-tabs">%d</div>
+			<div class="text-muted small">Live tabs</div><div class="fs-4 fw-semibold" id="browser-live-tabs">%d</div><div class="small text-muted"><span id="browser-persisted-tabs">%d</span> persisted</div>
 		</div></div></div>
 		<div class="col-6 col-lg"><div class="card h-100"><div class="card-body">
 			<div class="text-muted small">Concurrency</div><div class="fs-4 fw-semibold">%d</div>
@@ -182,7 +182,8 @@ func browserStats(snapshot *browseruse.DebugSnapshot) string {
 		snapshot.RunningJobs,
 		snapshot.QueuedJobs,
 		snapshot.LiveSessions,
-		snapshot.TotalTabs,
+		snapshot.LiveTabs,
+		snapshot.PersistedTabs,
 		snapshot.MaxConcurrentJobs,
 		loads,
 		formatBytes(bytes),
@@ -711,7 +712,9 @@ function pollBrowserLive() {
 			var liveSessions = document.getElementById('browser-live-sessions');
 			if (liveSessions && payload.live_sessions !== undefined) liveSessions.textContent = payload.live_sessions;
 			var liveTabs = document.getElementById('browser-live-tabs');
-			if (liveTabs && payload.total_tabs !== undefined) liveTabs.textContent = payload.total_tabs;
+			if (liveTabs && payload.live_tabs !== undefined) liveTabs.textContent = payload.live_tabs;
+			var persistedTabs = document.getElementById('browser-persisted-tabs');
+			if (persistedTabs && payload.persisted_tabs !== undefined) persistedTabs.textContent = payload.persisted_tabs;
 			var runningJobs = document.getElementById('browser-running-jobs');
 			if (runningJobs && payload.running_jobs !== undefined) runningJobs.textContent = payload.running_jobs;
 			var queuedJobs = document.getElementById('browser-queued-jobs');

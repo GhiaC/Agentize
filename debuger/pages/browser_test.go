@@ -19,6 +19,7 @@ func TestRenderBrowserDebugShowsJobsLoadsAndScreenshot(t *testing.T) {
 		MaxConcurrentJobs: 2,
 		LiveSessions:      1,
 		TotalTabs:         2,
+		LiveTabs:          2,
 		Sessions: []browseruse.DebugSession{{
 			SessionID:  "session-1",
 			Persistent: true,
@@ -80,7 +81,7 @@ func TestRenderBrowserDebugShowsJobsLoadsAndScreenshot(t *testing.T) {
 		"Action trace",
 		"42 B transferred",
 		"Browser sessions",
-		"Open tabs",
+		"Live tabs",
 		"Example",
 		"https://example.com",
 		"Kill browser",
