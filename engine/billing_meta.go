@@ -15,6 +15,25 @@ const (
 )
 
 type billingChannelCtxKey struct{}
+type billingAuthorizedCtxKey struct{}
+
+// WithBillingAuthorized marks that the outer billing gate already allowed this
+// event, so inner callbacks must not re-block on a stale free-tier quota.
+func WithBillingAuthorized(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithValue(ctx, billingAuthorizedCtxKey{}, true)
+}
+
+// BillingAuthorized reports whether WithBillingAuthorized was set on ctx.
+func BillingAuthorized(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	ok, _ := ctx.Value(billingAuthorizedCtxKey{}).(bool)
+	return ok
+}
 
 func withBillingChannel(ctx context.Context, channel string) context.Context {
 	if ctx == nil || strings.TrimSpace(channel) == "" {

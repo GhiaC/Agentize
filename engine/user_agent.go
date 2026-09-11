@@ -1748,7 +1748,11 @@ func (e *Engine) processChatRequest(
 				Model:     modelName,
 				Metadata:  usageBillingMeta(ctx, session, nil),
 			}); cbErr != nil {
-				return cbErr.Error(), totalTokenUsage, nil
+				text := e.persistBlockedAssistant(session, modelName, cbErr)
+				rec.Fail(cbErr.Error())
+				rec.Response(text, false, model.RouteStatusBlocked)
+				log.Log.Warnf("[Engine] billing blocked LLM | session=%s user=%s err=%v", sessionID, session.UserID, cbErr)
+				return text, totalTokenUsage, nil
 			}
 		}
 
@@ -1947,6 +1951,41 @@ func (e *Engine) saveMessage(
 	return msg.MessageID
 }
 
+func (e *Engine) persistBlockedAssistant(session *model.Session, modelName string, blockErr error) string {
+	text := UserVisibleBlockedMessage(blockErr)
+	if strings.TrimSpace(text) == "" {
+		text = DefaultBillingRequiredMessage
+	}
+	if e == nil || e.Sessions == nil || session == nil {
+		return text
+	}
+	session.Msgs = append(session.Msgs, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleAssistant,
+		Content: text,
+	})
+	session.UpdatedAt = time.Now()
+	messageID, seqID := session.GenerateMessageIDWithSeq()
+	agentType := model.AgentTypeCore
+	if session.HasScheduleTag() {
+		agentType = model.AgentTypeSchedule
+	}
+	msg := &model.Message{
+		MessageID: messageID, SeqID: seqID,
+		UserID: session.UserID, SessionID: session.SessionID,
+		Role: openai.ChatMessageRoleAssistant, Content: text,
+		AgentType: model.AgentTypeForMessage(nil, agentType),
+		ContentType: model.ContentTypeText, Model: modelName,
+		FinishReason: "stop", CreatedAt: time.Now(),
+	}
+	if err := e.Sessions.PutMessage(msg); err != nil {
+		log.Log.Warnf("[Engine] ⚠️  Failed to save billing-block message | SessionID: %s | Error: %v", session.SessionID, err)
+	}
+	if err := e.Sessions.Put(session); err != nil {
+		log.Log.Warnf("[Engine] ⚠️  Failed to save session after billing block | SessionID: %s | Error: %v", session.SessionID, err)
+	}
+	return text
+}
+
 // toolActionMetadata surfaces a tool's "action" argument (when present) as
 // usage-event metadata, so a host can price/limit by sub-action — e.g. the
 // manage_files edit_image action vs a cheap list/read.
@@ -2002,10 +2041,14 @@ func (e *Engine) executeTool(
 			Name:      toolCall.Function.Name,
 			Metadata:  usageBillingMeta(ctx, session, toolActionMetadata(args)),
 		}); cbErr != nil {
-			result := FormatBlockedActionResult(cbErr)
+			result := UserVisibleBlockedMessage(cbErr)
+			if result == "" {
+				result = FormatBlockedActionResult(cbErr)
+			}
 			if persister != nil {
 				persister.Update(session, messageID, toolID, result, cbErr)
 			}
+			log.Log.Warnf("[Engine] billing blocked tool | session=%s tool=%s err=%v", sessionID, toolCall.Function.Name, cbErr)
 			return result, nil
 		}
 	}

@@ -251,7 +251,12 @@ func (e *Engine) concludeScheduledTask(
 			EventType: EventLLMCall, Name: EventNameLLMCall, Model: schedule.ConclusionModel,
 			Metadata: map[string]interface{}{"channel": BillingChannelScheduler, "source": "task_scheduler_conclusion"},
 		}); err != nil {
-			return ScheduledConclusion{}, err
+			text := UserVisibleBlockedMessage(err)
+			if text == "" {
+				text = DefaultBillingRequiredMessage
+			}
+			log.Log.Warnf("[Engine] billing blocked schedule conclusion | session=%s user=%s err=%v", schedule.SessionID, schedule.UserID, err)
+			return ScheduledConclusion{Text: text}, nil
 		}
 	}
 

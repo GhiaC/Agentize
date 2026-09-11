@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghiac/agentize/engine"
+	"github.com/ghiac/agentize/log"
 	"github.com/ghiac/agentize/metrics"
 	"github.com/ghiac/agentize/model"
 	"github.com/ghiac/agentize/store"
@@ -117,7 +118,12 @@ func (ch *CoreHandler) concludeScheduledTask(
 			Model:    schedule.ConclusionModel,
 			Metadata: map[string]interface{}{"channel": engine.BillingChannelScheduler, "source": "task_scheduler_conclusion"},
 		}); err != nil {
-			return engine.ScheduledConclusion{}, err
+			text := engine.UserVisibleBlockedMessage(err)
+			if text == "" {
+				text = engine.DefaultBillingRequiredMessage
+			}
+			log.Log.Warnf("[CoreHandler] billing blocked schedule conclusion | session=%s user=%s err=%v", schedule.SessionID, schedule.UserID, err)
+			return engine.ScheduledConclusion{Text: text}, nil
 		}
 	}
 	started := time.Now()
