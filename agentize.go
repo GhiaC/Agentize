@@ -76,6 +76,9 @@ type Agentize struct {
 	// Optional: hook called after DeleteUserData (sessions/messages) so app can delete quota/consumption etc.
 	userDeleteDataHook func(userID string) error
 
+	// Optional per-user feature gate. Unset means every flag is off (fail closed).
+	featureGate FeatureGate
+
 	// Human-in-the-loop reviews. The manager is created lazily (the store always
 	// supports reviews); a metrics ResolveListener is registered on creation.
 	reviewManager *review.Manager
@@ -905,6 +908,35 @@ func (ag *Agentize) SetExtraSystemInfoProvider(fn func() []debuger.InfoKV) {
 // The application can use it to delete quota usage, consumption records, balance, etc. for that user.
 func (ag *Agentize) SetUserDeleteDataHook(fn func(userID string) error) {
 	ag.userDeleteDataHook = fn
+}
+
+// FeatureGate is the host-owned per-user A/B switch. Agentize does not persist
+// flags; the application injects the checker so tools, billing, and debug pages
+// see the same rollout as the product UI.
+type FeatureGate interface {
+	Enabled(userID, flag string) bool
+}
+
+// SetFeatureGate installs the host feature checker. A nil gate disables every flag.
+func (ag *Agentize) SetFeatureGate(g FeatureGate) {
+	if ag == nil {
+		return
+	}
+	ag.featureGate = g
+}
+
+// FeatureEnabled reports whether flag is on for userID. Missing gate or empty
+// ids fail closed so unreleased features stay dark.
+func (ag *Agentize) FeatureEnabled(userID, flag string) bool {
+	if ag == nil || ag.featureGate == nil {
+		return false
+	}
+	userID = strings.TrimSpace(userID)
+	flag = strings.TrimSpace(flag)
+	if userID == "" || flag == "" {
+		return false
+	}
+	return ag.featureGate.Enabled(userID, flag)
 }
 
 // GetDebugNavItems returns the full set of navigation items including extra pages.
