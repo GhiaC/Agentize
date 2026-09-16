@@ -64,12 +64,13 @@ type Store interface {
 	// paged variant for large sessions.
 	GetUserMessagesBySession(userID, sessionID string) ([]*model.Message, error)
 	AddOpenedFile(openedFile *model.OpenedFile) error
-	// CloseOpenedFile marks the currently-open record for (sessionID, filePath)
-	// closed. It is a no-op when the file is not currently open.
-	CloseOpenedFile(sessionID string, filePath string) error
-	// GetCurrentlyOpenedFilesBySession returns still-open files for a session,
-	// oldest first.
-	GetCurrentlyOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error)
+	// CloseOpenedFile marks the currently-open record for
+	// (userID, sessionID, filePath) closed. userID is required: numeric session
+	// ids collide across owners. It is a no-op when the file is not currently open.
+	CloseOpenedFile(userID, sessionID, filePath string) error
+	// GetCurrentlyOpenedFilesBySession returns still-open files for one owner's
+	// session, oldest first. userID is required.
+	GetCurrentlyOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error)
 	PutUserFile(f *model.UserFile) error
 	// GetUserFile returns the file by id, or (nil, nil) when not found.
 	GetUserFile(fileID string) (*model.UserFile, error)
@@ -142,12 +143,17 @@ type Store interface {
 	// ListTaskSchedules returns schedules newest-first. An empty userID lists all
 	// schedules (admin/worker use); a non-empty userID enforces owner scoping.
 	ListTaskSchedules(userID string) ([]*model.TaskSchedule, error)
-	// DeleteTaskSchedule removes the schedule and all of its run history.
-	DeleteTaskSchedule(scheduleID string) error
-	// PutTaskScheduleRun upserts one run-history row.
+	// DeleteTaskSchedule removes the owner's schedule and all of its run history.
+	// userID is required: numeric schedule ids collide across owners.
+	DeleteTaskSchedule(userID, scheduleID string) error
+	// PutTaskScheduleRun upserts one run-history row. run.UserID is required.
 	PutTaskScheduleRun(run *model.TaskScheduleRun) error
-	// ListTaskScheduleRuns returns newest runs first. limit <= 0 uses a safe default.
-	ListTaskScheduleRuns(scheduleID string, limit int) ([]*model.TaskScheduleRun, error)
+	// ListTaskScheduleRuns returns newest runs first for one owner. userID is
+	// required. limit <= 0 uses a safe default.
+	ListTaskScheduleRuns(userID, scheduleID string, limit int) ([]*model.TaskScheduleRun, error)
+	// FinishTaskScheduleRun persists the completed run and parent schedule in
+	// one transaction so history and LastRunStatus cannot diverge.
+	FinishTaskScheduleRun(schedule *model.TaskSchedule, run *model.TaskScheduleRun) error
 
 	// --- Durable deterministic Core workflows ---
 

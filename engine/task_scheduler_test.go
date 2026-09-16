@@ -355,7 +355,7 @@ func TestTaskSchedulerDeleteCancelsWithoutRecreatingRows(t *testing.T) {
 	if err != nil || got != nil {
 		t.Fatalf("schedule recreated after delete: got=%#v err=%v", got, err)
 	}
-	runs, err := st.ListTaskScheduleRuns(schedule.ScheduleID, 10)
+	runs, err := st.ListTaskScheduleRuns(schedule.UserID, schedule.ScheduleID, 10)
 	if err != nil || len(runs) != 0 {
 		t.Fatalf("run rows recreated after delete: runs=%#v err=%v", runs, err)
 	}
@@ -511,4 +511,130 @@ func TestRunNowMarksRunningAndRejectsOverlap(t *testing.T) {
 	if _, err := scheduler.RunNow(schedule.ScheduleID, "user-1"); err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Fatalf("in-flight run now err = %v", err)
 	}
+}
+
+func TestTaskSchedulerDeleteDoesNotRemoveOtherUsersSchedule(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	other := model.NewSessionWithID("user-2", "1", model.AgentTypeLow)
+	if err := st.Put(other); err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewTaskScheduler(st, func(context.Context, *model.TaskSchedule) (string, error) {
+		return "ok", nil
+	}, nil)
+	alice, err := scheduler.Create(CreateTaskScheduleInput{
+		UserID: "user-1", SessionID: "user-1-low-s0001",
+		Name: "alice", Prompt: "work", Interval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := scheduler.Create(CreateTaskScheduleInput{
+		UserID: "user-2", SessionID: other.SessionID,
+		Name: "bob", Prompt: "work", Interval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alice.ScheduleID != bob.ScheduleID {
+		t.Fatalf("expected colliding numeric ids, got alice=%q bob=%q", alice.ScheduleID, bob.ScheduleID)
+	}
+	if err := scheduler.Delete(alice.ScheduleID, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduler.Get(bob.ScheduleID, "user-2"); err != nil {
+		t.Fatalf("bob schedule deleted with alice: %v", err)
+	}
+	if _, err := scheduler.Get(alice.ScheduleID, "user-1"); err == nil {
+		t.Fatal("alice schedule still present")
+	}
+}
+
+func TestTaskSchedulerRunNowRefusesWhenWorkerStopped(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	scheduler := NewTaskScheduler(st, func(context.Context, *model.TaskSchedule) (string, error) {
+		return "ok", nil
+	}, nil)
+	schedule, err := scheduler.Create(CreateTaskScheduleInput{
+		UserID: "user-1", SessionID: "user-1-low-s0001",
+		Name: "idle", Prompt: "work", Interval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduler.RunNow(schedule.ScheduleID, "user-1"); err == nil || !strings.Contains(err.Error(), "not running") {
+		t.Fatalf("stopped worker run now err = %v", err)
+	}
+	got, err := scheduler.Get(schedule.ScheduleID, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastRunStatus == model.TaskRunRunning {
+		t.Fatalf("stopped worker persisted running: %#v", got)
+	}
+}
+
+func TestTaskSchedulerRunNowRefusesUnacceptedAgentType(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	scheduler := NewTaskScheduler(st, func(context.Context, *model.TaskSchedule) (string, error) {
+		return "ok", nil
+	}, nil)
+	scheduler.SetAllowedAgentTypes(model.AgentTypeHigh)
+	scheduler.Start(context.Background())
+	t.Cleanup(scheduler.Stop)
+	schedule, err := scheduler.Create(CreateTaskScheduleInput{
+		UserID: "user-1", SessionID: "user-1-low-s0001",
+		Name: "low", Prompt: "work", Interval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduler.RunNow(schedule.ScheduleID, "user-1"); err == nil || !strings.Contains(err.Error(), "not accepted") {
+		t.Fatalf("unaccepted type run now err = %v", err)
+	}
+	got, err := scheduler.Get(schedule.ScheduleID, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastRunStatus == model.TaskRunRunning {
+		t.Fatalf("unaccepted worker persisted running: %#v", got)
+	}
+}
+
+func TestTaskSchedulerReconcilesOrphanedRunningStatus(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	scheduler := NewTaskScheduler(st, func(context.Context, *model.TaskSchedule) (string, error) {
+		return "ok", nil
+	}, nil)
+	schedule, err := scheduler.Create(CreateTaskScheduleInput{
+		UserID: "user-1", SessionID: "user-1-low-s0001",
+		Name: "orphan", Prompt: "work", Interval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule.LastRunStatus = model.TaskRunRunning
+	schedule.NextRunAt = time.Now().Add(time.Hour)
+	schedule.UpdatedAt = time.Now()
+	if err := st.PutTaskSchedule(schedule); err != nil {
+		t.Fatal(err)
+	}
+	scheduler.Start(context.Background())
+	t.Cleanup(scheduler.Stop)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, getErr := scheduler.Get(schedule.ScheduleID, "user-1")
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if got.LastRunStatus == model.TaskRunFailed {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got, err := scheduler.Get(schedule.ScheduleID, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("orphaned running was not reconciled: %#v", got)
 }

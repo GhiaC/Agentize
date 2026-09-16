@@ -260,6 +260,8 @@ func TestStoreConformance(t *testing.T) {
 			run("Quotas", testQuotas)
 			run("Reviews", testReviews)
 			run("TaskSchedules", testTaskSchedules)
+			run("TaskScheduleOwnerIsolation", testTaskScheduleOwnerIsolation)
+			run("OpenedFileOwnerIsolation", testOpenedFileOwnerIsolation)
 			run("Workflows", testWorkflows)
 			run("Maintainer", testMaintainer)
 			run("VerifyDetectsOrphans", testVerifyDetectsOrphans)
@@ -462,15 +464,15 @@ func testOpenedFiles(t *testing.T, st Store) {
 	}
 
 	// Both currently open.
-	if cur, _ := st.GetCurrentlyOpenedFilesBySession(s.SessionID); len(cur) != 2 {
+	if cur, _ := st.GetCurrentlyOpenedFilesBySession(s.UserID, s.SessionID); len(cur) != 2 {
 		t.Fatalf("currently-open = %d, want 2", len(cur))
 	}
 
 	// Close one; it must drop from currently-open and reflect closed state.
-	if err := st.CloseOpenedFile(s.SessionID, "/a.md"); err != nil {
+	if err := st.CloseOpenedFile(s.UserID, s.SessionID, "/a.md"); err != nil {
 		t.Fatalf("CloseOpenedFile: %v", err)
 	}
-	cur, _ := st.GetCurrentlyOpenedFilesBySession(s.SessionID)
+	cur, _ := st.GetCurrentlyOpenedFilesBySession(s.UserID, s.SessionID)
 	if len(cur) != 1 || cur[0].FilePath != "/b.md" {
 		t.Fatalf("after close, currently-open = %+v, want only /b.md", cur)
 	}
@@ -487,10 +489,10 @@ func testOpenedFiles(t *testing.T, st Store) {
 	}
 
 	// Closing again is a no-op (currently-open count unchanged).
-	if err := st.CloseOpenedFile(s.SessionID, "/a.md"); err != nil {
+	if err := st.CloseOpenedFile(s.UserID, s.SessionID, "/a.md"); err != nil {
 		t.Fatalf("CloseOpenedFile (repeat): %v", err)
 	}
-	if cur, _ := st.GetCurrentlyOpenedFilesBySession(s.SessionID); len(cur) != 1 {
+	if cur, _ := st.GetCurrentlyOpenedFilesBySession(s.UserID, s.SessionID); len(cur) != 1 {
 		t.Errorf("repeat close changed open count: %d", len(cur))
 	}
 
@@ -879,7 +881,7 @@ func testDeleteUserData(t *testing.T, st Store) {
 	if schedules, _ := st.ListTaskSchedules("user-del"); len(schedules) != 0 {
 		t.Errorf("task schedules remain after DeleteUserData: %d", len(schedules))
 	}
-	if runs, _ := st.ListTaskScheduleRuns(schedule.ScheduleID, 10); len(runs) != 0 {
+	if runs, _ := st.ListTaskScheduleRuns(schedule.UserID, schedule.ScheduleID, 10); len(runs) != 0 {
 		t.Errorf("task schedule runs remain after DeleteUserData: %d", len(runs))
 	}
 	if workflows, _ := st.ListWorkflowRuns("user-del", 10); len(workflows) != 0 {

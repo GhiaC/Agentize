@@ -18,6 +18,11 @@ func TestDedicatedRegistryExposesAgentizeMetrics(t *testing.T) {
 	StoreQuery("", "", time.Millisecond) // defaults to operation/backend "unknown"
 	SummaryAge(120 * time.Second)
 	SummaryAge(0) // skipped (no observation), must not panic
+	TaskScheduleOp("run_now", "ok")
+	TaskSchedulePersistError("finish")
+	TaskScheduleInFlight(1)
+	TaskScheduleInFlight(-1)
+	TaskScheduleExecute("ok", 10*time.Millisecond)
 
 	rec := httptest.NewRecorder()
 	Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
@@ -28,6 +33,9 @@ func TestDedicatedRegistryExposesAgentizeMetrics(t *testing.T) {
 		"agentize_audit_actions_total",
 		"agentize_store_query_duration_seconds",
 		"agentize_summary_age_seconds",
+		"agentize_task_schedule_operations_total",
+		"agentize_task_schedule_persist_errors_total",
+		"agentize_task_schedule_running",
 		"go_goroutines", // runtime collector present on the dedicated registry
 	} {
 		if !strings.Contains(out, want) {

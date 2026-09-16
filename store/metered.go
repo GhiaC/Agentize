@@ -211,14 +211,14 @@ func (m *meteredStore) AddOpenedFile(openedFile *model.OpenedFile) error {
 	return m.Store.AddOpenedFile(openedFile)
 }
 
-func (m *meteredStore) CloseOpenedFile(sessionID string, filePath string) error {
+func (m *meteredStore) CloseOpenedFile(userID, sessionID, filePath string) error {
 	defer m.observe(m.begin("CloseOpenedFile"))
-	return m.Store.CloseOpenedFile(sessionID, filePath)
+	return m.Store.CloseOpenedFile(userID, sessionID, filePath)
 }
 
-func (m *meteredStore) GetCurrentlyOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error) {
+func (m *meteredStore) GetCurrentlyOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error) {
 	defer m.observe(m.begin("GetCurrentlyOpenedFilesBySession"))
-	return m.Store.GetCurrentlyOpenedFilesBySession(sessionID)
+	return m.Store.GetCurrentlyOpenedFilesBySession(userID, sessionID)
 }
 
 func (m *meteredStore) PutUserFile(f *model.UserFile) error {
@@ -306,9 +306,9 @@ func (m *meteredStore) ListTaskSchedules(userID string) ([]*model.TaskSchedule, 
 	return m.Store.ListTaskSchedules(userID)
 }
 
-func (m *meteredStore) DeleteTaskSchedule(scheduleID string) error {
+func (m *meteredStore) DeleteTaskSchedule(userID, scheduleID string) error {
 	defer m.observe(m.begin("DeleteTaskSchedule"))
-	return m.Store.DeleteTaskSchedule(scheduleID)
+	return m.Store.DeleteTaskSchedule(userID, scheduleID)
 }
 
 func (m *meteredStore) PutTaskScheduleRun(run *model.TaskScheduleRun) error {
@@ -316,9 +316,14 @@ func (m *meteredStore) PutTaskScheduleRun(run *model.TaskScheduleRun) error {
 	return m.Store.PutTaskScheduleRun(run)
 }
 
-func (m *meteredStore) ListTaskScheduleRuns(scheduleID string, limit int) ([]*model.TaskScheduleRun, error) {
+func (m *meteredStore) ListTaskScheduleRuns(userID, scheduleID string, limit int) ([]*model.TaskScheduleRun, error) {
 	defer m.observe(m.begin("ListTaskScheduleRuns"))
-	return m.Store.ListTaskScheduleRuns(scheduleID, limit)
+	return m.Store.ListTaskScheduleRuns(userID, scheduleID, limit)
+}
+
+func (m *meteredStore) FinishTaskScheduleRun(schedule *model.TaskSchedule, run *model.TaskScheduleRun) error {
+	defer m.observe(m.begin("FinishTaskScheduleRun"))
+	return m.Store.FinishTaskScheduleRun(schedule, run)
 }
 
 func (m *meteredStore) PutWorkflowRun(workflow *model.WorkflowRun) error {
@@ -441,6 +446,11 @@ func (m *meteredStore) GetMessagesByUser(userID string) ([]*model.Message, error
 func (m *meteredStore) GetOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error) {
 	defer m.observe(m.begin("GetOpenedFilesBySession"))
 	return m.Store.GetOpenedFilesBySession(sessionID)
+}
+
+func (m *meteredStore) GetUserOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error) {
+	defer m.observe(m.begin("GetUserOpenedFilesBySession"))
+	return m.Store.GetUserOpenedFilesBySession(userID, sessionID)
 }
 
 func (m *meteredStore) GetUser(userID string) (*model.User, error) {

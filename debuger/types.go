@@ -14,12 +14,13 @@ type DebugStore interface {
 	GetAllMessages() ([]*model.Message, error)
 	GetAllOpenedFiles() ([]*model.OpenedFile, error)
 	GetOpenedFilesByUser(userID string) ([]*model.OpenedFile, error)
+	GetOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error)
+	GetUserOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error)
 	GetAllUserFiles() ([]*model.UserFile, error)
 	GetUserFilesByUser(userID string) ([]*model.UserFile, error)
 	GetUserFilesBySession(sessionID string) ([]*model.UserFile, error)
 	GetMessagesBySession(sessionID string) ([]*model.Message, error)
 	GetMessagesByUser(userID string) ([]*model.Message, error)
-	GetOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error)
 		GetUser(userID string) (*model.User, error)
 		// GetSession looks up a session by id alone.
 		//

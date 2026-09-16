@@ -336,6 +336,64 @@ func SchedulerSummary(status string, dur time.Duration) {
 }
 
 // ---------------------------------------------------------------------------
+// Task scheduler (recurring prompt / workflow schedules)
+// ---------------------------------------------------------------------------
+
+var (
+	taskScheduleOps = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "task_schedule", Name: "operations_total",
+		Help: "Task-schedule lifecycle operations by operation (create|delete|run_now|pause|resume|execute) and status (ok|error).",
+	}, []string{"operation", "status"})
+
+	taskScheduleExecuteDuration = factory.NewHistogram(prometheus.HistogramOpts{
+		Namespace: namespace, Subsystem: "task_schedule", Name: "execute_duration_seconds",
+		Help: "Duration of one scheduled-task execution, including conclusion.", Buckets: schedBuckets,
+	})
+
+	taskSchedulePersistErrors = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "task_schedule", Name: "persist_errors_total",
+		Help: "Failed schedule/run persistence by stage (mark_running|create_run|reload|finish).",
+	}, []string{"stage"})
+
+	taskScheduleRunning = factory.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace, Subsystem: "task_schedule", Name: "running",
+		Help: "Number of in-flight scheduled-task executions.",
+	})
+)
+
+// TaskScheduleOp records one scheduler API or execute attempt.
+func TaskScheduleOp(operation, status string) {
+	if operation == "" {
+		operation = "unknown"
+	}
+	if status == "" {
+		status = "unknown"
+	}
+	taskScheduleOps.WithLabelValues(operation, status).Inc()
+}
+
+// TaskScheduleExecute records one finished execution (success or failure).
+func TaskScheduleExecute(status string, dur time.Duration) {
+	TaskScheduleOp("execute", status)
+	if dur > 0 {
+		taskScheduleExecuteDuration.Observe(dur.Seconds())
+	}
+}
+
+// TaskSchedulePersistError records a failed durable write during a run.
+func TaskSchedulePersistError(stage string) {
+	if stage == "" {
+		stage = "unknown"
+	}
+	taskSchedulePersistErrors.WithLabelValues(stage).Inc()
+}
+
+// TaskScheduleInFlight adjusts the in-flight execution gauge.
+func TaskScheduleInFlight(delta int) {
+	taskScheduleRunning.Add(float64(delta))
+}
+
+// ---------------------------------------------------------------------------
 // Knowledge and moderation
 // ---------------------------------------------------------------------------
 

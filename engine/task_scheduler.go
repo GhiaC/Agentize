@@ -380,7 +380,25 @@ func (s *TaskScheduler) dispatchDue(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if schedule.Status != model.TaskScheduleActive || schedule.NextRunAt.After(now) {
+		if schedule.Status != model.TaskScheduleActive {
+			continue
+		}
+		s.mu.Lock()
+		_, busy := s.inFlight[model.ScopeKey(schedule.UserID, schedule.ScheduleID)]
+		s.mu.Unlock()
+		if schedule.LastRunStatus == model.TaskRunRunning && !busy {
+			if schedule.NextRunAt.After(now) {
+				s.reconcileOrphanedRunning(schedule, now)
+				continue
+			}
+			if !s.accepts(schedule) {
+				s.reconcileOrphanedRunning(schedule, now)
+				continue
+			}
+			s.startRun(ctx, schedule)
+			continue
+		}
+		if schedule.NextRunAt.After(now) {
 			continue
 		}
 		if !s.accepts(schedule) {
@@ -388,6 +406,36 @@ func (s *TaskScheduler) dispatchDue(ctx context.Context) {
 		}
 		s.startRun(ctx, schedule)
 	}
+}
+
+func (s *TaskScheduler) reconcileOrphanedRunning(schedule *model.TaskSchedule, now time.Time) {
+	if schedule == nil {
+		return
+	}
+	scheduleLock := &s.lifecycleMu
+	scheduleLock.Lock()
+	defer scheduleLock.Unlock()
+	current, err := s.Get(schedule.ScheduleID, schedule.UserID)
+	if err != nil || current == nil || current.LastRunStatus != model.TaskRunRunning {
+		return
+	}
+	s.mu.Lock()
+	_, busy := s.inFlight[model.ScopeKey(current.UserID, current.ScheduleID)]
+	s.mu.Unlock()
+	if busy {
+		return
+	}
+	current.LastRunStatus = model.TaskRunFailed
+	current.LastError = "execution interrupted before a worker finished"
+	current.UpdatedAt = now
+	if err := s.store.PutTaskSchedule(current); err != nil {
+		log.Log.Errorf("[TaskScheduler] failed to reconcile orphaned running schedule %s user=%s: %v", current.ScheduleID, current.UserID, err)
+		metrics.TaskSchedulePersistError("reload")
+		return
+	}
+	log.Log.Warnf("[TaskScheduler] reconciled orphaned running schedule %s user=%s", current.ScheduleID, current.UserID)
+	metrics.TaskScheduleOp("execute", "interrupted")
+	s.publishScheduleState(context.Background(), current)
 }
 
 func (s *TaskScheduler) startRun(parent context.Context, schedule *model.TaskSchedule) {
@@ -407,6 +455,7 @@ func (s *TaskScheduler) startRun(parent context.Context, schedule *model.TaskSch
 	runCtx, cancel := context.WithCancel(parent)
 	s.inFlight[key] = cancel
 	s.wg.Add(1)
+	metrics.TaskScheduleInFlight(1)
 	s.mu.Unlock()
 
 	go func() {
@@ -415,6 +464,7 @@ func (s *TaskScheduler) startRun(parent context.Context, schedule *model.TaskSch
 			s.mu.Lock()
 			delete(s.inFlight, key)
 			s.mu.Unlock()
+			metrics.TaskScheduleInFlight(-1)
 		}()
 		s.execute(runCtx, schedule.UserID, schedule.ScheduleID)
 	}()
@@ -446,6 +496,8 @@ func (s *TaskScheduler) execute(ctx context.Context, userID, scheduleID string) 
 	if err := s.store.PutTaskSchedule(schedule); err != nil {
 		scheduleLock.Unlock()
 		log.Log.Errorf("[TaskScheduler] failed to mark schedule %s running: %v", scheduleID, err)
+		metrics.TaskSchedulePersistError("mark_running")
+		metrics.TaskScheduleOp("execute", "error")
 		return
 	}
 	running := *schedule
@@ -454,6 +506,7 @@ func (s *TaskScheduler) execute(ctx context.Context, userID, scheduleID string) 
 	s.publishRunPrompt(ctx, &running, run.RunID)
 	if err := s.store.PutTaskScheduleRun(run); err != nil {
 		log.Log.Errorf("[TaskScheduler] failed to create run for %s: %v", scheduleID, err)
+		metrics.TaskSchedulePersistError("create_run")
 	}
 
 	executor := s.executor
@@ -485,8 +538,14 @@ func (s *TaskScheduler) execute(ctx context.Context, userID, scheduleID string) 
 	// removed while execution was being cancelled.
 	scheduleLock.Lock()
 	current, getErr := s.Get(scheduleID, userID)
-	if getErr != nil || current == nil {
+	if getErr != nil {
+		log.Log.Errorf("[TaskScheduler] failed to reload schedule %s user=%s after run: %v", scheduleID, userID, getErr)
+		metrics.TaskSchedulePersistError("reload")
+		current = schedule
+	} else if current == nil {
 		scheduleLock.Unlock()
+		log.Log.Warnf("[TaskScheduler] schedule %s user=%s deleted during run; skipping final persist", scheduleID, userID)
+		metrics.TaskScheduleExecute("cancelled", time.Since(now))
 		return
 	}
 
@@ -534,13 +593,15 @@ func (s *TaskScheduler) execute(ctx context.Context, userID, scheduleID string) 
 		}
 	}
 
-	if err := s.store.PutTaskScheduleRun(run); err != nil {
-		log.Log.Errorf("[TaskScheduler] failed to finish run %s: %v", run.RunID, err)
-	}
-	if err := s.store.PutTaskSchedule(current); err != nil {
-		log.Log.Errorf("[TaskScheduler] failed to update schedule %s: %v", scheduleID, err)
+	if err := s.store.FinishTaskScheduleRun(current, run); err != nil {
+		scheduleLock.Unlock()
+		log.Log.Errorf("[TaskScheduler] failed to persist finished run %s schedule %s: %v", run.RunID, scheduleID, err)
+		metrics.TaskSchedulePersistError("finish")
+		metrics.TaskScheduleExecute("error", time.Since(now))
+		return
 	}
 	scheduleLock.Unlock()
+	metrics.TaskScheduleExecute(string(run.Status), time.Since(now))
 	s.publishRunTranscript(ctx, current, run.RunID)
 }
 
@@ -659,8 +720,10 @@ func (s *TaskScheduler) Create(input CreateTaskScheduleInput) (*model.TaskSchedu
 	}
 	if err := s.store.PutTaskSchedule(schedule); err != nil {
 		_ = s.store.Delete(dedicatedSession.SessionID)
+		metrics.TaskScheduleOp("create", "error")
 		return nil, err
 	}
+	metrics.TaskScheduleOp("create", "ok")
 	s.notify()
 	return schedule, nil
 }
@@ -696,7 +759,7 @@ func (s *TaskScheduler) Runs(scheduleID, ownerUserID string, limit int) ([]*mode
 	if schedule == nil {
 		return nil, fmt.Errorf("schedule not found")
 	}
-	return s.store.ListTaskScheduleRuns(scheduleID, limit)
+	return s.store.ListTaskScheduleRuns(schedule.UserID, schedule.ScheduleID, limit)
 }
 
 // Pause stops future executions and cancels a currently-running one.
@@ -772,13 +835,27 @@ func (s *TaskScheduler) RunNow(scheduleID, ownerUserID string) (*model.TaskSched
 	}
 	if schedule.Status != model.TaskScheduleActive {
 		scheduleLock.Unlock()
+		metrics.TaskScheduleOp("run_now", "error")
 		return nil, fmt.Errorf("schedule is not active")
+	}
+	if !s.IsRunning() {
+		scheduleLock.Unlock()
+		log.Log.Warnf("[TaskScheduler] run_now refused; worker stopped schedule=%s user=%s", schedule.ScheduleID, schedule.UserID)
+		metrics.TaskScheduleOp("run_now", "error")
+		return nil, fmt.Errorf("task scheduler is not running")
+	}
+	if !s.accepts(schedule) {
+		scheduleLock.Unlock()
+		log.Log.Warnf("[TaskScheduler] run_now refused; agent type %s not accepted schedule=%s user=%s", schedule.AgentType, schedule.ScheduleID, schedule.UserID)
+		metrics.TaskScheduleOp("run_now", "error")
+		return nil, fmt.Errorf("schedule agent type is not accepted by this worker")
 	}
 	s.mu.Lock()
 	_, busy := s.inFlight[model.ScopeKey(schedule.UserID, schedule.ScheduleID)]
 	s.mu.Unlock()
 	if busy || schedule.LastRunStatus == model.TaskRunRunning {
 		scheduleLock.Unlock()
+		metrics.TaskScheduleOp("run_now", "error")
 		return nil, fmt.Errorf("schedule is already running")
 	}
 	schedule.NextRunAt = time.Now()
@@ -787,10 +864,12 @@ func (s *TaskScheduler) RunNow(scheduleID, ownerUserID string) (*model.TaskSched
 	schedule.UpdatedAt = time.Now()
 	if err := s.store.PutTaskSchedule(schedule); err != nil {
 		scheduleLock.Unlock()
+		metrics.TaskScheduleOp("run_now", "error")
 		return nil, err
 	}
 	snapshot := *schedule
 	scheduleLock.Unlock()
+	metrics.TaskScheduleOp("run_now", "ok")
 	s.notify()
 	s.publishScheduleState(context.Background(), &snapshot)
 	return &snapshot, nil
@@ -821,7 +900,12 @@ func (s *TaskScheduler) Delete(scheduleID, ownerUserID string) error {
 	if current == nil {
 		return fmt.Errorf("schedule not found")
 	}
-	return s.store.DeleteTaskSchedule(schedule.ScheduleID)
+	if err := s.store.DeleteTaskSchedule(current.UserID, current.ScheduleID); err != nil {
+		metrics.TaskScheduleOp("delete", "error")
+		return err
+	}
+	metrics.TaskScheduleOp("delete", "ok")
+	return nil
 }
 
 func (s *TaskScheduler) cancelRun(userID, scheduleID string) {

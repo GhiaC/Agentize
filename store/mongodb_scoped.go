@@ -194,12 +194,28 @@ func (s *MongoDBStore) GetUserWorkflowRun(userID, workflowID string) (*model.Wor
 }
 
 func (s *MongoDBStore) GetUserTaskSchedule(userID, scheduleID string) (*model.TaskSchedule, error) {
-	schedule, err := s.GetTaskSchedule(scheduleID)
-	if err != nil || schedule == nil {
-		return schedule, err
+	if err := requireOwnerID("task schedule", userID, scheduleID); err != nil {
+		return nil, err
 	}
-	if schedule.UserID != userID {
+	ctx, cancel := s.opCtx()
+	defer cancel()
+	var doc taskScheduleDocument
+	err := s.taskSchedulesCollection.FindOne(ctx, bson.M{"user_id": userID, "_id": scopedMongoID(userID, scheduleID)}).Decode(&doc)
+	if err == mongo.ErrNoDocuments {
+		err = s.taskSchedulesCollection.FindOne(ctx, bson.M{"user_id": userID, "schedule_id": scheduleID}).Decode(&doc)
+	}
+	if err == mongo.ErrNoDocuments {
+		err = s.taskSchedulesCollection.FindOne(ctx, bson.M{"user_id": userID, "_id": scheduleID}).Decode(&doc)
+	}
+	if err == mongo.ErrNoDocuments {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query task schedule: %w", err)
+	}
+	schedule := &model.TaskSchedule{}
+	if err := unmarshalJSONOrBSON(doc.Data, schedule); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal task schedule: %w", err)
 	}
 	return schedule, nil
 }

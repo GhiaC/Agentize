@@ -589,7 +589,7 @@ func (e *Engine) openFile(userID, sessionID, path string) (string, error) {
 
 			// Check if file is recorded as open in database, if not, record it
 			{
-				openedFiles, err := e.Sessions.GetCurrentlyOpenedFilesBySession(sessionID)
+				openedFiles, err := e.Sessions.GetCurrentlyOpenedFilesBySession(session.UserID, sessionID)
 				if err != nil {
 					log.Log.Warnf("[Engine] ⚠️  Failed to get opened files | SessionID: %s | Error: %v", sessionID, err)
 				} else {
@@ -689,7 +689,7 @@ func (e *Engine) closeFile(userID, sessionID, path string) error {
 	}
 
 	// Record closed file in database
-	if err := e.Sessions.CloseOpenedFile(sessionID, path); err != nil {
+	if err := e.Sessions.CloseOpenedFile(session.UserID, sessionID, path); err != nil {
 		log.Log.Warnf("[Engine] ⚠️  Failed to record closed file | SessionID: %s | Path: %s | Error: %v", sessionID, path, err)
 	} else {
 		log.Log.Infof("[Engine] 📂 File closed recorded | SessionID: %s | Path: %s", sessionID, path)

@@ -486,6 +486,7 @@ var sqliteMigrations = []sqliteMigration{
 		return addColumns(tx, "messages", `metadata TEXT DEFAULT ''`)
 	}},
 	{17, "composite keys so numeric ids are unique per user/session/message", applySQLiteScopedKeys},
+	{18, "task_schedule_runs.user_id so numeric schedule ids stay per owner", applySQLiteTaskScheduleRunUserIDs},
 }
 
 // runMigrations applies every migration newer than the recorded schema version.
@@ -809,19 +810,19 @@ func (s *SQLiteStore) DeleteUserData(userID string) error {
 		return fmt.Errorf("failed to delete messages: %w", err)
 	}
 	if _, err := tx.Exec(
-		"DELETE FROM tool_calls WHERE user_id = ? OR session_id IN (SELECT session_id FROM sessions WHERE user_id = ?)",
+		"DELETE FROM tool_calls WHERE user_id = ? OR ((user_id = '' OR user_id IS NULL) AND session_id IN (SELECT session_id FROM sessions WHERE user_id = ?))",
 		userID, userID,
 	); err != nil {
 		return fmt.Errorf("failed to delete tool_calls: %w", err)
 	}
 	if _, err := tx.Exec(
-		"DELETE FROM summarization_logs WHERE user_id = ? OR session_id IN (SELECT session_id FROM sessions WHERE user_id = ?)",
+		"DELETE FROM summarization_logs WHERE user_id = ? OR ((user_id = '' OR user_id IS NULL) AND session_id IN (SELECT session_id FROM sessions WHERE user_id = ?))",
 		userID, userID,
 	); err != nil {
 		return fmt.Errorf("failed to delete summarization_logs: %w", err)
 	}
 	if _, err := tx.Exec(
-		"DELETE FROM opened_files WHERE user_id = ? OR session_id IN (SELECT session_id FROM sessions WHERE user_id = ?)",
+		"DELETE FROM opened_files WHERE user_id = ? OR ((user_id = '' OR user_id IS NULL) AND session_id IN (SELECT session_id FROM sessions WHERE user_id = ?))",
 		userID, userID,
 	); err != nil {
 		return fmt.Errorf("failed to delete opened_files: %w", err)
@@ -839,8 +840,10 @@ func (s *SQLiteStore) DeleteUserData(userID string) error {
 		return fmt.Errorf("failed to delete reviews: %w", err)
 	}
 	if _, err := tx.Exec(
-		"DELETE FROM task_schedule_runs WHERE schedule_id IN (SELECT schedule_id FROM task_schedules WHERE user_id = ?)",
-		userID,
+		`DELETE FROM task_schedule_runs WHERE user_id = ? OR (
+			(user_id = '' OR user_id IS NULL) AND schedule_id IN (SELECT schedule_id FROM task_schedules WHERE user_id = ?)
+		)`,
+		userID, userID,
 	); err != nil {
 		return fmt.Errorf("failed to delete task_schedule_runs: %w", err)
 	}
@@ -1693,127 +1696,79 @@ func (s *SQLiteStore) AddOpenedFile(openedFile *model.OpenedFile) error {
 	return nil
 }
 
-// CloseOpenedFile marks a file as closed
-func (s *SQLiteStore) CloseOpenedFile(sessionID string, filePath string) error {
+// CloseOpenedFile marks a file as closed for one owner.
+func (s *SQLiteStore) CloseOpenedFile(userID, sessionID, filePath string) error {
+	if err := requireOwnerID("opened file", userID, sessionID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	closedAt := time.Now().Unix()
-
 	_, err := s.db.Exec(
-		`UPDATE opened_files 
-		 SET is_open = 0, closed_at = ? 
-		 WHERE session_id = ? AND file_path = ? AND is_open = 1`,
+		`UPDATE opened_files
+		 SET is_open = 0, closed_at = ?
+		 WHERE user_id = ? AND session_id = ? AND file_path = ? AND is_open = 1`,
 		closedAt,
+		userID,
 		sessionID,
 		filePath,
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to close opened file: %w", err)
 	}
-
 	return nil
 }
 
-// GetOpenedFilesBySession returns all opened files for a session
+// GetOpenedFilesBySession returns opened files for a session id. Numeric ids
+// that collide across users fail closed.
 func (s *SQLiteStore) GetOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	rows, err := s.db.Query(
-		`SELECT file_id, session_id, user_id, file_path, file_name, opened_at, closed_at, is_open
-		FROM opened_files WHERE session_id = ? ORDER BY opened_at ASC`,
-		sessionID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query opened files: %w", err)
+	if err := s.errIfAmbiguousLocked("opened_files", "session_id", sessionID); err != nil {
+		return nil, err
 	}
-	defer rows.Close()
-
-	var files []*model.OpenedFile
-	for rows.Next() {
-		f := &model.OpenedFile{}
-		var openedAt, closedAt int64
-		var isOpenInt int
-
-		err := rows.Scan(
-			&f.FileID,
-			&f.SessionID,
-			&f.UserID,
-			&f.FilePath,
-			&f.FileName,
-			&openedAt,
-			&closedAt,
-			&isOpenInt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan opened file: %w", err)
-		}
-
-		f.OpenedAt = time.Unix(openedAt, 0)
-		if closedAt > 0 {
-			f.ClosedAt = time.Unix(closedAt, 0)
-		}
-		f.IsOpen = isOpenInt != 0
-		files = append(files, f)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating opened files: %w", err)
-	}
-
-	return files, nil
+	return s.queryOpenedFilesLocked("", sessionID, false)
 }
 
-// GetCurrentlyOpenedFilesBySession returns only currently open files for a session
-func (s *SQLiteStore) GetCurrentlyOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error) {
+// GetUserOpenedFilesBySession returns opened files for one owner's session.
+func (s *SQLiteStore) GetUserOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error) {
+	if err := requireOwnerID("opened file", userID, sessionID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.queryOpenedFilesLocked(userID, sessionID, false)
+}
 
-	rows, err := s.db.Query(
-		`SELECT file_id, session_id, user_id, file_path, file_name, opened_at, closed_at, is_open
-		FROM opened_files WHERE session_id = ? AND is_open = 1 ORDER BY opened_at ASC`,
-		sessionID,
-	)
+// GetCurrentlyOpenedFilesBySession returns still-open files for one owner.
+func (s *SQLiteStore) GetCurrentlyOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error) {
+	if err := requireOwnerID("opened file", userID, sessionID); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.queryOpenedFilesLocked(userID, sessionID, true)
+}
+
+func (s *SQLiteStore) queryOpenedFilesLocked(userID, sessionID string, onlyOpen bool) ([]*model.OpenedFile, error) {
+	query := `SELECT file_id, session_id, user_id, file_path, file_name, opened_at, closed_at, is_open
+		FROM opened_files WHERE session_id = ?`
+	args := []interface{}{sessionID}
+	if userID != "" {
+		query += ` AND user_id = ?`
+		args = append(args, userID)
+	}
+	if onlyOpen {
+		query += ` AND is_open = 1`
+	}
+	query += ` ORDER BY opened_at ASC`
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query opened files: %w", err)
 	}
 	defer rows.Close()
-
-	var files []*model.OpenedFile
-	for rows.Next() {
-		f := &model.OpenedFile{}
-		var openedAt, closedAt int64
-		var isOpenInt int
-
-		err := rows.Scan(
-			&f.FileID,
-			&f.SessionID,
-			&f.UserID,
-			&f.FilePath,
-			&f.FileName,
-			&openedAt,
-			&closedAt,
-			&isOpenInt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan opened file: %w", err)
-		}
-
-		f.OpenedAt = time.Unix(openedAt, 0)
-		if closedAt > 0 {
-			f.ClosedAt = time.Unix(closedAt, 0)
-		}
-		f.IsOpen = isOpenInt != 0
-		files = append(files, f)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating opened files: %w", err)
-	}
-
-	return files, nil
+	return scanOpenedFiles(rows)
 }
 
 // GetAllUsers returns all users
@@ -3077,8 +3032,11 @@ func (s *SQLiteStore) ListTaskSchedules(userID string) ([]*model.TaskSchedule, e
 	return schedules, nil
 }
 
-// DeleteTaskSchedule removes the schedule and its run history atomically.
-func (s *SQLiteStore) DeleteTaskSchedule(scheduleID string) error {
+// DeleteTaskSchedule removes the owner's schedule and its run history atomically.
+func (s *SQLiteStore) DeleteTaskSchedule(userID, scheduleID string) error {
+	if err := requireOwnerID("task schedule", userID, scheduleID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -3086,17 +3044,18 @@ func (s *SQLiteStore) DeleteTaskSchedule(scheduleID string) error {
 	if err != nil {
 		return fmt.Errorf("begin delete task schedule: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM task_schedule_runs WHERE schedule_id = ?`, scheduleID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM task_schedule_runs WHERE user_id = ? AND schedule_id = ?`, userID, scheduleID); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("delete task schedule runs: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM task_schedules WHERE schedule_id = ?`, scheduleID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM task_schedules WHERE user_id = ? AND schedule_id = ?`, userID, scheduleID); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("delete task schedule: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit delete task schedule: %w", err)
 	}
+	auditDeletion("task_schedule", scheduleID, userID)
 	return nil
 }
 
@@ -3105,31 +3064,25 @@ func (s *SQLiteStore) PutTaskScheduleRun(run *model.TaskScheduleRun) error {
 	if run == nil || strings.TrimSpace(run.RunID) == "" || strings.TrimSpace(run.ScheduleID) == "" {
 		return fmt.Errorf("run_id and schedule_id are required")
 	}
+	if strings.TrimSpace(run.UserID) == "" {
+		return fmt.Errorf("run user_id is required")
+	}
 	data, err := json.Marshal(run)
 	if err != nil {
 		return fmt.Errorf("failed to marshal task schedule run: %w", err)
 	}
-	var completedAt int64
-	if !run.CompletedAt.IsZero() {
-		completedAt = run.CompletedAt.Unix()
-	}
-	_, err = s.execWrite(
-		`INSERT INTO task_schedule_runs (run_id, schedule_id, status, data, started_at, completed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(run_id) DO UPDATE SET
-			status=excluded.status,
-			data=excluded.data,
-			completed_at=excluded.completed_at`,
-		run.RunID, run.ScheduleID, string(run.Status), string(data), run.StartedAt.Unix(), completedAt,
-	)
+	_, err = s.execWrite(upsertTaskScheduleRunSQL(), taskScheduleRunArgs(run, string(data))...)
 	if err != nil {
 		return fmt.Errorf("failed to store task schedule run: %w", err)
 	}
 	return nil
 }
 
-// ListTaskScheduleRuns returns newest runs first.
-func (s *SQLiteStore) ListTaskScheduleRuns(scheduleID string, limit int) ([]*model.TaskScheduleRun, error) {
+// ListTaskScheduleRuns returns newest runs first for one owner.
+func (s *SQLiteStore) ListTaskScheduleRuns(userID, scheduleID string, limit int) ([]*model.TaskScheduleRun, error) {
+	if err := requireOwnerID("task schedule run", userID, scheduleID); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -3140,8 +3093,8 @@ func (s *SQLiteStore) ListTaskScheduleRuns(scheduleID string, limit int) ([]*mod
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.Query(
-		`SELECT data FROM task_schedule_runs WHERE schedule_id = ? ORDER BY started_at DESC, run_id DESC LIMIT ?`,
-		scheduleID, limit,
+		`SELECT data FROM task_schedule_runs WHERE user_id = ? AND schedule_id = ? ORDER BY started_at DESC, run_id DESC LIMIT ?`,
+		userID, scheduleID, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list task schedule runs: %w", err)
@@ -3164,6 +3117,56 @@ func (s *SQLiteStore) ListTaskScheduleRuns(scheduleID string, limit int) ([]*mod
 		return nil, fmt.Errorf("error iterating task schedule runs: %w", err)
 	}
 	return runs, nil
+}
+
+// FinishTaskScheduleRun persists the completed run and parent schedule together.
+func (s *SQLiteStore) FinishTaskScheduleRun(schedule *model.TaskSchedule, run *model.TaskScheduleRun) error {
+	if schedule == nil {
+		return fmt.Errorf("schedule is required")
+	}
+	if err := schedule.Validate(); err != nil {
+		return err
+	}
+	if run == nil || strings.TrimSpace(run.RunID) == "" || strings.TrimSpace(run.ScheduleID) == "" {
+		return fmt.Errorf("run_id and schedule_id are required")
+	}
+	if strings.TrimSpace(run.UserID) == "" || run.UserID != schedule.UserID {
+		return fmt.Errorf("run user_id must match schedule owner")
+	}
+	if run.ScheduleID != schedule.ScheduleID {
+		return fmt.Errorf("run schedule_id must match parent")
+	}
+	runData, err := json.Marshal(run)
+	if err != nil {
+		return fmt.Errorf("failed to marshal task schedule run: %w", err)
+	}
+	scheduleData, err := json.Marshal(schedule)
+	if err != nil {
+		return fmt.Errorf("failed to marshal task schedule: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin finish task schedule run: %w", err)
+	}
+	if _, err := tx.Exec(upsertTaskScheduleRunSQL(), taskScheduleRunArgs(run, string(runData))...); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("finish task schedule run: %w", err)
+	}
+	if _, err := tx.Exec(
+		upsertTaskScheduleSQL(),
+		schedule.ScheduleID, schedule.UserID, schedule.SessionID, string(schedule.Status),
+		schedule.NextRunAt.Unix(), string(scheduleData), schedule.CreatedAt.Unix(), schedule.UpdatedAt.Unix(),
+	); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("finish task schedule: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit finish task schedule run: %w", err)
+	}
+	return nil
 }
 
 // PutWorkflowRun upserts a durable Core workflow and its task DAG.
@@ -3264,6 +3267,31 @@ func (s *SQLiteStore) ListWorkflowRuns(userID string, limit int) ([]*model.Workf
 		return nil, fmt.Errorf("error iterating workflow runs: %w", err)
 	}
 	return workflows, nil
+}
+
+func scanOpenedFiles(rows *sql.Rows) ([]*model.OpenedFile, error) {
+	var files []*model.OpenedFile
+	for rows.Next() {
+		f := &model.OpenedFile{}
+		var openedAt, closedAt int64
+		var isOpenInt int
+		if err := rows.Scan(
+			&f.FileID, &f.SessionID, &f.UserID, &f.FilePath, &f.FileName,
+			&openedAt, &closedAt, &isOpenInt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan opened file: %w", err)
+		}
+		f.OpenedAt = time.Unix(openedAt, 0)
+		if closedAt > 0 {
+			f.ClosedAt = time.Unix(closedAt, 0)
+		}
+		f.IsOpen = isOpenInt != 0
+		files = append(files, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating opened files: %w", err)
+	}
+	return files, nil
 }
 
 // Ensure SQLiteStore implements model.SessionStore and debuger.DebugStore

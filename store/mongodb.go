@@ -821,14 +821,20 @@ func (s *MongoDBStore) DeleteUserData(userID string) error {
 
 	// Delete schedules and their history. Run documents are keyed by schedule,
 	// so collect the owner's schedule ids before removing the parent rows.
-	scheduleIDs, err := s.taskSchedulesCollection.Distinct(ctx, "_id", userFilter)
+	scheduleIDs, err := s.taskSchedulesCollection.Distinct(ctx, "schedule_id", userFilter)
 	if err != nil {
 		return fmt.Errorf("failed to list task_schedules: %w", err)
 	}
+	runFilter := bson.M{"user_id": userID}
 	if len(scheduleIDs) > 0 {
-		if _, err := s.taskScheduleRunsCollection.DeleteMany(ctx, bson.M{"schedule_id": bson.M{"$in": scheduleIDs}}); err != nil {
-			return fmt.Errorf("failed to delete task_schedule_runs: %w", err)
-		}
+		runFilter = bson.M{"$or": []bson.M{
+			{"user_id": userID},
+			{"schedule_id": bson.M{"$in": scheduleIDs}, "user_id": bson.M{"$in": bson.A{"", nil}}},
+			{"schedule_id": bson.M{"$in": scheduleIDs}, "user_id": bson.M{"$exists": false}},
+		}}
+	}
+	if _, err := s.taskScheduleRunsCollection.DeleteMany(ctx, runFilter); err != nil {
+		return fmt.Errorf("failed to delete task_schedule_runs: %w", err)
 	}
 	if _, err := s.taskSchedulesCollection.DeleteMany(ctx, userFilter); err != nil {
 		return fmt.Errorf("failed to delete task_schedules: %w", err)
@@ -841,11 +847,12 @@ func (s *MongoDBStore) DeleteUserData(userID string) error {
 	// branch is kept so documents written before this field existed are still
 	// cleaned up; the $or is a strict superset of the old filter, so it can never
 	// delete less than before.
-	childFilter := bson.M{"$or": []bson.M{{"user_id": userID}}}
+	childFilter := bson.M{"user_id": userID}
 	if len(sessionIDs) > 0 {
 		childFilter = bson.M{"$or": []bson.M{
 			{"user_id": userID},
-			{"session_id": bson.M{"$in": sessionIDs}},
+			{"session_id": bson.M{"$in": sessionIDs}, "user_id": bson.M{"$in": bson.A{"", nil}}},
+			{"session_id": bson.M{"$in": sessionIDs}, "user_id": bson.M{"$exists": false}},
 		}}
 	}
 	if _, err := s.toolCallsCollection.DeleteMany(ctx, childFilter); err != nil {
@@ -1725,7 +1732,7 @@ func (s *MongoDBStore) AddOpenedFile(openedFile *model.OpenedFile) error {
 		return fmt.Errorf("failed to marshal opened file: %w", err)
 	}
 
-	id := fmt.Sprintf("%s:%s", openedFile.SessionID, openedFile.FilePath)
+	id := openedFileMongoID(openedFile.UserID, openedFile.SessionID, openedFile.FilePath)
 	doc := openedFileDocument{
 		ID:        id,
 		SessionID: openedFile.SessionID,
@@ -1744,56 +1751,63 @@ func (s *MongoDBStore) AddOpenedFile(openedFile *model.OpenedFile) error {
 	return nil
 }
 
-// CloseOpenedFile marks the currently-open record for (sessionID, filePath)
-// closed. It is a no-op when the file is not currently open, matching the SQLite
-// backend's "WHERE is_open = 1" guard. The embedded JSON is updated too so a
-// later read reflects the closed state (IsOpen=false, ClosedAt set), exactly as
-// the SQLite backend reconstructs it from columns.
-func (s *MongoDBStore) CloseOpenedFile(sessionID string, filePath string) error {
+func openedFileMongoID(userID, sessionID, filePath string) string {
+	return scopedMongoID(userID, sessionID) + ":" + filePath
+}
+
+func legacyOpenedFileMongoID(sessionID, filePath string) string {
+	return sessionID + ":" + filePath
+}
+
+// CloseOpenedFile marks the currently-open record for one owner closed.
+func (s *MongoDBStore) CloseOpenedFile(userID, sessionID, filePath string) error {
+	if err := requireOwnerID("opened file", userID, sessionID); err != nil {
+		return err
+	}
 	ctx, cancel := s.opCtx()
 	defer cancel()
 
-	id := fmt.Sprintf("%s:%s", sessionID, filePath)
-
-	// Only act on a currently-open record (no closed_at yet).
-	var doc openedFileDocument
-	err := s.openedFilesCollection.FindOne(ctx, bson.M{
-		"_id":       id,
-		"closed_at": bson.M{"$exists": false},
-	}).Decode(&doc)
-	if err == mongo.ErrNoDocuments {
-		return nil // not open (or absent) → no-op, matching SQLite
+	ids := []string{
+		openedFileMongoID(userID, sessionID, filePath),
+		legacyOpenedFileMongoID(sessionID, filePath),
 	}
-	if err != nil {
-		return fmt.Errorf("failed to query opened file: %w", err)
-	}
-
 	now := time.Now()
-	file := &model.OpenedFile{}
-	if uErr := unmarshalJSONOrBSON(doc.Data, file); uErr == nil {
-		file.IsOpen = false
-		file.ClosedAt = now
-		if data, mErr := json.Marshal(file); mErr == nil {
-			doc.Data = string(data)
+	for _, id := range ids {
+		var doc openedFileDocument
+		err := s.openedFilesCollection.FindOne(ctx, bson.M{
+			"_id":       id,
+			"user_id":   userID,
+			"closed_at": bson.M{"$exists": false},
+		}).Decode(&doc)
+		if err == mongo.ErrNoDocuments {
+			continue
 		}
-	}
+		if err != nil {
+			return fmt.Errorf("failed to query opened file: %w", err)
+		}
 
-	_, err = s.openedFilesCollection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
-		"$set": bson.M{"closed_at": now, "data": doc.Data},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to close opened file: %w", err)
-	}
+		file := &model.OpenedFile{}
+		if uErr := unmarshalJSONOrBSON(doc.Data, file); uErr == nil {
+			file.IsOpen = false
+			file.ClosedAt = now
+			if data, mErr := json.Marshal(file); mErr == nil {
+				doc.Data = string(data)
+			}
+		}
 
+		_, err = s.openedFilesCollection.UpdateOne(ctx, bson.M{"_id": id, "user_id": userID}, bson.M{
+			"$set": bson.M{"closed_at": now, "data": doc.Data},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to close opened file: %w", err)
+		}
+		return nil
+	}
 	return nil
 }
 
-// GetOpenedFilesBySession returns all opened files for a session
-func (s *MongoDBStore) GetOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error) {
-	ctx, cancel := s.opCtx()
-	defer cancel()
-
-	cursor, err := s.openedFilesCollection.Find(ctx, bson.M{"session_id": sessionID})
+func (s *MongoDBStore) listOpenedFiles(ctx context.Context, filter bson.M) ([]*model.OpenedFile, error) {
+	cursor, err := s.openedFilesCollection.Find(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query opened files: %w", err)
 	}
@@ -1805,56 +1819,50 @@ func (s *MongoDBStore) GetOpenedFilesBySession(sessionID string) ([]*model.Opene
 		if err := cursor.Decode(&doc); err != nil {
 			return nil, fmt.Errorf("failed to decode opened file: %w", err)
 		}
-
 		file := &model.OpenedFile{}
 		if err := unmarshalJSONOrBSON(doc.Data, file); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal opened file: %w", err)
 		}
-
 		files = append(files, file)
 	}
 	if err := cursor.Err(); err != nil {
 		return nil, err
 	}
-
 	sortOpenedFilesByOpenedAtAsc(files)
 	return files, nil
 }
 
-// GetCurrentlyOpenedFilesBySession returns only currently open files
-func (s *MongoDBStore) GetCurrentlyOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error) {
+// GetOpenedFilesBySession returns opened files for a session id. Numeric ids
+// that collide across users fail closed.
+func (s *MongoDBStore) GetOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error) {
 	ctx, cancel := s.opCtx()
 	defer cancel()
+	if err := s.errIfAmbiguous(ctx, s.openedFilesCollection, "session_id", "opened_files", sessionID); err != nil {
+		return nil, err
+	}
+	return s.listOpenedFiles(ctx, bson.M{"session_id": sessionID})
+}
 
-	cursor, err := s.openedFilesCollection.Find(ctx, bson.M{
+func (s *MongoDBStore) GetUserOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error) {
+	if err := requireOwnerID("opened file", userID, sessionID); err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.opCtx()
+	defer cancel()
+	return s.listOpenedFiles(ctx, bson.M{"user_id": userID, "session_id": sessionID})
+}
+
+func (s *MongoDBStore) GetCurrentlyOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error) {
+	if err := requireOwnerID("opened file", userID, sessionID); err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.opCtx()
+	defer cancel()
+	return s.listOpenedFiles(ctx, bson.M{
+		"user_id":    userID,
 		"session_id": sessionID,
 		"closed_at":  bson.M{"$exists": false},
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to query opened files: %w", err)
-	}
-	defer cursor.Close(ctx)
-
-	var files []*model.OpenedFile
-	for cursor.Next(ctx) {
-		var doc openedFileDocument
-		if err := cursor.Decode(&doc); err != nil {
-			return nil, fmt.Errorf("failed to decode opened file: %w", err)
-		}
-
-		file := &model.OpenedFile{}
-		if err := unmarshalJSONOrBSON(doc.Data, file); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal opened file: %w", err)
-		}
-
-		files = append(files, file)
-	}
-	if err := cursor.Err(); err != nil {
-		return nil, err
-	}
-
-	sortOpenedFilesByOpenedAtAsc(files)
-	return files, nil
 }
 
 // GetAllOpenedFiles returns all opened files
@@ -2735,19 +2743,21 @@ func (s *MongoDBStore) ListPendingReviews(userID string) ([]*model.ReviewRequest
 // ============================================================================
 
 type taskScheduleDocument struct {
-	ID        string    `bson:"_id"`
-	UserID    string    `bson:"user_id"`
-	SessionID string    `bson:"session_id"`
-	Status    string    `bson:"status"`
-	NextRunAt time.Time `bson:"next_run_at"`
-	CreatedAt time.Time `bson:"created_at"`
-	UpdatedAt time.Time `bson:"updated_at"`
-	Data      string    `bson:"data"`
+	ID         string    `bson:"_id"`
+	ScheduleID string    `bson:"schedule_id"`
+	UserID     string    `bson:"user_id"`
+	SessionID  string    `bson:"session_id"`
+	Status     string    `bson:"status"`
+	NextRunAt  time.Time `bson:"next_run_at"`
+	CreatedAt  time.Time `bson:"created_at"`
+	UpdatedAt  time.Time `bson:"updated_at"`
+	Data       string    `bson:"data"`
 }
 
 type taskScheduleRunDocument struct {
 	ID          string    `bson:"_id"`
 	ScheduleID  string    `bson:"schedule_id"`
+	UserID      string    `bson:"user_id"`
 	Status      string    `bson:"status"`
 	StartedAt   time.Time `bson:"started_at"`
 	CompletedAt time.Time `bson:"completed_at,omitempty"`
@@ -2762,15 +2772,16 @@ func (s *MongoDBStore) PutTaskSchedule(schedule *model.TaskSchedule) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal task schedule: %w", err)
 	}
+	docID := scopedMongoID(schedule.UserID, schedule.ScheduleID)
 	doc := taskScheduleDocument{
-		ID: schedule.ScheduleID, UserID: schedule.UserID, SessionID: schedule.SessionID,
+		ID: docID, ScheduleID: schedule.ScheduleID, UserID: schedule.UserID, SessionID: schedule.SessionID,
 		Status: string(schedule.Status), NextRunAt: schedule.NextRunAt,
 		CreatedAt: schedule.CreatedAt, UpdatedAt: schedule.UpdatedAt, Data: string(data),
 	}
 	ctx, cancel := s.opCtx()
 	defer cancel()
 	_, err = s.taskSchedulesCollection.ReplaceOne(
-		ctx, bson.M{"_id": schedule.ScheduleID}, doc, options.Replace().SetUpsert(true),
+		ctx, bson.M{"_id": docID}, doc, options.Replace().SetUpsert(true),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to store task schedule: %w", err)
@@ -2781,8 +2792,14 @@ func (s *MongoDBStore) PutTaskSchedule(schedule *model.TaskSchedule) error {
 func (s *MongoDBStore) GetTaskSchedule(scheduleID string) (*model.TaskSchedule, error) {
 	ctx, cancel := s.opCtx()
 	defer cancel()
+	if err := s.errIfAmbiguous(ctx, s.taskSchedulesCollection, "schedule_id", "task_schedules", scheduleID); err != nil {
+		return nil, err
+	}
 	var doc taskScheduleDocument
-	err := s.taskSchedulesCollection.FindOne(ctx, bson.M{"_id": scheduleID}).Decode(&doc)
+	err := s.taskSchedulesCollection.FindOne(ctx, bson.M{"schedule_id": scheduleID}).Decode(&doc)
+	if err == mongo.ErrNoDocuments {
+		err = s.taskSchedulesCollection.FindOne(ctx, bson.M{"_id": scheduleID}).Decode(&doc)
+	}
 	if err == mongo.ErrNoDocuments {
 		return nil, nil
 	}
@@ -2827,15 +2844,23 @@ func (s *MongoDBStore) ListTaskSchedules(userID string) ([]*model.TaskSchedule, 
 	return schedules, cursor.Err()
 }
 
-func (s *MongoDBStore) DeleteTaskSchedule(scheduleID string) error {
+func (s *MongoDBStore) DeleteTaskSchedule(userID, scheduleID string) error {
+	if err := requireOwnerID("task schedule", userID, scheduleID); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*s.opTimeout)
 	defer cancel()
-	if _, err := s.taskScheduleRunsCollection.DeleteMany(ctx, bson.M{"schedule_id": scheduleID}); err != nil {
+	if _, err := s.taskScheduleRunsCollection.DeleteMany(ctx, bson.M{"user_id": userID, "schedule_id": scheduleID}); err != nil {
 		return fmt.Errorf("failed to delete task schedule runs: %w", err)
 	}
-	if _, err := s.taskSchedulesCollection.DeleteOne(ctx, bson.M{"_id": scheduleID}); err != nil {
+	if _, err := s.taskSchedulesCollection.DeleteMany(ctx, bson.M{"user_id": userID, "$or": []bson.M{
+		{"_id": scopedMongoID(userID, scheduleID)},
+		{"_id": scheduleID},
+		{"schedule_id": scheduleID},
+	}}); err != nil {
 		return fmt.Errorf("failed to delete task schedule: %w", err)
 	}
+	auditDeletion("task_schedule", scheduleID, userID)
 	return nil
 }
 
@@ -2843,12 +2868,15 @@ func (s *MongoDBStore) PutTaskScheduleRun(run *model.TaskScheduleRun) error {
 	if run == nil || strings.TrimSpace(run.RunID) == "" || strings.TrimSpace(run.ScheduleID) == "" {
 		return fmt.Errorf("run_id and schedule_id are required")
 	}
+	if strings.TrimSpace(run.UserID) == "" {
+		return fmt.Errorf("run user_id is required")
+	}
 	data, err := json.Marshal(run)
 	if err != nil {
 		return fmt.Errorf("failed to marshal task schedule run: %w", err)
 	}
 	doc := taskScheduleRunDocument{
-		ID: run.RunID, ScheduleID: run.ScheduleID, Status: string(run.Status),
+		ID: run.RunID, ScheduleID: run.ScheduleID, UserID: run.UserID, Status: string(run.Status),
 		StartedAt: run.StartedAt, CompletedAt: run.CompletedAt, Data: string(data),
 	}
 	ctx, cancel := s.opCtx()
@@ -2862,7 +2890,10 @@ func (s *MongoDBStore) PutTaskScheduleRun(run *model.TaskScheduleRun) error {
 	return nil
 }
 
-func (s *MongoDBStore) ListTaskScheduleRuns(scheduleID string, limit int) ([]*model.TaskScheduleRun, error) {
+func (s *MongoDBStore) ListTaskScheduleRuns(userID, scheduleID string, limit int) ([]*model.TaskScheduleRun, error) {
+	if err := requireOwnerID("task schedule run", userID, scheduleID); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -2872,7 +2903,7 @@ func (s *MongoDBStore) ListTaskScheduleRuns(scheduleID string, limit int) ([]*mo
 	ctx, cancel := context.WithTimeout(context.Background(), 3*s.opTimeout)
 	defer cancel()
 	cursor, err := s.taskScheduleRunsCollection.Find(
-		ctx, bson.M{"schedule_id": scheduleID},
+		ctx, bson.M{"user_id": userID, "schedule_id": scheduleID},
 		options.Find().
 			SetSort(bson.D{{Key: "started_at", Value: -1}, {Key: "_id", Value: -1}}).
 			SetLimit(int64(limit)),
@@ -2895,6 +2926,16 @@ func (s *MongoDBStore) ListTaskScheduleRuns(scheduleID string, limit int) ([]*mo
 		runs = append(runs, run)
 	}
 	return runs, cursor.Err()
+}
+
+func (s *MongoDBStore) FinishTaskScheduleRun(schedule *model.TaskSchedule, run *model.TaskScheduleRun) error {
+	if err := s.PutTaskScheduleRun(run); err != nil {
+		return err
+	}
+	if err := s.PutTaskSchedule(schedule); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ============================================================================

@@ -41,6 +41,8 @@ func ambiguousCountSQL(table, column string) (string, bool) {
 		return "SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = ?", true
 	case "task_schedules.schedule_id":
 		return "SELECT COUNT(*) FROM task_schedules WHERE schedule_id = ?", true
+	case "opened_files.session_id":
+		return "SELECT COUNT(DISTINCT user_id) FROM opened_files WHERE session_id = ?", true
 	case "messages.session_id":
 		return "SELECT COUNT(DISTINCT user_id) FROM messages WHERE session_id = ?", true
 	case "tool_calls.tool_id":

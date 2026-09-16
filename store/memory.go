@@ -397,8 +397,8 @@ func (s *DBStore) AddOpenedFile(openedFile *model.OpenedFile) error {
 }
 
 // CloseOpenedFile marks a file as closed (delegates to SQLiteStore)
-func (s *DBStore) CloseOpenedFile(sessionID string, filePath string) error {
-	return s.sqliteStore.CloseOpenedFile(sessionID, filePath)
+func (s *DBStore) CloseOpenedFile(userID, sessionID, filePath string) error {
+	return s.sqliteStore.CloseOpenedFile(userID, sessionID, filePath)
 }
 
 // GetOpenedFilesBySession returns all opened files for a session (delegates to SQLiteStore)
@@ -406,9 +406,13 @@ func (s *DBStore) GetOpenedFilesBySession(sessionID string) ([]*model.OpenedFile
 	return s.sqliteStore.GetOpenedFilesBySession(sessionID)
 }
 
+func (s *DBStore) GetUserOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error) {
+	return s.sqliteStore.GetUserOpenedFilesBySession(userID, sessionID)
+}
+
 // GetCurrentlyOpenedFilesBySession returns only currently open files for a session (delegates to SQLiteStore)
-func (s *DBStore) GetCurrentlyOpenedFilesBySession(sessionID string) ([]*model.OpenedFile, error) {
-	return s.sqliteStore.GetCurrentlyOpenedFilesBySession(sessionID)
+func (s *DBStore) GetCurrentlyOpenedFilesBySession(userID, sessionID string) ([]*model.OpenedFile, error) {
+	return s.sqliteStore.GetCurrentlyOpenedFilesBySession(userID, sessionID)
 }
 
 // GetAllUsers returns all users (delegates to SQLiteStore)
@@ -569,8 +573,8 @@ func (s *DBStore) ListTaskSchedules(userID string) ([]*model.TaskSchedule, error
 }
 
 // DeleteTaskSchedule removes a schedule and its run history.
-func (s *DBStore) DeleteTaskSchedule(scheduleID string) error {
-	return s.sqliteStore.DeleteTaskSchedule(scheduleID)
+func (s *DBStore) DeleteTaskSchedule(userID, scheduleID string) error {
+	return s.sqliteStore.DeleteTaskSchedule(userID, scheduleID)
 }
 
 // PutTaskScheduleRun stores one execution record.
@@ -579,8 +583,12 @@ func (s *DBStore) PutTaskScheduleRun(run *model.TaskScheduleRun) error {
 }
 
 // ListTaskScheduleRuns returns newest execution records first.
-func (s *DBStore) ListTaskScheduleRuns(scheduleID string, limit int) ([]*model.TaskScheduleRun, error) {
-	return s.sqliteStore.ListTaskScheduleRuns(scheduleID, limit)
+func (s *DBStore) ListTaskScheduleRuns(userID, scheduleID string, limit int) ([]*model.TaskScheduleRun, error) {
+	return s.sqliteStore.ListTaskScheduleRuns(userID, scheduleID, limit)
+}
+
+func (s *DBStore) FinishTaskScheduleRun(schedule *model.TaskSchedule, run *model.TaskScheduleRun) error {
+	return s.sqliteStore.FinishTaskScheduleRun(schedule, run)
 }
 
 // PutWorkflowRun stores a durable Core workflow in SQLite.

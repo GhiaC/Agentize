@@ -112,6 +112,16 @@ See [ROUTING_DAG.md](./ROUTING_DAG.md) for the trace this comes from and the
 | `scheduler_summary_duration_seconds` | histogram | — |
 | `scheduler_running` | gauge | — |
 
+### Task scheduler (recurring prompt / workflow schedules)
+| Metric | Type | Labels |
+|--------|------|--------|
+| `task_schedule_operations_total` | counter | `operation` (create/delete/run_now/pause/resume/execute), `status` (ok/error) |
+| `task_schedule_execute_duration_seconds` | histogram | — |
+| `task_schedule_persist_errors_total` | counter | `stage` (mark_running/create_run/reload/finish) |
+| `task_schedule_running` | gauge | — in-flight schedule executions |
+
+`task_schedule_operations_total{operation="run_now",status="error"}` includes refused Run now (worker stopped, agent type not accepted, already running). Persist errors are logged with `[TaskScheduler]` and must not be followed by a terminal publish.
+
 ### Knowledge and moderation
 | Metric | Type | Labels |
 |--------|------|--------|
@@ -301,6 +311,7 @@ files).
 | Agent message lifecycle + LLM + tools + queue | `engine/user_agent.go` |
 | Backup LLM chain | `engine/backup_chain.go` |
 | Summarization scheduler | `engine/schedules.go` |
+| Task scheduler (recurring jobs) | `engine/task_scheduler.go` |
 | Knowledge file opens | `engine/file_tools.go` |
 | Store query latency (per backend) | `store/metered.go` (wraps `store.Store`) |
 | Store deletions audit | `store/maintenance.go` |

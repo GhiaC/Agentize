@@ -465,6 +465,7 @@ var postgreSQLMigrations = []postgreSQLMigration{
 	{1, "initial agentize schema", postgreSQLSchema},
 	{2, "composite keys for numeric scoped ids", postgreSQLNumericIDKeys},
 	{3, "composite keys for per-message tool ids", postgreSQLToolCallKeys},
+	{4, "task_schedule_runs.user_id so numeric schedule ids stay per owner", postgreSQLTaskScheduleRunUserIDs},
 }
 
 // Foreign keys are intentionally omitted on session/user children: Delete of a
@@ -546,9 +547,10 @@ CREATE INDEX IF NOT EXISTS idx_schedules_user_created ON task_schedules(user_id,
 CREATE INDEX IF NOT EXISTS idx_schedules_status_next ON task_schedules(status, next_run_at);
 
 CREATE TABLE IF NOT EXISTS task_schedule_runs (
- run_id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, status TEXT NOT NULL, data JSONB NOT NULL,
+ run_id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, user_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, data JSONB NOT NULL,
  started_at BIGINT NOT NULL, completed_at BIGINT DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_schedule_runs_schedule_started ON task_schedule_runs(schedule_id, started_at DESC, run_id DESC);
+CREATE INDEX IF NOT EXISTS idx_schedule_runs_user_schedule_started ON task_schedule_runs(user_id, schedule_id, started_at DESC, run_id DESC);
 
 CREATE TABLE IF NOT EXISTS workflow_runs (
  workflow_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL,
@@ -601,4 +603,10 @@ ALTER TABLE task_schedules ADD PRIMARY KEY (user_id, schedule_id);
 const postgreSQLToolCallKeys = `
 ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey;
 ALTER TABLE tool_calls ADD PRIMARY KEY (user_id, session_id, message_id, tool_id);
+`
+
+const postgreSQLTaskScheduleRunUserIDs = `
+ALTER TABLE task_schedule_runs ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT '';
+UPDATE task_schedule_runs SET user_id = COALESCE(data->>'user_id', '') WHERE user_id = '';
+CREATE INDEX IF NOT EXISTS idx_schedule_runs_user_schedule_started ON task_schedule_runs(user_id, schedule_id, started_at DESC, run_id DESC);
 `
