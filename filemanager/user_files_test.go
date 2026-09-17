@@ -172,3 +172,75 @@ func TestResolveMIMEInfersImagesAndText(t *testing.T) {
 		t.Fatal("jpeg should count as image")
 	}
 }
+
+func TestUserServiceLinuxCaseSensitiveNames(t *testing.T) {
+	s := NewUserService(newMemoryUserFiles())
+	upper, err := s.CreateFile("alice", "Notes.md", "text/markdown", []byte("upper"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower, err := s.CreateFile("alice", "notes.md", "text/markdown", []byte("lower"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upper.FileID == lower.FileID || upper.Name != "Notes.md" || lower.Name != "notes.md" {
+		t.Fatalf("case-folded names: upper=%+v lower=%+v", upper, lower)
+	}
+	if _, err = s.CreateFile("alice", "Notes.md", "text/plain", []byte("dup")); err == nil {
+		t.Fatal("exact duplicate must still collide")
+	}
+	if _, err = s.CreateFolder("alice", "Notes"); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := s.Move("alice", lower.FileID, "Notes/notes.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Name != "Notes/notes.md" {
+		t.Fatalf("move path=%q", moved.Name)
+	}
+	items, err := s.List("alice", "Notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Name != "notes.md" || items[0].Path != "Notes/notes.md" {
+		t.Fatalf("list Notes=%#v", items)
+	}
+	wrongCase, err := s.List("alice", "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wrongCase) != 0 {
+		t.Fatalf("list notes must not see Notes/: %#v", wrongCase)
+	}
+	root, err := s.List("alice", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, item := range root {
+		names = append(names, item.Name)
+	}
+	joined := strings.Join(names, ",")
+	if !strings.Contains(joined, "Notes") || !strings.Contains(joined, "Notes.md") {
+		t.Fatalf("root listing lost case variants: %#v", root)
+	}
+	for i := 1; i < len(root); i++ {
+		if root[i-1].Kind == root[i].Kind && root[i-1].Name > root[i].Name {
+			t.Fatalf("linux byte-order sort broken: %#v", root)
+		}
+	}
+}
+
+func TestVirtualPathRejectsNULAndPreservesCase(t *testing.T) {
+	got, err := virtualPath("Research/Alpha.md")
+	if err != nil || got != "Research/Alpha.md" {
+		t.Fatalf("preserve case got=%q err=%v", got, err)
+	}
+	if _, err = virtualPath("foo\x00bar"); err != ErrInvalidPath {
+		t.Fatalf("nul err=%v", err)
+	}
+	if !virtualNamesEqual("Notes/", "Notes") || virtualNamesEqual("Notes", "notes") {
+		t.Fatal("linux path equality")
+	}
+}

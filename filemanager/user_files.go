@@ -75,7 +75,7 @@ func NewUserService(backend UserBackend) *UserService { return &UserService{back
 
 func virtualPath(name string) (string, error) {
 	name = strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
-	if name == "" || strings.HasPrefix(name, "/") {
+	if name == "" || strings.HasPrefix(name, "/") || strings.ContainsRune(name, 0) {
 		return "", ErrInvalidPath
 	}
 	clean := path.Clean(name)
@@ -83,6 +83,12 @@ func virtualPath(name string) (string, error) {
 		return "", ErrInvalidPath
 	}
 	return clean, nil
+}
+
+// virtualNamesEqual is Linux-like: two virtual paths collide only when the
+// cleaned byte sequences match. Foo and foo are distinct names.
+func virtualNamesEqual(a, b string) bool {
+	return strings.TrimSuffix(a, "/") == strings.TrimSuffix(b, "/")
 }
 
 func virtualDir(name string) (string, error) {
@@ -149,7 +155,7 @@ func (s *UserService) List(userID, directory string) ([]UserEntry, error) {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind == "directory"
 		}
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		return out[i].Name < out[j].Name
 	})
 	return out, nil
 }
@@ -329,7 +335,7 @@ func (s *UserService) ensureAvailable(userID, name, exceptID string) error {
 		return err
 	}
 	for _, f := range files {
-		if f != nil && f.FileID != exceptID && strings.EqualFold(strings.TrimSuffix(f.Name, "/"), strings.TrimSuffix(name, "/")) {
+		if f != nil && f.FileID != exceptID && virtualNamesEqual(f.Name, name) {
 			return errors.New("an entry already exists at this path")
 		}
 	}
