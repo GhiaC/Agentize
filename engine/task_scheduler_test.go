@@ -310,6 +310,33 @@ func TestTaskSchedulerToolOwnershipAndSchema(t *testing.T) {
 	if !payload.OK || payload.Schedule == nil {
 		t.Fatalf("payload = %#v", payload)
 	}
+	for _, name := range []string{"loop-2", "loop-3"} {
+		if _, err := scheduler.ExecuteTool(map[string]interface{}{
+			"__user_id__": "user-1", "__session_id__": "user-1-low-s0001",
+			"action": "create", "name": name, "prompt": "work", "interval_seconds": float64(60),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := scheduler.ExecuteTool(map[string]interface{}{
+		"__user_id__": "user-1", "__session_id__": "user-1-low-s0001",
+		"action": "list", "offset": float64(0), "limit": float64(1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pagePayload struct {
+		Schedules  []map[string]interface{} `json:"schedules"`
+		Total      int                      `json:"total"`
+		NextOffset int                      `json:"next_offset"`
+		Done       bool                     `json:"done"`
+	}
+	if err := json.Unmarshal([]byte(page), &pagePayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(pagePayload.Schedules) != 1 || pagePayload.Total != 3 || pagePayload.NextOffset != 1 || pagePayload.Done {
+		t.Fatalf("unexpected schedule page: %#v", pagePayload)
+	}
 	if _, err := scheduler.Get(payload.Schedule.ScheduleID, "other-user"); err == nil {
 		t.Fatal("cross-user schedule access should be denied")
 	}

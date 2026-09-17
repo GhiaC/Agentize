@@ -72,6 +72,29 @@ func TestConversationTools_ListCreateSelectRename(t *testing.T) {
 	}
 }
 
+func TestListConversationsPagination(t *testing.T) {
+	ch, _ := newConversationCore(t)
+	for _, title := range []string{"First", "Second", "Third"} {
+		if _, err := ch.createConversationTool(context.Background(), "alice", map[string]interface{}{"title": title}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := ch.listConversationsToolPage("alice", map[string]interface{}{"offset": float64(0), "limit": float64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(first, "Showing 1-1 of 3") || !strings.Contains(first, "Next page: offset=1") {
+		t.Fatalf("first page metadata missing: %s", first)
+	}
+	second, err := ch.listConversationsToolPage("alice", map[string]interface{}{"offset": float64(1), "limit": float64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(second, "Showing 2-2 of 3") || first == second {
+		t.Fatalf("second page is wrong: %s", second)
+	}
+}
+
 func TestConversationTools_InspectModelArchiveDelete(t *testing.T) {
 	ch, eng := newConversationCore(t)
 	if _, err := ch.createConversationTool(context.Background(), "alice", map[string]interface{}{

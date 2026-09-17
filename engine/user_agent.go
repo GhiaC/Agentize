@@ -1371,7 +1371,7 @@ func (e *Engine) processToolResult(session *model.Session, result string) string
 
 	return fmt.Sprintf("Tool result exceeds %d characters (exact: %d characters). "+
 		"The full output is buffered privately for you under result_id=\"%s\" (only you can access it). Retrieve what you need with:\n"+
-		"- `inspect_result` (no LLM, fast): action=stats to size it, then head/tail (default 30 lines), slice (start/end line range), grep (regex, with ignore_case/invert/context/max_matches), unique, sort (desc/numeric), or count (matches of a query, or per-line frequency).\n"+
+		"- `inspect_result` (no LLM, fast): action=read with offset=0 for lossless pagination (continue with next_offset), or use stats/head/tail/slice/grep/unique/sort/count.\n"+
 		"- `collect_result` (LLM extraction): pass a 'query' describing the specific information you need.",
 		maxLen, len(result), resultID)
 }
@@ -1423,19 +1423,20 @@ func (e *Engine) CollectResult(ctx context.Context, sessionID string, resultID s
 // (ownership-checked) result. Callers are responsible for access control and
 // for putting the owning userID on ctx (for metering).
 func (e *Engine) extractFromResult(ctx context.Context, fullResult string, query string) (string, error) {
-	// Determine which model to use
+	return e.extractFromResultWithLimit(ctx, fullResult, query, defaultCollectResultChars)
+}
+
+// extractFromResultWithLimit performs semantic extraction with a response
+// budget that is deliberately independent of MaxToolResultLength. The latter
+// is only the threshold for buffering an original tool response.
+func (e *Engine) extractFromResultWithLimit(ctx context.Context, fullResult string, query string, maxLen int) (string, error) {
+	maxLen = boundedResultChars(maxLen, defaultCollectResultChars, maxCollectResultChars)
 	modelName := e.llmConfig.CollectResultModel
 	if modelName == "" {
 		modelName = e.llmConfig.Model
 	}
 	if modelName == "" {
 		modelName = "openai/gpt-5-nano"
-	}
-
-	// Determine max response length
-	maxLen := e.llmConfig.MaxToolResultLength
-	if maxLen <= 0 {
-		maxLen = 250 // Default
 	}
 
 	// Build a simple prompt for extraction
@@ -1973,7 +1974,7 @@ func (e *Engine) persistBlockedAssistant(session *model.Session, modelName strin
 		MessageID: messageID, SeqID: seqID,
 		UserID: session.UserID, SessionID: session.SessionID,
 		Role: openai.ChatMessageRoleAssistant, Content: text,
-		AgentType: model.AgentTypeForMessage(nil, agentType),
+		AgentType:   model.AgentTypeForMessage(nil, agentType),
 		ContentType: model.ContentTypeText, Model: modelName,
 		FinishReason: "stop", CreatedAt: time.Now(),
 	}

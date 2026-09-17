@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
+	llminterface "github.com/ghiac/agentize/llm-interface"
 	"github.com/ghiac/agentize/model"
 	"github.com/ghiac/agentize/store"
 )
@@ -156,6 +158,56 @@ func TestCapOutputRuneSafe(t *testing.T) {
 	prefix := out[:strings.Index(out, "\n... (output truncated")]
 	if !utf8.ValidString(prefix) {
 		t.Fatalf("capOutput cut a UTF-8 rune")
+	}
+}
+
+func TestInspectReadPaginatesLosslesslyByCharacter(t *testing.T) {
+	full := "سلام🙂دنیا"
+	first := inspectRead(full, 0, 5)
+	if !strings.Contains(first, "next_offset=5") || !strings.Contains(first, "done=false") || !strings.HasSuffix(first, "سلام🙂") {
+		t.Fatalf("unexpected first page: %q", first)
+	}
+	second := inspectRead(full, 5, 5)
+	if !strings.Contains(second, "done=true") || !strings.HasSuffix(second, "دنیا") {
+		t.Fatalf("unexpected second page: %q", second)
+	}
+}
+
+func TestCollectResultBudgetIndependentOfBufferThreshold(t *testing.T) {
+	st, err := store.NewDBStoreWithPath(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	const sessionID = "u1-low-s0009"
+	session := model.NewSessionWithID("u1", sessionID, model.AgentTypeLow)
+	eng := &Engine{Sessions: st, llmConfig: LLMConfig{MaxToolResultLength: 50}}
+	eng.processToolResult(session, strings.Repeat("x", 100))
+	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	var resultID string
+	for id := range session.ToolResults {
+		resultID = id
+	}
+	var systemPrompt string
+	provider := llminterface.ProviderFunc(func(_ context.Context, _ string, messages []llminterface.Message, _ []llminterface.Tool) (*llminterface.Response, error) {
+		for _, message := range messages {
+			if message.Role == "system" {
+				systemPrompt = message.Content
+			}
+		}
+		return &llminterface.Response{Content: "answer"}, nil
+	})
+	eng.backups = NewBackupChain([]BackupLLM{{Provider: provider, Model: "test", Name: "test"}})
+	out, err := eng.collectResultFunction()(map[string]interface{}{
+		"__user_id__": "u1", "__session_id__": sessionID, "result_id": resultID, "query": "extract",
+	})
+	if err != nil || out != "answer" {
+		t.Fatalf("collect result: out=%q err=%v", out, err)
+	}
+	if !strings.Contains(systemPrompt, "8000 characters") || strings.Contains(systemPrompt, "50 characters") {
+		t.Fatalf("collection budget still follows MaxToolResultLength: %q", systemPrompt)
 	}
 }
 

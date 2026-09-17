@@ -540,6 +540,23 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 // This is used by CoreHandler to understand the user's session history
 // Note: Only uses Summary, Tags, and Msgs from sessions. ExMsgs is only for debug purposes and is not used here.
 func (sh *SessionHandler) GetSessionsPrompt(userID string) (string, error) {
+	return sh.getSessionsPromptPage(userID, 0, 0, false)
+}
+
+// GetSessionsPromptPage returns a stable slice of the same deterministic
+// session ordering used by GetSessionsPrompt. offset is zero-based; limit is
+// clamped to 1..100. The response includes the next offset when more remain.
+func (sh *SessionHandler) GetSessionsPromptPage(userID string, offset, limit int) (string, error) {
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return sh.getSessionsPromptPage(userID, offset, limit, true)
+}
+
+func (sh *SessionHandler) getSessionsPromptPage(userID string, offset, limit int, paginated bool) (string, error) {
 	sessions, err := sh.store.List(userID)
 	if err != nil {
 		return "", err
@@ -566,20 +583,55 @@ func (sh *SessionHandler) GetSessionsPrompt(userID string) (string, error) {
 		})
 	}
 
-	var sb strings.Builder
-	sb.WriteString("## Active Sessions\n\n")
-
 	// Build a deterministic type order: well-known types first, then
 	// remaining types sorted alphabetically.
 	typeOrder := sh.getAgentTypeOrder(byType)
-
+	type sessionWithType struct {
+		agentType AgentType
+		session   *Session
+	}
+	ordered := make([]sessionWithType, 0, len(sessions))
 	for _, agentType := range typeOrder {
-		typeSessions := byType[agentType]
-		sb.WriteString(fmt.Sprintf("### %s Sessions:\n", sh.AgentTypeDisplayName(agentType)))
-		for i, s := range typeSessions {
-			sh.formatSessionEntry(&sb, i+1, s)
+		for _, session := range byType[agentType] {
+			ordered = append(ordered, sessionWithType{agentType: agentType, session: session})
 		}
-		sb.WriteString("\n")
+	}
+	total := len(ordered)
+	if !paginated {
+		offset, limit = 0, total
+	} else {
+		if offset < 0 {
+			offset = 0
+		}
+		if offset > total {
+			offset = total
+		}
+		if offset+limit > total {
+			limit = total - offset
+		}
+	}
+	end := offset + limit
+
+	var sb strings.Builder
+	sb.WriteString("## Active Sessions\n\n")
+	if paginated {
+		start := 0
+		if end > offset {
+			start = offset + 1
+		}
+		fmt.Fprintf(&sb, "Showing %d-%d of %d (offset=%d, limit=%d).\n\n", start, end, total, offset, limit)
+	}
+
+	var previousType AgentType
+	for i, item := range ordered[offset:end] {
+		if i == 0 || item.agentType != previousType {
+			sb.WriteString(fmt.Sprintf("### %s Sessions:\n", sh.AgentTypeDisplayName(item.agentType)))
+		}
+		sh.formatSessionEntry(&sb, offset+i+1, item.session)
+		previousType = item.agentType
+	}
+	if paginated && end < total {
+		fmt.Fprintf(&sb, "\nNext page: offset=%d, limit=%d (%d remaining).\n", end, limit, total-end)
 	}
 
 	return sb.String(), nil

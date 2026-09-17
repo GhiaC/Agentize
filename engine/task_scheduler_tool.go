@@ -22,7 +22,7 @@ func TaskSchedulerToolDefinition() openai.Tool {
 				"Each schedule gets a dedicated session, so its history and memory are isolated and retained. " +
 				"A schedule repeatedly sends its prompt through one fixed agent. Optionally set conclusion_model " +
 				"to send each raw output to a cheaper model for a compact conclusion. " +
-				"Actions: create, list, get, stop, resume, run_now, delete.",
+				"Actions: create, list, get, stop, resume, run_now, delete. list is paginated; continue with next_offset.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -64,6 +64,17 @@ func TaskSchedulerToolDefinition() openai.Tool {
 					"conclusion_prompt": map[string]interface{}{
 						"type":        "string",
 						"description": "Optional instructions for the conclusion model (for example, decide whether a target condition was met).",
+					},
+					"offset": map[string]interface{}{
+						"type":        "integer",
+						"minimum":     0,
+						"description": "Zero-based item offset for action=list (default 0).",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     100,
+						"description": "Items per page for action=list (default 20, max 100).",
 					},
 				},
 				"required": []string{"action"},
@@ -158,11 +169,37 @@ func (s *TaskScheduler) executeTool(
 		if err != nil {
 			return "", err
 		}
-		items := make([]map[string]interface{}, 0, len(schedules))
-		for _, schedule := range schedules {
+		offsetValue, err := taskScheduleOptionalInteger(args, "offset")
+		if err != nil {
+			return "", err
+		}
+		limitValue, err := taskScheduleOptionalInteger(args, "limit")
+		if err != nil {
+			return "", err
+		}
+		offset, limit := int(offsetValue), int(limitValue)
+		if limit < 1 {
+			limit = 20
+		}
+		if limit > 100 {
+			limit = 100
+		}
+		if offset > len(schedules) {
+			offset = len(schedules)
+		}
+		end := offset + limit
+		if end > len(schedules) {
+			end = len(schedules)
+		}
+		items := make([]map[string]interface{}, 0, end-offset)
+		for _, schedule := range schedules[offset:end] {
 			items = append(items, taskScheduleSummary(schedule))
 		}
-		return taskScheduleJSON(map[string]interface{}{"ok": true, "schedules": items})
+		payload := map[string]interface{}{
+			"ok": true, "schedules": items, "offset": offset, "limit": limit,
+			"total": len(schedules), "next_offset": end, "done": end == len(schedules),
+		}
+		return taskScheduleJSON(payload)
 
 	case "get":
 		id, err := taskScheduleRequiredString(args, "schedule_id")

@@ -31,10 +31,13 @@ func (ch *CoreHandler) getCoreToolsForLLM() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        "list_sessions",
-				Description: "Get a list of all sessions for the current user. Use to find sessions for change_session.",
+				Description: "Get a paginated list of sessions for the current user. Use to find sessions for change_session. Continue with next_offset until all needed sessions are read.",
 				Parameters: map[string]interface{}{
-					"type":       "object",
-					"properties": map[string]interface{}{},
+					"type": "object",
+					"properties": map[string]interface{}{
+						"offset": map[string]interface{}{"type": "integer", "minimum": 0, "description": "Zero-based item offset (default 0)."},
+						"limit":  map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 100, "description": "Items per page (default 20, max 100)."},
+					},
 				},
 			},
 		},
@@ -407,12 +410,12 @@ func (ch *CoreHandler) runCoreToolImpl(
 		return ch.changeSessionTool(ctx, userID, args)
 
 	case "list_sessions":
-		return ch.listSessionsTool(userID)
+		return ch.listSessionsToolPage(userID, args)
 	case "manage_context":
 		return ch.manageContextTool(userID, coreSession, args)
 
 	case "list_conversations":
-		return ch.listConversationsTool(userID)
+		return ch.listConversationsToolPage(userID, args)
 	case "get_conversation":
 		return ch.getConversationTool(ctx, userID, args)
 	case "create_conversation":
@@ -654,11 +657,49 @@ func (ch *CoreHandler) changeSessionTool(_ context.Context, userID string, args 
 }
 
 func (ch *CoreHandler) listSessionsTool(userID string) (string, error) {
+	return ch.listSessionsToolPage(userID, nil)
+}
+
+func (ch *CoreHandler) listSessionsToolPage(userID string, args map[string]interface{}) (string, error) {
 	_, err := ch.sessionHandler.ListUserSessions(userID)
 	if err != nil {
 		return "", err
 	}
-	return ch.sessionHandler.GetSessionsPrompt(userID)
+	offset, limit := coreListPagination(args)
+	return ch.sessionHandler.GetSessionsPromptPage(userID, offset, limit)
+}
+
+func coreListPagination(args map[string]interface{}) (offset, limit int) {
+	limit = 20
+	if args == nil {
+		return 0, limit
+	}
+	read := func(key string) int {
+		switch value := args[key].(type) {
+		case int:
+			return value
+		case int64:
+			return int(value)
+		case float64:
+			return int(value)
+		case json.Number:
+			parsed, _ := value.Int64()
+			return int(parsed)
+		default:
+			return 0
+		}
+	}
+	offset = read("offset")
+	if offset < 0 {
+		offset = 0
+	}
+	if requested := read("limit"); requested > 0 {
+		limit = requested
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return offset, limit
 }
 
 func (ch *CoreHandler) banUserTool(_ context.Context, userID string, args map[string]interface{}) (string, error) {

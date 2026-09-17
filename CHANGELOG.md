@@ -33,6 +33,12 @@ API, security & observability hardening (improvement roadmap
   trusted host supplies an equivalent gate.
 
 ### Fixed
+- **Buffered results can now be read without the original response cap.**
+  `collect_result` uses an independent `max_chars` budget instead of
+  `MaxToolResultLength`, while `inspect_result action=read` provides lossless,
+  Unicode-safe `offset`/`next_offset` pagination. Built-in list surfaces now
+  paginate consistently: sessions, conversations, schedules, files, and
+  knowledge results all expose a bounded page and continuation metadata.
 - **Tool calls no longer stay `pending` after they finish.** Per-message numeric
   ToolIDs (`"1"`, `"2"`, …) are unique only inside one assistant message. The
   persister still updated by ToolID alone, so PostgreSQL/SQLite treated the id

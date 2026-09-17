@@ -56,13 +56,14 @@ your own results, never another user's. Pull back just what you need with:
 
 - **`inspect_result`** — deterministic, no-LLM, fast/free. Give it the `result_id` and an `action`:
   - `stats` — line count, char count, first-line preview (call this first to size the output)
+  - `read` — lossless character pagination; start with `offset=0`, then pass the returned `next_offset` until `done=true` (`max_chars` defaults to 8000, max 32000)
   - `head` / `tail` — first/last N lines (`lines`, default 30)
   - `slice` — a line range (`start`..`end`, 1-based inclusive) — see only the lines you need
   - `grep` — lines matching `query` (regex; literal fallback), with `ignore_case`, `invert`, `context` (surrounding lines), and `max_matches`
   - `unique` — distinct lines (first-occurrence order)
   - `sort` — sorted lines (`desc` to reverse, `numeric` to sort by a leading number)
   - `count` — with `query`: how many lines match (like `grep -c`); without `query`: how often each distinct line occurs, most frequent first (like `sort | uniq -c`)
-- **`collect_result`** — LLM-backed extraction: give it the `result_id` and a `query` describing the specific information you want. Prefer `inspect_result` for slicing/searching; use `collect_result` when you need semantic extraction or summarization.
+- **`collect_result`** — LLM-backed extraction: give it the `result_id` and a `query` describing the specific information you want. Its optional `max_chars` budget (default 8000, max 32000) is independent of the threshold that buffered the original result. Prefer `inspect_result` for lossless reading/slicing/searching; use `collect_result` when you need semantic extraction or summarization.
 
 ---
 

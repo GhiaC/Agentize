@@ -117,7 +117,10 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 			if end > len(nodes) {
 				end = len(nodes)
 			}
-			return boundedKnowledgeJSON(map[string]interface{}{"items": nodes[offset:end], "offset": offset, "limit": limit, "total": len(nodes)}), nil
+			return boundedKnowledgeJSON(map[string]interface{}{
+				"items": nodes[offset:end], "offset": offset, "limit": limit, "total": len(nodes),
+				"next_offset": end, "done": end == len(nodes),
+			}), nil
 		default:
 			return "", fmt.Errorf("unsupported knowledge action %q", action)
 		}

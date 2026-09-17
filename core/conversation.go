@@ -23,12 +23,15 @@ func conversationToolDefs() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name: "list_conversations",
-				Description: "List this user's conversations with each one's model, session, summary, and tags. " +
+				Description: "List this user's conversations with each one's model, session, summary, and tags. Results are paginated; continue with next_offset. " +
 					"Treat every conversation as a user agent. Use this to decide whether a message belongs to the " +
 					"current conversation or another one.",
 				Parameters: map[string]interface{}{
-					"type":       "object",
-					"properties": map[string]interface{}{},
+					"type": "object",
+					"properties": map[string]interface{}{
+						"offset": map[string]interface{}{"type": "integer", "minimum": 0, "description": "Zero-based item offset (default 0)."},
+						"limit":  map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 100, "description": "Items per page (default 20, max 100)."},
+					},
 				},
 			},
 		},
@@ -178,6 +181,10 @@ func (ch *CoreHandler) requireConversationEngine() (*engine.Engine, error) {
 }
 
 func (ch *CoreHandler) listConversationsTool(userID string) (string, error) {
+	return ch.listConversationsToolPage(userID, nil)
+}
+
+func (ch *CoreHandler) listConversationsToolPage(userID string, args map[string]interface{}) (string, error) {
 	eng, err := ch.requireConversationEngine()
 	if err != nil {
 		return "", err
@@ -200,10 +207,29 @@ func (ch *CoreHandler) listConversationsTool(userID string) (string, error) {
 		sb.WriteString("No conversations.\n")
 		return sb.String(), nil
 	}
-	for i, c := range list {
-		ch.writeConversationListEntry(&sb, eng, i+1, c, activeID)
+	offset, limit := coreListPagination(args)
+	if offset > len(list) {
+		offset = len(list)
+	}
+	end := offset + limit
+	if end > len(list) {
+		end = len(list)
+	}
+	fmt.Fprintf(&sb, "Showing %d-%d of %d (offset=%d, limit=%d).\n\n", pageRangeStart(offset, end), end, len(list), offset, limit)
+	for i, c := range list[offset:end] {
+		ch.writeConversationListEntry(&sb, eng, offset+i+1, c, activeID)
+	}
+	if end < len(list) {
+		fmt.Fprintf(&sb, "\nNext page: offset=%d, limit=%d (%d remaining).\n", end, limit, len(list)-end)
 	}
 	return sb.String(), nil
+}
+
+func pageRangeStart(offset, end int) int {
+	if offset == end {
+		return 0
+	}
+	return offset + 1
 }
 
 func (ch *CoreHandler) writeConversationListEntry(sb *strings.Builder, eng *engine.Engine, index int, c *model.Conversation, activeID string) {

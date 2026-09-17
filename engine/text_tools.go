@@ -35,10 +35,14 @@ import (
 // ============================================================================
 
 const (
-	// maxInspectResultChars caps the size of any inspect_result response so a
-	// slice of a huge buffer can't re-explode the context. Larger than the
-	// tiny collect_result budget because head/tail 30 lines is the norm.
-	maxInspectResultChars = 4000
+	// inspect_result and collect_result intentionally do not reuse
+	// MaxToolResultLength. That setting decides when an original tool result is
+	// buffered; using it as the read-back budget made a common value such as 250
+	// characters render the buffer practically unreadable.
+	defaultInspectResultChars = 8000
+	maxInspectResultChars     = 32000
+	defaultCollectResultChars = 8000
+	maxCollectResultChars     = 32000
 	// defaultInspectLines is the default window for head/tail.
 	defaultInspectLines = 30
 	// maxInspectLines caps how many lines head/tail/slice will emit at once.
@@ -115,6 +119,7 @@ func CollectResultToolDefinition() openai.Tool {
 				"When a tool result is too large it is buffered privately for you under a result_id (given in the truncation message). " +
 				"Pass that result_id and a 'query' describing exactly what you need; a lightweight model returns just the relevant part. " +
 				"Prefer `inspect_result` for cheap deterministic slicing (stats/head/tail/slice/grep); use collect_result when you need semantic extraction or summarization. " +
+				"The extraction response has its own max_chars budget and is independent of MaxToolResultLength. " +
 				"You can only access results you own — never another user's.",
 			Parameters: map[string]interface{}{
 				"type": "object",
@@ -126,6 +131,12 @@ func CollectResultToolDefinition() openai.Tool {
 					"query": map[string]interface{}{
 						"type":        "string",
 						"description": "What specific information to extract from the buffered result.",
+					},
+					"max_chars": map[string]interface{}{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     maxCollectResultChars,
+						"description": "Maximum characters to return (default 8000, max 32000). Independent of the tool-result buffering threshold.",
 					},
 				},
 				"required": []string{"result_id", "query"},
@@ -143,6 +154,7 @@ func InspectResultToolDefinition() openai.Tool {
 			Description: "Inspect ONE of YOUR OWN large/buffered tool results deterministically (no LLM, fast, free). " +
 				"Operates only on results you own (result_id from the truncation message). Actions:\n" +
 				"- stats: line count, character count, longest line, first-line preview — call this first to decide how to slice.\n" +
+				"- read: lossless character-based pagination. Pass offset=0 first, then use next_offset until done=true.\n" +
 				"- head: first N lines (default 30) with line numbers.\n" +
 				"- tail: last N lines (default 30) with line numbers.\n" +
 				"- slice: lines from 'start' to 'end' (1-based, inclusive) with line numbers.\n" +
@@ -155,7 +167,7 @@ func InspectResultToolDefinition() openai.Tool {
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"enum":        []string{"stats", "head", "tail", "slice", "grep", "unique", "sort", "count"},
+						"enum":        []string{"stats", "read", "head", "tail", "slice", "grep", "unique", "sort", "count"},
 						"description": "The inspection operation to perform.",
 					},
 					"result_id": map[string]interface{}{
@@ -202,6 +214,17 @@ func InspectResultToolDefinition() openai.Tool {
 						"type":        "boolean",
 						"description": "Sort by a leading number instead of lexically for action=sort.",
 					},
+					"offset": map[string]interface{}{
+						"type":        "integer",
+						"minimum":     0,
+						"description": "Zero-based character offset for action=read. Continue with the returned next_offset.",
+					},
+					"max_chars": map[string]interface{}{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     maxInspectResultChars,
+						"description": "Characters per page for action=read (default 8000, max 32000).",
+					},
 				},
 				"required": []string{"action", "result_id"},
 			},
@@ -234,7 +257,8 @@ func (e *Engine) collectResultFunction() model.ToolFunction {
 		if userID != "" {
 			ctx = model.WithUserID(ctx, userID)
 		}
-		out, err := e.extractFromResult(ctx, full, query)
+		maxChars := boundedResultChars(getIntArg(args, "max_chars", defaultCollectResultChars), defaultCollectResultChars, maxCollectResultChars)
+		out, err := e.extractFromResultWithLimit(ctx, full, query, maxChars)
 		if err != nil {
 			return "", err
 		}
@@ -250,7 +274,7 @@ func (e *Engine) inspectResultFunction() model.ToolFunction {
 
 		action, err := getStringArg(args, "action")
 		if err != nil {
-			return "Error: action is required for inspect_result (stats, head, tail, slice, or grep).", nil
+			return "Error: action is required for inspect_result (stats, read, head, tail, slice, grep, unique, sort, or count).", nil
 		}
 		resultID, err := getStringArg(args, "result_id")
 		if err != nil {
@@ -265,6 +289,10 @@ func (e *Engine) inspectResultFunction() model.ToolFunction {
 		switch strings.ToLower(strings.TrimSpace(action)) {
 		case "stats":
 			return inspectStats(full), nil
+		case "read":
+			offset := getIntArg(args, "offset", 0)
+			maxChars := boundedResultChars(getIntArg(args, "max_chars", defaultInspectResultChars), defaultInspectResultChars, maxInspectResultChars)
+			return inspectRead(full, offset, maxChars), nil
 		case "head":
 			return inspectHead(full, getIntArg(args, "lines", defaultInspectLines)), nil
 		case "tail":
@@ -315,6 +343,31 @@ func inspectStats(full string) string {
 	}
 	return fmt.Sprintf("lines=%d | chars=%d | longest_line=%d\nfirst line: %s",
 		len(lines), len(full), longest, truncateForLog(preview, 200))
+}
+
+// inspectRead exposes a buffered result as stable, lossless pages. Offsets and
+// limits are Unicode character counts, not byte indexes, so callers can safely
+// feed next_offset back even for Persian/emoji/multibyte output.
+func inspectRead(full string, offset, maxChars int) string {
+	runes := []rune(full)
+	total := len(runes)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	maxChars = boundedResultChars(maxChars, defaultInspectResultChars, maxInspectResultChars)
+	end := offset + maxChars
+	if end > total {
+		end = total
+	}
+	done := end == total
+	header := fmt.Sprintf("chars=%d-%d of %d | offset=%d | next_offset=%d | done=%t", offset, end, total, offset, end, done)
+	if offset == end {
+		return header
+	}
+	return header + "\n" + string(runes[offset:end])
 }
 
 func inspectHead(full string, n int) string {
@@ -611,14 +664,24 @@ func numberLines(lines []string, start int) string {
 // capOutput bounds an inspection response, truncating on a rune boundary so a
 // slice of a huge buffer can't itself overflow the context.
 func capOutput(s string) string {
-	if len(s) <= maxInspectResultChars {
+	if len(s) <= defaultInspectResultChars {
 		return s
 	}
-	cut := maxInspectResultChars
+	cut := defaultInspectResultChars
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 	return s[:cut] + fmt.Sprintf("\n... (output truncated at %d bytes; narrow with grep/slice/head/tail)", cut)
+}
+
+func boundedResultChars(value, defaultValue, maxValue int) int {
+	if value <= 0 {
+		return defaultValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 // ----------------------------------------------------------------------------
