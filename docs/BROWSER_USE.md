@@ -280,7 +280,7 @@ provider API key is missing.
 | `BROWSER_USE_MAX_STEPS` | `50` | Default agent step ceiling |
 | `BROWSER_USE_JOB_TIMEOUT_SECONDS` | `600` | Hard wall-clock timeout |
 | `BROWSER_USE_JOB_TTL_SECONDS` | `3600` | Retention for completed in-memory job metadata |
-| `BROWSER_USE_TAB_TTL_SECONDS` | `900` | Close each live web page 15 minutes after it is opened or first discovered |
+| `BROWSER_USE_TAB_TTL_SECONDS` | `0` | Optional live-page expiry in seconds; `0` keeps tabs open until explicitly closed |
 | `BROWSER_USE_MAX_JOBS` | `1000` | In-memory job capacity |
 | `BROWSER_USE_HEADLESS` | `true` | Run Chromium without a visible window |
 | `BROWSER_USE_DEFAULT_USE_VISION` | `true` | Default screenshot use |

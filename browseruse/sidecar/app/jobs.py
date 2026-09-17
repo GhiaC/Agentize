@@ -548,6 +548,9 @@ class JobManager:
 			await shutdown_runner()
 
 	def _track_tab_expiry(self, session_id: str, tabs: list[BrowserTab]) -> None:
+		if self.settings.tab_ttl_seconds <= 0:
+			self._cancel_session_tab_expiry(session_id)
+			return
 		live_ids = {tab.id for tab in tabs if tab.id}
 		for tab_id in live_ids:
 			key = (session_id, tab_id)

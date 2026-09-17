@@ -8,8 +8,16 @@ from app.config import Settings
 
 
 class SettingsTests(unittest.TestCase):
-	def test_tab_ttl_defaults_to_fifteen_minutes(self):
+	def test_persistent_tabs_do_not_expire_by_default(self):
 		with patch.dict(os.environ, {"BROWSER_USE_SIDECAR_TOKEN": "test-token"}, clear=True):
+			self.assertEqual(Settings.from_environment().tab_ttl_seconds, 0)
+
+	def test_tab_ttl_can_be_enabled_explicitly(self):
+		with patch.dict(
+			os.environ,
+			{"BROWSER_USE_SIDECAR_TOKEN": "test-token", "BROWSER_USE_TAB_TTL_SECONDS": "900"},
+			clear=True,
+		):
 			self.assertEqual(Settings.from_environment().tab_ttl_seconds, 15 * 60)
 
 	def test_proxy_uses_http_proxy_when_no_browser_specific_value_is_set(self):

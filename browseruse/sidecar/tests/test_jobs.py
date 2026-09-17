@@ -534,9 +534,19 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
 		self.assertEqual(session.tabs[0].url, "https://example.com")
 		await manager.shutdown()
 
-	async def test_live_tab_is_closed_when_fifteen_minute_policy_expires(self):
+	async def test_live_tab_does_not_expire_when_policy_is_disabled(self):
 		runner = TabRunner()
 		manager = JobManager(replace(settings(), tab_ttl_seconds=0), runner)
+		await manager.open_tab("user:owner-1", "https://example.com")
+		await asyncio.sleep(0.05)
+		self.assertEqual(runner.closed, "")
+		self.assertEqual(len(runner.current), 1)
+		self.assertEqual(len(manager._tab_expiry_tasks), 0)
+		await manager.shutdown()
+
+	async def test_live_tab_is_closed_when_expiry_policy_is_enabled(self):
+		runner = TabRunner()
+		manager = JobManager(replace(settings(), tab_ttl_seconds=0.01), runner)
 		await manager.open_tab("user:owner-1", "https://example.com")
 		await asyncio.sleep(0.05)
 		self.assertEqual(runner.closed, "tab-2")

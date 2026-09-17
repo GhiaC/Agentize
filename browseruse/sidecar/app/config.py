@@ -95,7 +95,10 @@ class Settings:
 			max_steps=_integer("BROWSER_USE_MAX_STEPS", 50, 1, 500),
 			job_timeout_seconds=_integer("BROWSER_USE_JOB_TIMEOUT_SECONDS", 600, 30, 7200),
 			job_ttl_seconds=_integer("BROWSER_USE_JOB_TTL_SECONDS", 3600, 60, 86400),
-			tab_ttl_seconds=_integer("BROWSER_USE_TAB_TTL_SECONDS", 900, 60, 86400),
+			# Persistent tabs are product state, not short-lived jobs.  A zero TTL
+			# keeps them open until the owner explicitly closes them; deployments
+			# that need resource reclamation can opt into an expiry policy.
+			tab_ttl_seconds=_integer("BROWSER_USE_TAB_TTL_SECONDS", 0, 0, 86400),
 			max_jobs=_integer("BROWSER_USE_MAX_JOBS", 1000, 10, 10000),
 			db_max_jobs=_integer("BROWSER_USE_DB_MAX_JOBS", 5000, 100, 100000),
 			db_max_logs_per_job=_integer("BROWSER_USE_DB_MAX_LOGS_PER_JOB", 500, 50, 5000),
