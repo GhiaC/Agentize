@@ -393,7 +393,7 @@ type Session struct {
 
 	// ==================== Summarization ====================
 	Tags    []string       // User-defined or auto-generated tags for categorization
-	Title   string         // Session title (auto-generated or user-set)
+	Title   string         // Session title (user-set or generated once; never auto-replaced)
 	Summary SummaryEntries `json:"Summary"` // Durable fact list (max 20); summarization replaces, not appends. Legacy scalar JSON is accepted on load.
 	// SummaryInitialized distinguishes a valid no-op [] result from legacy rows
 	// that were marked summarized after an empty/invalid provider response.
@@ -781,6 +781,18 @@ func (c *LLMClientWithUserID) CreateChatCompletion(ctx context.Context, request 
 	return c.Client.CreateChatCompletion(ctx, request)
 }
 
+// UnsetTitle reports whether a session or conversation title is empty or still a
+// generic placeholder. Summarization may generate a title only in that case; a
+// user-chosen or previously generated title is never queried for or replaced.
+func UnsetTitle(title string) bool {
+	switch strings.ToLower(strings.TrimSpace(title)) {
+	case "", "untitled", "untitled session", "untitled chat", "new market conversation":
+		return true
+	default:
+		return false
+	}
+}
+
 // PopulateFields uses LLM to populate Title, Summary, and Tags fields of the session
 // It requires an LLMClient and a model name
 func (s *Session) PopulateFields(ctx context.Context, client LLMClient, model string) error {
@@ -815,12 +827,15 @@ func (s *Session) PopulateFields(ctx context.Context, client LLMClient, model st
 		conversationText += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
 	}
 
-	// Refresh title on every population cycle.
-	title, err := s.generateTitle(ctx, client, model, conversationText)
-	if err != nil {
-		return fmt.Errorf("failed to generate title: %w", err)
+	if UnsetTitle(s.Title) {
+		title, err := s.generateTitle(ctx, client, model, conversationText)
+		if err != nil {
+			return fmt.Errorf("failed to generate title: %w", err)
+		}
+		if title = strings.TrimSpace(title); title != "" {
+			s.Title = title
+		}
 	}
-	s.Title = title
 
 	// PopulateFields is a compatibility path. Preserve earlier entries and add
 	// its new compact result, capped at MaxSummaryEntries.

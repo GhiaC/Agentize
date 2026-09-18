@@ -27,6 +27,17 @@ func TestSummaryEntriesLoadsLegacyScalarAndPersistsArray(t *testing.T) {
 	}
 }
 
+func TestUnsetTitleTreatsPlaceholdersAsUnset(t *testing.T) {
+	for _, title := range []string{"", "  ", "Untitled", "untitled chat", "New market conversation"} {
+		if !UnsetTitle(title) {
+			t.Fatalf("%q must be treated as unset", title)
+		}
+	}
+	if UnsetTitle("BTC support review") {
+		t.Fatal("a chosen title must not be treated as unset")
+	}
+}
+
 func TestSummaryEntriesNilPersistenceUsesEmptyArray(t *testing.T) {
 	encoded, err := json.Marshal(struct {
 		Summary SummaryEntries `json:"Summary"`

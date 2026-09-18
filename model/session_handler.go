@@ -33,6 +33,18 @@ type sessionConversationStore interface {
 	PutConversation(conversation *Conversation) error
 }
 
+func conversationTitleForSession(store SessionStore, sessionID string) string {
+	cs, ok := store.(sessionConversationStore)
+	if !ok {
+		return ""
+	}
+	conversation, err := cs.GetConversationBySession(sessionID)
+	if err != nil || conversation == nil {
+		return ""
+	}
+	return strings.TrimSpace(conversation.Title)
+}
+
 func syncConversationTitleForSession(store SessionStore, sessionID, title string, updatedAt time.Time) error {
 	cs, ok := store.(sessionConversationStore)
 	if !ok {
@@ -41,6 +53,9 @@ func syncConversationTitleForSession(store SessionStore, sessionID, title string
 	conversation, err := cs.GetConversationBySession(sessionID)
 	if err != nil || conversation == nil {
 		return err
+	}
+	if !UnsetTitle(conversation.Title) {
+		return nil
 	}
 	conversation.Title = title
 	conversation.UpdatedAt = updatedAt
@@ -496,10 +511,17 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	// Refresh title on every cycle.
-	title, titleErr := sh.generateSessionTitle(ctx, conversationText)
-	if titleErr == nil && strings.TrimSpace(title) != "" {
-		session.Title = strings.TrimSpace(title)
+	generatedTitle := ""
+	if chosen := strings.TrimSpace(session.Title); !UnsetTitle(chosen) {
+		session.Title = chosen
+	} else if chosen = conversationTitleForSession(sh.store, session.SessionID); !UnsetTitle(chosen) {
+		session.Title = chosen
+	} else {
+		title, titleErr := sh.generateSessionTitle(ctx, conversationText)
+		if titleErr == nil && strings.TrimSpace(title) != "" {
+			session.Title = strings.TrimSpace(title)
+			generatedTitle = session.Title
+		}
 	}
 	if generatedTags, tagErr := session.generateTags(ctx, sh.llmClient, sh.config.SummaryModel, conversationText); tagErr == nil && len(generatedTags) > 0 {
 		session.Tags = ReplaceTags(generatedTags, MaxSessionTags)
@@ -530,7 +552,7 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 	if err := sh.store.Put(session); err != nil {
 		return err
 	}
-	if titleErr == nil && strings.TrimSpace(title) != "" {
+	if generatedTitle != "" || (UnsetTitle(conversationTitleForSession(sh.store, session.SessionID)) && !UnsetTitle(session.Title)) {
 		_ = syncConversationTitleForSession(sh.store, session.SessionID, session.Title, session.UpdatedAt)
 	}
 	return nil

@@ -823,17 +823,27 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		session.PendingUserContext = delta
 	}
 
-	// Refresh the title on every cycle from accumulated memory plus the new
-	// window. Conversation rows are synchronized after the session is durable.
-	titleContext := strings.TrimSpace(conversationText + "\nAccumulated summary:\n" + session.Summary.Text())
-	title, err := ss.generateTitle(ctx, titleContext)
-	if err != nil {
-		if !ss.config.DisableLogs {
-			log.Log.Warnf("[SessionScheduler] ⚠️  Failed to generate title for session %s: %v", session.SessionID, err)
+	// Generate a title only when neither the session nor the linked conversation
+	// already has a chosen name. User-set and previously summarized titles are
+	// never queried for or overwritten.
+	titleToSync := ""
+	if existing := chosenSessionTitle(sessionStore, session); existing != "" {
+		session.Title = existing
+		if model.UnsetTitle(conversationTitleFromStore(sessionStore, session)) {
+			titleToSync = existing
 		}
-	} else if title = strings.TrimSpace(title); title != "" {
-		session.Title = title
-		generatedTitle = title
+	} else {
+		titleContext := strings.TrimSpace(conversationText + "\nAccumulated summary:\n" + session.Summary.Text())
+		title, err := ss.generateTitle(ctx, titleContext)
+		if err != nil {
+			if !ss.config.DisableLogs {
+				log.Log.Warnf("[SessionScheduler] ⚠️  Failed to generate title for session %s: %v", session.SessionID, err)
+			}
+		} else if title = strings.TrimSpace(title); title != "" {
+			session.Title = title
+			generatedTitle = title
+			titleToSync = title
+		}
 	}
 
 	// Update log with generated content
@@ -906,8 +916,8 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 			log.Log.Warnf("[SessionScheduler] user-context delivery pending retry | SessionID: %s | Error: %v", session.SessionID, err)
 		}
 	}
-	if generatedTitle != "" {
-		if err := syncConversationTitle(sessionStore, session.UserID, session.SessionID, generatedTitle, session.UpdatedAt); err != nil {
+	if titleToSync != "" {
+		if err := syncConversationTitle(sessionStore, session.UserID, session.SessionID, titleToSync, session.UpdatedAt); err != nil {
 			if !ss.config.DisableLogs {
 				log.Log.Warnf("[SessionScheduler] ⚠️  Session title saved but conversation title sync failed | SessionID: %s | Error: %v", session.SessionID, err)
 			}
@@ -1221,20 +1231,56 @@ func withoutSystemMessages(messages []openai.ChatCompletionMessage) (nonSystem, 
 	return nonSystem, system
 }
 
+func lookupConversation(store model.SessionStore, session *model.Session) *model.Conversation {
+	conversations, ok := store.(conversationMetadataStore)
+	if !ok || session == nil {
+		return nil
+	}
+	var conversation *model.Conversation
+	var err error
+	if strings.TrimSpace(session.UserID) != "" {
+		conversation, err = conversations.GetUserConversationBySession(session.UserID, session.SessionID)
+	} else {
+		conversation, err = conversations.GetConversationBySession(session.SessionID)
+	}
+	if err != nil || conversation == nil {
+		return nil
+	}
+	return conversation
+}
+
+func conversationTitleFromStore(store model.SessionStore, session *model.Session) string {
+	if conversation := lookupConversation(store, session); conversation != nil {
+		return strings.TrimSpace(conversation.Title)
+	}
+	return ""
+}
+
+func chosenSessionTitle(store model.SessionStore, session *model.Session) string {
+	if session == nil {
+		return ""
+	}
+	if title := strings.TrimSpace(session.Title); !model.UnsetTitle(title) {
+		return title
+	}
+	if title := conversationTitleFromStore(store, session); !model.UnsetTitle(title) {
+		return title
+	}
+	return ""
+}
+
 func syncConversationTitle(store model.SessionStore, userID, sessionID, title string, updatedAt time.Time) error {
 	conversations, ok := store.(conversationMetadataStore)
 	if !ok {
 		return nil
 	}
-	var conversation *model.Conversation
-	var err error
-	if strings.TrimSpace(userID) != "" {
-		conversation, err = conversations.GetUserConversationBySession(userID, sessionID)
-	} else {
-		conversation, err = conversations.GetConversationBySession(sessionID)
+	session := &model.Session{UserID: userID, SessionID: sessionID}
+	conversation := lookupConversation(store, session)
+	if conversation == nil {
+		return nil
 	}
-	if err != nil || conversation == nil {
-		return err
+	if !model.UnsetTitle(conversation.Title) {
+		return nil
 	}
 	conversation.Title = title
 	conversation.UpdatedAt = updatedAt

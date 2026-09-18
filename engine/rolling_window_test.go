@@ -136,8 +136,67 @@ func TestSplitRollingWindow_CutOnToolResult_ShiftsBack(t *testing.T) {
 	}
 }
 
-func TestSummarizeSessionAppendsMetadataAndSyncsConversation(t *testing.T) {
-	responses := []string{`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`, "Updated Market Plan"}
+func TestSummarizeSessionAppendsMetadataAndKeepsChosenTitle(t *testing.T) {
+	got, linked, calls := summarizeSessionWithTitle(t, "BTC support review", "BTC support review", []string{
+		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
+	})
+	if strings.Join(got.Summary, "|") != "old fact|new decision" {
+		t.Fatalf("summary = %#v", got.Summary)
+	}
+	if strings.Join(got.Tags, "|") != "bitcoin|new-topic" {
+		t.Fatalf("tags = %#v", got.Tags)
+	}
+	if got.Title != "BTC support review" {
+		t.Fatalf("chosen session title was rewritten: %q", got.Title)
+	}
+	if linked.Title != "BTC support review" {
+		t.Fatalf("chosen conversation title was rewritten: %q", linked.Title)
+	}
+	if calls != 3 {
+		t.Fatalf("title generation was queried despite an existing title: calls=%d", calls)
+	}
+	for _, archived := range got.ArchivedMsgs {
+		if archived.Role == openai.ChatMessageRoleSystem {
+			t.Fatal("system prompt leaked into archived history")
+		}
+	}
+	if len(got.Msgs) == 0 || got.Msgs[0].Role != openai.ChatMessageRoleSystem {
+		t.Fatalf("current system prompt was not retained: %#v", got.Msgs)
+	}
+}
+
+func TestSummarizeSessionGeneratesTitleOnceForPlaceholder(t *testing.T) {
+	got, linked, calls := summarizeSessionWithTitle(t, "New market conversation", "New market conversation", []string{
+		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`, "Updated Market Plan",
+	})
+	if got.Title != "Updated Market Plan" {
+		t.Fatalf("placeholder session title = %q", got.Title)
+	}
+	if linked.Title != got.Title || linked.UpdatedAt.Before(got.UpdatedAt.Add(-time.Second)) {
+		t.Fatalf("conversation metadata not synchronized: %#v", linked)
+	}
+	if calls != 4 {
+		t.Fatalf("placeholder title should query generation once: calls=%d", calls)
+	}
+}
+
+func TestSummarizeSessionCopiesConversationTitleWithoutQuery(t *testing.T) {
+	got, linked, calls := summarizeSessionWithTitle(t, "", "User named this", []string{
+		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
+	})
+	if got.Title != "User named this" {
+		t.Fatalf("session title was not copied from conversation: %q", got.Title)
+	}
+	if linked.Title != "User named this" {
+		t.Fatalf("conversation title changed: %q", linked.Title)
+	}
+	if calls != 3 {
+		t.Fatalf("title generation was queried despite a conversation title: calls=%d", calls)
+	}
+}
+
+func summarizeSessionWithTitle(t *testing.T, sessionTitle, conversationTitle string, responses []string) (*model.Session, *model.Conversation, int) {
+	t.Helper()
 	call := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if call >= len(responses) {
@@ -148,15 +207,15 @@ func TestSummarizeSessionAppendsMetadataAndSyncsConversation(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"id":"test","model":"summary-test","choices":[{"message":{"role":"assistant","content":"%s"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`, content)
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	st, err := store.NewSQLiteStore(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
 	session := model.NewSessionWithID("u1", "u1-conv-s0001", model.AgentTypeConversation)
-	session.Title = "New market conversation"
+	session.Title = sessionTitle
 	session.Summary = model.SummaryEntries{"old fact"}
 	session.Tags = []string{"bitcoin"}
 	session.ArchivedMsgs = []openai.ChatCompletionMessage{
@@ -171,7 +230,7 @@ func TestSummarizeSessionAppendsMetadataAndSyncsConversation(t *testing.T) {
 	if err := st.Put(session); err != nil {
 		t.Fatal(err)
 	}
-	conversation := model.NewConversation("u1", "u1-c0001", session.SessionID, session.Title, "", 1)
+	conversation := model.NewConversation("u1", "u1-c0001", session.SessionID, conversationTitle, "", 1)
 	if err := st.PutConversation(conversation); err != nil {
 		t.Fatal(err)
 	}
@@ -193,30 +252,11 @@ func TestSummarizeSessionAppendsMetadataAndSyncsConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got.Summary, "|") != "old fact|new decision" {
-		t.Fatalf("summary = %#v", got.Summary)
-	}
-	if strings.Join(got.Tags, "|") != "bitcoin|new-topic" {
-		t.Fatalf("tags = %#v", got.Tags)
-	}
-	if got.Title != "Updated Market Plan" {
-		t.Fatalf("session title = %q", got.Title)
-	}
-	for _, archived := range got.ArchivedMsgs {
-		if archived.Role == openai.ChatMessageRoleSystem {
-			t.Fatal("system prompt leaked into archived history")
-		}
-	}
-	if len(got.Msgs) == 0 || got.Msgs[0].Role != openai.ChatMessageRoleSystem {
-		t.Fatalf("current system prompt was not retained: %#v", got.Msgs)
-	}
 	linked, err := st.GetConversationBySession(session.SessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if linked.Title != got.Title || linked.UpdatedAt.Before(got.UpdatedAt.Add(-time.Second)) {
-		t.Fatalf("conversation metadata not synchronized: %#v", linked)
-	}
+	return got, linked, call
 }
 
 func TestParseSummaryEntriesRejectsEmptyProviderContent(t *testing.T) {
