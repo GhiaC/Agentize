@@ -146,5 +146,50 @@ class BrowserCrashRecoveryTest(unittest.IsolatedAsyncioTestCase):
 		runner._recycle_session.assert_awaited_once_with("session-1")
 
 
+class GettingStartedTests(unittest.IsolatedAsyncioTestCase):
+	async def test_snapshot_ignores_startup_target_and_cleanup_closes_it(self):
+		runner = object.__new__(BrowserUseRunner)
+		browser = SimpleNamespace(agent_focus_target_id="web", get_tabs=AsyncMock(return_value=[
+			SimpleNamespace(target_id="blank", url="about:blank", title=""),
+			SimpleNamespace(target_id="web", url=EXAMPLE, title="Example"),
+		]), close_page=AsyncMock())
+		tabs = await runner._snapshot_tabs(browser)
+		self.assertEqual([tab.id for tab in tabs], ["web"])
+		self.assertTrue(tabs[0].active)
+		await runner._close_blank_pages(browser)
+		browser.close_page.assert_awaited_once_with("blank")
+
+	async def test_last_tab_releases_runtime_without_creating_replacement(self):
+		runner = object.__new__(BrowserUseRunner)
+		browser = SimpleNamespace(close_page=AsyncMock())
+		runner._ensure_live_browser = AsyncMock(return_value=browser)
+		runner._snapshot_tabs = AsyncMock(return_value=[BrowserTab(id="web", url=EXAMPLE)])
+		runner._persist_tabs_state = MagicMock()
+		runner._recycle_session = AsyncMock()
+		self.assertEqual(await runner.close_tab("session", "web"), [])
+		runner._persist_tabs_state.assert_called_once_with("session", [])
+		runner._recycle_session.assert_awaited_once_with("session")
+		browser.close_page.assert_not_awaited()
+
+	async def test_startup_blank_does_not_block_restore(self):
+		runner = object.__new__(BrowserUseRunner)
+		pages = [SimpleNamespace(target_id="blank", url="about:blank", title="")]
+		async def create(params):
+			pages.append(SimpleNamespace(target_id="restored", url=params["url"], title="Example"))
+			return {"targetId": "restored"}
+		browser = SimpleNamespace(agent_focus_target_id=None, get_tabs=AsyncMock(side_effect=lambda: list(pages)),
+			close_page=AsyncMock(), cdp_client=SimpleNamespace(send=SimpleNamespace(Target=SimpleNamespace(createTarget=create))))
+		runner._load_tabs_state = MagicMock(return_value=[{"url": EXAMPLE, "active": True}])
+		runner._ensure_live_browser = AsyncMock(return_value=browser)
+		runner._persist_tabs_state = MagicMock()
+		async def focus(_browser, tab_id):
+			browser.agent_focus_target_id = tab_id
+		runner._tab_cdp_session = AsyncMock(side_effect=focus)
+		tabs = await runner._restore_persisted_tabs("session")
+		self.assertEqual([tab.url for tab in tabs], [EXAMPLE])
+		self.assertTrue(tabs[0].active)
+		browser.close_page.assert_awaited_once_with("blank")
+
+
 if __name__ == "__main__":
 	unittest.main()

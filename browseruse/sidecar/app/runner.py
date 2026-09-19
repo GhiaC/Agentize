@@ -145,8 +145,11 @@ class BrowserUseRunner:
 			# browser-use's HAR writer includes headers even when response bodies
 			# are omitted. Strip sensitive fields before the artifact remains at rest.
 			self.artifacts.sanitize_har(job_id)
+		await self._close_blank_pages(browser)
 		tabs = await self._snapshot_tabs(browser)
 		self._persist_tabs_state(session_id, tabs)
+		if not tabs:
+			await self._recycle_session(session_id)
 		return JobResult(
 			final_result=_truncate(history.final_result() or "", 64_000),
 			done=history.is_done(),
@@ -181,6 +184,7 @@ class BrowserUseRunner:
 					await self._recycle_session(session_id)
 					raise BrowserTabUnavailable("browser crashed; reopen the tab and retry") from exc
 				await asyncio.sleep(0.25)
+				await self._close_blank_pages(browser)
 				tabs = await self._snapshot_tabs(browser)
 				self._persist_tabs_state(session_id, tabs)
 				_, _ = await self._navigation_history(browser, tab.id)
@@ -206,6 +210,7 @@ class BrowserUseRunner:
 			await self._recycle_session(session_id)
 			raise BrowserTabUnavailable("browser crashed; reopen the tab and retry") from exc
 		await asyncio.sleep(0.25)
+		await self._close_blank_pages(browser)
 		tabs = await self._snapshot_tabs(browser)
 		self._persist_tabs_state(session_id, tabs)
 		if tabs:
@@ -340,6 +345,8 @@ class BrowserUseRunner:
 			entries = list(getattr(response, "entries", None) or [])
 			current_index = int(getattr(response, "current_index", -1) or getattr(response, "currentIndex", -1))
 		target_index = current_index + delta
+		while 0 <= target_index < len(entries) and not _is_web_page(_history_entry_url(entries[target_index])):
+			target_index += delta
 		if current_index < 0 or target_index < 0 or target_index >= len(entries):
 			raise ValueError("cannot navigate " + ("back" if delta < 0 else "forward"))
 		entry = entries[target_index]
@@ -601,6 +608,12 @@ class BrowserUseRunner:
 		current_tabs = await self._snapshot_tabs(browser)
 		if not any(tab.id == tab_id for tab in current_tabs):
 			raise BrowserTabNotFound(tab_id)
+		if len(current_tabs) == 1:
+			# Closing the last target lets Chromium/browser-use create another blank.
+			# Release the runtime instead; Getting started belongs to the host UI.
+			self._persist_tabs_state(session_id, [])
+			await self._recycle_session(session_id)
+			return []
 		try:
 			await self._await_cdp(browser.close_page(tab_id), "Target.closeTarget")
 		except BrowserDisconnected as exc:
@@ -786,8 +799,11 @@ class BrowserUseRunner:
 		browser = await self._ensure_live_browser(session_id, create=True)
 		existing = await self._snapshot_tabs(browser)
 		if existing:
+			await self._close_blank_pages(browser)
+			existing = await self._snapshot_tabs(browser)
 			self._persist_tabs_state(session_id, existing)
 			return existing
+		restored_active = ""
 		for item in state:
 			url = str(item.get("url", "")).strip()
 			if not url:
@@ -806,6 +822,8 @@ class BrowserUseRunner:
 				target_id = str(getattr(created, "target_id", "") or getattr(created, "targetId", ""))
 			if not target_id:
 				continue
+			if item.get("active"):
+				restored_active = target_id
 			browser.agent_focus_target_id = None
 			try:
 				await self._tab_cdp_session(browser, target_id)
@@ -813,6 +831,9 @@ class BrowserUseRunner:
 				await self._recycle_session(session_id)
 				raise BrowserTabUnavailable("browser crashed; reopen the tab and retry") from exc
 			await asyncio.sleep(0.15)
+		if restored_active:
+			await self._tab_cdp_session(browser, restored_active)
+		await self._close_blank_pages(browser)
 		tabs = await self._snapshot_tabs(browser)
 		self._persist_tabs_state(session_id, tabs)
 		return tabs
@@ -958,6 +979,14 @@ class BrowserUseRunner:
 			except OSError:
 				continue
 
+	async def _close_blank_pages(self, browser: BrowserSession) -> None:
+		pages = await self._await_cdp(browser.get_tabs(), "Target.getTargets")
+		if not any(not _is_blank_page(page.url) for page in pages):
+			return
+		for page in pages:
+			if _is_blank_page(page.url):
+				await self._await_cdp(browser.close_page(str(page.target_id)), "Target.closeTarget")
+
 	async def _snapshot_tabs(self, browser: BrowserSession) -> list[BrowserTab]:
 		focused_id = str(browser.agent_focus_target_id or "")
 		return [
@@ -968,6 +997,7 @@ class BrowserUseRunner:
 				active=str(tab.target_id) == focused_id,
 			)
 			for tab in await self._await_cdp(browser.get_tabs(), "Target.getTargets")
+			if not _is_blank_page(tab.url)
 		]
 
 	def _clear_stale_chromium_locks(self, profile_dir: Path) -> None:
@@ -1051,6 +1081,10 @@ class BrowserUseRunner:
 
 def _truncate(value: str, limit: int) -> str:
 	return value if len(value) <= limit else value[:limit] + "..."
+
+
+def _is_blank_page(value: str | None) -> bool:
+	return (value or "").strip().lower().split("#", 1)[0] in {"", "about:blank", "chrome://newtab/", "chrome://new-tab-page/"}
 
 
 def _is_web_page(value: str | None) -> bool:
