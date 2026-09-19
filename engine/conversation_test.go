@@ -97,6 +97,9 @@ func TestRenameConversation_DoesNotChangeIDOrModel(t *testing.T) {
 	if got.Title != "new name" {
 		t.Fatalf("title = %q", got.Title)
 	}
+	if got.TitleUpdatedAt.IsZero() {
+		t.Fatal("title update time was not recorded")
+	}
 	if got.Model != "m1" {
 		t.Fatalf("model changed to %q", got.Model)
 	}

@@ -137,7 +137,7 @@ func TestSplitRollingWindow_CutOnToolResult_ShiftsBack(t *testing.T) {
 }
 
 func TestSummarizeSessionAppendsMetadataAndKeepsChosenTitle(t *testing.T) {
-	got, linked, calls := summarizeSessionWithTitle(t, "BTC support review", "BTC support review", []string{
+	got, linked, calls := summarizeSessionWithTitle(t, "BTC support review", "BTC support review", false, []string{
 		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
 	})
 	if strings.Join(got.Summary, "|") != "old fact|new decision" {
@@ -166,7 +166,7 @@ func TestSummarizeSessionAppendsMetadataAndKeepsChosenTitle(t *testing.T) {
 }
 
 func TestSummarizeSessionGeneratesTitleOnceForPlaceholder(t *testing.T) {
-	got, linked, calls := summarizeSessionWithTitle(t, "New market conversation", "New market conversation", []string{
+	got, linked, calls := summarizeSessionWithTitle(t, "New market conversation", "New market conversation", false, []string{
 		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`, "Updated Market Plan",
 	})
 	if got.Title != "Updated Market Plan" {
@@ -175,13 +175,28 @@ func TestSummarizeSessionGeneratesTitleOnceForPlaceholder(t *testing.T) {
 	if linked.Title != got.Title || linked.UpdatedAt.Before(got.UpdatedAt.Add(-time.Second)) {
 		t.Fatalf("conversation metadata not synchronized: %#v", linked)
 	}
+	if linked.TitleUpdatedAt.IsZero() {
+		t.Fatal("generated title did not lock the conversation title")
+	}
 	if calls != 4 {
 		t.Fatalf("placeholder title should query generation once: calls=%d", calls)
 	}
 }
 
+func TestSummarizeSessionNeverReplacesPreviouslyChosenPlaceholder(t *testing.T) {
+	got, linked, calls := summarizeSessionWithTitle(t, "Untitled", "Untitled", true, []string{
+		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
+	})
+	if got.Title != "Untitled" || linked.Title != "Untitled" {
+		t.Fatalf("locked title was replaced: session=%q conversation=%q", got.Title, linked.Title)
+	}
+	if calls != 3 {
+		t.Fatalf("title generation was queried for a locked conversation: calls=%d", calls)
+	}
+}
+
 func TestSummarizeSessionCopiesConversationTitleWithoutQuery(t *testing.T) {
-	got, linked, calls := summarizeSessionWithTitle(t, "", "User named this", []string{
+	got, linked, calls := summarizeSessionWithTitle(t, "", "User named this", false, []string{
 		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
 	})
 	if got.Title != "User named this" {
@@ -195,7 +210,7 @@ func TestSummarizeSessionCopiesConversationTitleWithoutQuery(t *testing.T) {
 	}
 }
 
-func summarizeSessionWithTitle(t *testing.T, sessionTitle, conversationTitle string, responses []string) (*model.Session, *model.Conversation, int) {
+func summarizeSessionWithTitle(t *testing.T, sessionTitle, conversationTitle string, lockTitle bool, responses []string) (*model.Session, *model.Conversation, int) {
 	t.Helper()
 	call := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -231,6 +246,9 @@ func summarizeSessionWithTitle(t *testing.T, sessionTitle, conversationTitle str
 		t.Fatal(err)
 	}
 	conversation := model.NewConversation("u1", "u1-c0001", session.SessionID, conversationTitle, "", 1)
+	if lockTitle && conversation.TitleUpdatedAt.IsZero() {
+		conversation.TitleUpdatedAt = time.Now()
+	}
 	if err := st.PutConversation(conversation); err != nil {
 		t.Fatal(err)
 	}

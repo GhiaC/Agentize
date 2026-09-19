@@ -26,14 +26,15 @@ type Conversation struct {
 	ConversationID string
 	UserID         string
 	// SessionID is the main session this conversation is attached to.
-	SessionID string
-	Title     string
-	Model     string
-	Archived  bool
-	Seq       int
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	RunState  *ConversationRunState `json:"run_state,omitempty"`
+	SessionID      string
+	Title          string
+	TitleUpdatedAt time.Time
+	Model          string
+	Archived       bool
+	Seq            int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	RunState       *ConversationRunState `json:"run_state,omitempty"`
 }
 
 // GenerateConversationID returns the per-user numeric conversation id.
@@ -48,7 +49,7 @@ func GenerateConversationID(userID string, seq int) string {
 // NewConversation creates a conversation row pointing at an existing main session.
 func NewConversation(userID, conversationID, sessionID, title, modelName string, seq int) *Conversation {
 	now := time.Now()
-	return &Conversation{
+	conversation := &Conversation{
 		ConversationID: conversationID,
 		UserID:         userID,
 		SessionID:      sessionID,
@@ -58,6 +59,16 @@ func NewConversation(userID, conversationID, sessionID, title, modelName string,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
+	if !UnsetTitle(conversation.Title) {
+		conversation.TitleUpdatedAt = now
+	}
+	return conversation
+}
+
+// HasChosenTitle reports whether a title has ever been selected. Checking the
+// current value also keeps legacy conversations safe after this field is added.
+func (c *Conversation) HasChosenTitle() bool {
+	return c != nil && (!c.TitleUpdatedAt.IsZero() || !UnsetTitle(c.Title))
 }
 
 // IsSubAgent reports whether this session is a worker of another session.

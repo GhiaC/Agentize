@@ -45,6 +45,15 @@ func conversationTitleForSession(store SessionStore, sessionID string) string {
 	return strings.TrimSpace(conversation.Title)
 }
 
+func conversationHasChosenTitleForSession(store SessionStore, sessionID string) bool {
+	cs, ok := store.(sessionConversationStore)
+	if !ok {
+		return false
+	}
+	conversation, err := cs.GetConversationBySession(sessionID)
+	return err == nil && conversation != nil && conversation.HasChosenTitle()
+}
+
 func syncConversationTitleForSession(store SessionStore, sessionID, title string, updatedAt time.Time) error {
 	cs, ok := store.(sessionConversationStore)
 	if !ok {
@@ -54,10 +63,11 @@ func syncConversationTitleForSession(store SessionStore, sessionID, title string
 	if err != nil || conversation == nil {
 		return err
 	}
-	if !UnsetTitle(conversation.Title) {
+	if conversation.HasChosenTitle() {
 		return nil
 	}
 	conversation.Title = title
+	conversation.TitleUpdatedAt = updatedAt
 	conversation.UpdatedAt = updatedAt
 	return cs.PutConversation(conversation)
 }
@@ -512,7 +522,11 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 	}
 
 	generatedTitle := ""
-	if chosen := strings.TrimSpace(session.Title); !UnsetTitle(chosen) {
+	if conversationHasChosenTitleForSession(sh.store, session.SessionID) {
+		if chosen := conversationTitleForSession(sh.store, session.SessionID); chosen != "" {
+			session.Title = chosen
+		}
+	} else if chosen := strings.TrimSpace(session.Title); !UnsetTitle(chosen) {
 		session.Title = chosen
 	} else if chosen = conversationTitleForSession(sh.store, session.SessionID); !UnsetTitle(chosen) {
 		session.Title = chosen

@@ -123,8 +123,10 @@ func (e *Engine) RenameConversation(userID, conversationID, title string) error 
 	if title == "" {
 		return fmt.Errorf("title is required")
 	}
+	now := time.Now()
 	conv.Title = title
-	conv.UpdatedAt = time.Now()
+	conv.TitleUpdatedAt = now
+	conv.UpdatedAt = now
 	if err := e.Sessions.PutConversation(conv); err != nil {
 		return err
 	}

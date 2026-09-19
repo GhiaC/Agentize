@@ -1260,10 +1260,10 @@ func chosenSessionTitle(store model.SessionStore, session *model.Session) string
 	if session == nil {
 		return ""
 	}
-	if title := strings.TrimSpace(session.Title); !model.UnsetTitle(title) {
-		return title
+	if conversation := lookupConversation(store, session); conversation != nil && conversation.HasChosenTitle() {
+		return strings.TrimSpace(conversation.Title)
 	}
-	if title := conversationTitleFromStore(store, session); !model.UnsetTitle(title) {
+	if title := strings.TrimSpace(session.Title); !model.UnsetTitle(title) {
 		return title
 	}
 	return ""
@@ -1279,10 +1279,11 @@ func syncConversationTitle(store model.SessionStore, userID, sessionID, title st
 	if conversation == nil {
 		return nil
 	}
-	if !model.UnsetTitle(conversation.Title) {
+	if conversation.HasChosenTitle() {
 		return nil
 	}
 	conversation.Title = title
+	conversation.TitleUpdatedAt = updatedAt
 	conversation.UpdatedAt = updatedAt
 	return conversations.PutConversation(conversation)
 }
