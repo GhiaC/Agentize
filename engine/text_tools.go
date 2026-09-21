@@ -105,8 +105,8 @@ func (e *Engine) RegisterTextTools() {
 	if e.Functions == nil {
 		return
 	}
-	_ = e.Functions.RegisterOrReplace("collect_result", "استخراج از خروجی", e.collectResultFunction())
-	_ = e.Functions.RegisterOrReplace("inspect_result", "بررسی خروجی", e.inspectResultFunction())
+	_ = e.Functions.RegisterOrReplace("collect_result", "Extract result", e.collectResultFunction())
+	_ = e.Functions.RegisterOrReplace("inspect_result", "Inspect result", e.inspectResultFunction())
 }
 
 // CollectResultToolDefinition returns the OpenAI tool schema for collect_result.

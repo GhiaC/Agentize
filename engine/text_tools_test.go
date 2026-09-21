@@ -266,3 +266,14 @@ func TestGetOwnedToolResult_CrossUserDenied(t *testing.T) {
 		t.Fatal("SECURITY: user-id mismatch must be denied when session is unset")
 	}
 }
+
+func TestTextToolDisplayNames(t *testing.T) {
+	eng := &Engine{Functions: model.NewFunctionRegistry()}
+	eng.RegisterTextTools()
+	if got := eng.Functions.GetDisplayName("inspect_result"); got != "Inspect result" {
+		t.Fatalf("inspect_result label = %q, want Inspect result", got)
+	}
+	if got := eng.Functions.GetDisplayName("collect_result"); got != "Extract result" {
+		t.Fatalf("collect_result label = %q, want Extract result", got)
+	}
+}

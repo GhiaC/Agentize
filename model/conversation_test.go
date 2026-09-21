@@ -43,11 +43,18 @@ func TestPreserveChosenTitleKeepsStoredName(t *testing.T) {
 	}
 
 	rename := *stored
-	rename.Title = "User name"
-	rename.TitleUpdatedAt = chosenAt.Add(time.Minute)
+	rename.SetChosenTitle("User name", chosenAt.Add(time.Minute))
 	PreserveChosenTitle(&rename, stored)
 	if rename.Title != "User name" {
 		t.Fatalf("explicit later rename was blocked: %+v", rename)
+	}
+
+	automatic := *stored
+	automatic.Title = "Updated Market Plan"
+	automatic.TitleUpdatedAt = chosenAt.Add(time.Minute)
+	PreserveChosenTitle(&automatic, stored)
+	if automatic.Title != "BTC support review" || !automatic.TitleUpdatedAt.Equal(chosenAt) {
+		t.Fatalf("automatic newer timestamp replaced a chosen title: %+v", automatic)
 	}
 
 	first := NewConversation("alice", "2", "2", "New market conversation", "", 2)
@@ -57,6 +64,51 @@ func TestPreserveChosenTitleKeepsStoredName(t *testing.T) {
 	PreserveChosenTitle(&generated, first)
 	if generated.Title != "Updated Market Plan" {
 		t.Fatalf("first generated title was dropped: %+v", generated)
+	}
+}
+
+func TestPlanMissingTitlesLeavesTitlesThatAreAlreadySet(t *testing.T) {
+	conversation := NewConversation("u", "1", "1", "ETH funding review", "", 1)
+	session := &Session{Title: "BTC support review"}
+	plan := PlanMissingTitles(session.Title, conversation)
+	if plan.Generate || plan.WriteSession || plan.WriteConversation {
+		t.Fatalf("set titles must not be rewritten: %+v", plan)
+	}
+	syncTitle, applied := ApplyMissingTitle(session, conversation, "Generated title")
+	if session.Title != "BTC support review" || syncTitle != "" || applied != "" {
+		t.Fatalf("apply rewrote a set title: session=%q sync=%q applied=%q", session.Title, syncTitle, applied)
+	}
+
+	untitled := NewConversation("u", "2", "2", "New market conversation", "", 2)
+	session = &Session{Title: "BTC support review"}
+	syncTitle, applied = ApplyMissingTitle(session, untitled, "Generated title")
+	if session.Title != "BTC support review" || syncTitle != "BTC support review" || applied != "" {
+		t.Fatalf("only the untitled conversation should be filled: session=%q sync=%q applied=%q", session.Title, syncTitle, applied)
+	}
+
+	session = &Session{}
+	named := NewConversation("u", "3", "3", "ETH funding review", "", 3)
+	syncTitle, applied = ApplyMissingTitle(session, named, "Generated title")
+	if session.Title != "ETH funding review" || syncTitle != "" || applied != "" {
+		t.Fatalf("only the untitled session should be filled: session=%q sync=%q applied=%q", session.Title, syncTitle, applied)
+	}
+
+	session = &Session{}
+	syncTitle, applied = ApplyMissingTitle(session, untitled, "Market plan")
+	if session.Title != "Market plan" || syncTitle != "Market plan" || applied != "Market plan" {
+		t.Fatalf("both empty titles should be created: session=%q sync=%q applied=%q", session.Title, syncTitle, applied)
+	}
+
+	locked := NewConversation("u", "4", "4", "Untitled", "", 4)
+	locked.TitleUpdatedAt = time.Now()
+	session = &Session{Title: "BTC support review"}
+	plan = PlanMissingTitles(session.Title, locked)
+	if plan.Generate || plan.WriteSession || plan.WriteConversation {
+		t.Fatalf("a chosen conversation title must block generation: %+v", plan)
+	}
+	syncTitle, applied = ApplyMissingTitle(session, locked, "Generated title")
+	if session.Title != "BTC support review" || syncTitle != "" || applied != "" {
+		t.Fatalf("chosen placeholder replaced a session title: session=%q sync=%q", session.Title, syncTitle)
 	}
 }
 

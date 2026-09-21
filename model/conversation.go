@@ -29,12 +29,15 @@ type Conversation struct {
 	SessionID      string
 	Title          string
 	TitleUpdatedAt time.Time
-	Model          string
-	Archived       bool
-	Seq            int
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	RunState       *ConversationRunState `json:"run_state,omitempty"`
+	// replaceTitle is set only by SetChosenTitle. Automatic writers, including
+	// summarization, leave it false so PutConversation keeps a stored title.
+	replaceTitle bool
+	Model        string
+	Archived     bool
+	Seq          int
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	RunState     *ConversationRunState `json:"run_state,omitempty"`
 }
 
 // GenerateConversationID returns the per-user numeric conversation id.
@@ -71,20 +74,108 @@ func (c *Conversation) HasChosenTitle() bool {
 	return c != nil && (!c.TitleUpdatedAt.IsZero() || !UnsetTitle(c.Title))
 }
 
+// SetChosenTitle records an explicit rename. Summarization and other automatic
+// writers must not call it; they only fill a title that is still empty.
+func (c *Conversation) SetChosenTitle(title string, at time.Time) {
+	if c == nil {
+		return
+	}
+	c.Title = strings.TrimSpace(title)
+	if at.IsZero() {
+		at = time.Now()
+	}
+	c.TitleUpdatedAt = at
+	c.replaceTitle = true
+}
+
 // PreserveChosenTitle keeps a name that was already selected when dst would
 // otherwise replace it. Automatic writers (run-state, activity touch, a
 // concurrent summary) load a stale conversation and PutConversation the whole
-// row; they must not rotate or clear a chosen title. A later TitleUpdatedAt on
-// dst is treated as an explicit rename and is allowed.
+// row; they must not rotate or clear a chosen title. A later TitleUpdatedAt
+// replaces the stored name only when dst came from SetChosenTitle.
 func PreserveChosenTitle(dst, stored *Conversation) {
 	if dst == nil || stored == nil || !stored.HasChosenTitle() {
 		return
 	}
-	if dst.HasChosenTitle() && dst.TitleUpdatedAt.After(stored.TitleUpdatedAt) {
+	if dst.replaceTitle && dst.HasChosenTitle() && dst.TitleUpdatedAt.After(stored.TitleUpdatedAt) {
 		return
 	}
 	dst.Title = stored.Title
 	dst.TitleUpdatedAt = stored.TitleUpdatedAt
+}
+
+// MissingTitlePlan describes the only title writes summarization may make.
+// A conversation or session title that is already set is never a write target.
+type MissingTitlePlan struct {
+	Generate          bool
+	WriteSession      bool
+	WriteConversation bool
+	Existing          string
+}
+
+// PlanMissingTitles decides how to fill titles that are still empty.
+// A set session title and a chosen conversation title are both left alone,
+// even when they differ. A real title on one side is copied to the other
+// side only when that other side has no title. The model is queried only
+// when a side is empty and the other side cannot supply a title.
+func PlanMissingTitles(sessionTitle string, conversation *Conversation) MissingTitlePlan {
+	sessionMissing := UnsetTitle(sessionTitle)
+	conversationMissing := conversation != nil && !conversation.HasChosenTitle()
+	conversationChosen := conversation != nil && conversation.HasChosenTitle()
+	switch {
+	case !sessionMissing && conversationMissing:
+		return MissingTitlePlan{WriteConversation: true, Existing: strings.TrimSpace(sessionTitle)}
+	case sessionMissing && conversationChosen && !UnsetTitle(conversation.Title):
+		return MissingTitlePlan{WriteSession: true, Existing: strings.TrimSpace(conversation.Title)}
+	case sessionMissing && (conversation == nil || conversationMissing):
+		return MissingTitlePlan{
+			Generate:          true,
+			WriteSession:      true,
+			WriteConversation: conversationMissing,
+		}
+	default:
+		return MissingTitlePlan{}
+	}
+}
+
+// KeepStoredSessionTitle copies a title that is already stored onto session.
+// An empty stored title does not clear a title held in memory.
+func KeepStoredSessionTitle(session, stored *Session) {
+	if session == nil || stored == nil || UnsetTitle(stored.Title) {
+		return
+	}
+	session.Title = stored.Title
+}
+
+// ApplyMissingTitle writes a generated title only onto sides that still have
+// no title. It returns the conversation title to sync (empty when the
+// conversation must stay unchanged) and the generated title that was actually
+// stored (empty when no new title was written).
+func ApplyMissingTitle(session *Session, conversation *Conversation, generated string) (syncTitle, applied string) {
+	if session == nil {
+		return "", ""
+	}
+	plan := PlanMissingTitles(session.Title, conversation)
+	generated = strings.TrimSpace(generated)
+	if plan.Generate {
+		if generated == "" {
+			return "", ""
+		}
+		if plan.WriteSession {
+			session.Title = generated
+		}
+		if plan.WriteConversation {
+			syncTitle = generated
+		}
+		return syncTitle, generated
+	}
+	if plan.WriteSession && !UnsetTitle(plan.Existing) {
+		session.Title = plan.Existing
+	}
+	if plan.WriteConversation && !UnsetTitle(plan.Existing) {
+		syncTitle = plan.Existing
+	}
+	return syncTitle, ""
 }
 
 // IsSubAgent reports whether this session is a worker of another session.

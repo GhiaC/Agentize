@@ -71,7 +71,7 @@ func (ch *CoreHandler) initializeTaskScheduler() {
 	ch.taskScheduler.SetAllowedAgentTypes(model.AgentTypeCore, model.AgentTypeWorkflow)
 	_ = ch.coreTools.RegisterOrReplace(
 		"manage_schedules",
-		"مدیریت زمان‌بندی‌ها",
+		"Schedules",
 		func(map[string]interface{}) (string, error) { return "", nil },
 	)
 }

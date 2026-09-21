@@ -137,7 +137,7 @@ func TestSplitRollingWindow_CutOnToolResult_ShiftsBack(t *testing.T) {
 }
 
 func TestSummarizeSessionAppendsMetadataAndKeepsChosenTitle(t *testing.T) {
-	got, linked, calls := summarizeSessionWithTitle(t, "BTC support review", "BTC support review", false, []string{
+	got, linked, calls := summarizeSessionWithTitle(t, "BTC support review", "BTC support review", false, 1, []string{
 		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
 	})
 	if strings.Join(got.Summary, "|") != "old fact|new decision" {
@@ -166,7 +166,7 @@ func TestSummarizeSessionAppendsMetadataAndKeepsChosenTitle(t *testing.T) {
 }
 
 func TestSummarizeSessionGeneratesTitleOnceForPlaceholder(t *testing.T) {
-	got, linked, calls := summarizeSessionWithTitle(t, "New market conversation", "New market conversation", false, []string{
+	got, linked, calls := summarizeSessionWithTitle(t, "New market conversation", "New market conversation", false, 1, []string{
 		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`, "Updated Market Plan",
 	})
 	if got.Title != "Updated Market Plan" {
@@ -184,7 +184,7 @@ func TestSummarizeSessionGeneratesTitleOnceForPlaceholder(t *testing.T) {
 }
 
 func TestSummarizeSessionNeverReplacesPreviouslyChosenPlaceholder(t *testing.T) {
-	got, linked, calls := summarizeSessionWithTitle(t, "Untitled", "Untitled", true, []string{
+	got, linked, calls := summarizeSessionWithTitle(t, "Untitled", "Untitled", true, 1, []string{
 		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
 	})
 	if got.Title != "Untitled" || linked.Title != "Untitled" {
@@ -196,7 +196,7 @@ func TestSummarizeSessionNeverReplacesPreviouslyChosenPlaceholder(t *testing.T) 
 }
 
 func TestSummarizeSessionCopiesConversationTitleWithoutQuery(t *testing.T) {
-	got, linked, calls := summarizeSessionWithTitle(t, "", "User named this", false, []string{
+	got, linked, calls := summarizeSessionWithTitle(t, "", "User named this", false, 1, []string{
 		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
 	})
 	if got.Title != "User named this" {
@@ -210,7 +210,50 @@ func TestSummarizeSessionCopiesConversationTitleWithoutQuery(t *testing.T) {
 	}
 }
 
-func summarizeSessionWithTitle(t *testing.T, sessionTitle, conversationTitle string, lockTitle bool, responses []string) (*model.Session, *model.Conversation, int) {
+func TestSummarizeSessionKeepsDistinctExistingTitles(t *testing.T) {
+	got, linked, calls := summarizeSessionWithTitle(t, "BTC support review", "ETH funding review", false, 1, []string{
+		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
+	})
+	if got.Title != "BTC support review" {
+		t.Fatalf("session title changed: %q", got.Title)
+	}
+	if linked.Title != "ETH funding review" {
+		t.Fatalf("conversation title changed: %q", linked.Title)
+	}
+	if calls != 3 {
+		t.Fatalf("title generation was queried despite existing titles: calls=%d", calls)
+	}
+}
+
+func TestSummarizeSessionFillsOnlyUntitledConversation(t *testing.T) {
+	got, linked, calls := summarizeSessionWithTitle(t, "BTC support review", "New market conversation", false, 1, []string{
+		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
+	})
+	if got.Title != "BTC support review" {
+		t.Fatalf("session title changed while filling the conversation: %q", got.Title)
+	}
+	if linked.Title != "BTC support review" || linked.TitleUpdatedAt.IsZero() {
+		t.Fatalf("untitled conversation was not filled: %#v", linked)
+	}
+	if calls != 3 {
+		t.Fatalf("title generation was queried when the session already had a title: calls=%d", calls)
+	}
+}
+
+func TestSummarizeSessionDoesNotReplaceTitleOnLaterPass(t *testing.T) {
+	got, linked, calls := summarizeSessionWithTitle(t, "New market conversation", "New market conversation", false, 2, []string{
+		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`, "Updated Market Plan",
+		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`,
+	})
+	if got.Title != "Updated Market Plan" || linked.Title != "Updated Market Plan" {
+		t.Fatalf("later summarization replaced the title: session=%q conversation=%q", got.Title, linked.Title)
+	}
+	if calls != 7 {
+		t.Fatalf("later pass queried title generation: calls=%d", calls)
+	}
+}
+
+func summarizeSessionWithTitle(t *testing.T, sessionTitle, conversationTitle string, lockTitle bool, passes int, responses []string) (*model.Session, *model.Conversation, int) {
 	t.Helper()
 	call := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -262,8 +305,13 @@ func summarizeSessionWithTitle(t *testing.T, sessionTitle, conversationTitle str
 	schedulerConfig.RetainRecentMessages = 1
 	schedulerConfig.DisableLogs = true
 	scheduler := NewSessionScheduler(handler, client, schedulerConfig)
-	if err := scheduler.summarizeSession(context.Background(), session); err != nil {
-		t.Fatal(err)
+	if passes < 1 {
+		passes = 1
+	}
+	for pass := 0; pass < passes; pass++ {
+		if err := scheduler.summarizeSession(context.Background(), session); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	got, err := st.Get(session.SessionID)

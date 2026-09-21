@@ -34,7 +34,7 @@ func (e *Engine) RegisterManageKnowledgeTool() {
 	if e.Functions == nil || e.Repo == nil {
 		return
 	}
-	_ = e.Functions.RegisterOrReplace("manage_knowledge", "Manage Knowledge", e.manageKnowledgeFunction())
+	_ = e.Functions.RegisterOrReplace("manage_knowledge", "Knowledge", e.manageKnowledgeFunction())
 }
 
 func (e *Engine) manageKnowledgeFunction() model.ToolFunction {

@@ -48,10 +48,10 @@ func (e *Engine) RegisterFileTools(registry *model.FunctionRegistry) {
 	}
 
 	openNode, closeNode := e.createOpenFileFunction(), e.createCloseFileFunction()
-	registry.RegisterOrReplace("open_node", "Open Node", openNode)
-	registry.RegisterOrReplace("close_node", "Close Node", closeNode)
-	registry.RegisterOrReplace("open_file", "Open Node (legacy alias)", openNode)
-	registry.RegisterOrReplace("close_file", "Close Node (legacy alias)", closeNode)
+	registry.RegisterOrReplace("open_node", "Open node", openNode)
+	registry.RegisterOrReplace("close_node", "Close node", closeNode)
+	registry.RegisterOrReplace("open_file", "Open node", openNode)
+	registry.RegisterOrReplace("close_file", "Close node", closeNode)
 }
 
 // createOpenFileFunction creates the open_file tool function
@@ -410,7 +410,7 @@ func (e *Engine) RegisterManageFilesTool() {
 	if e.Functions == nil {
 		return
 	}
-	_ = e.Functions.RegisterOrReplace("manage_files", "مدیریت فایل‌ها", e.manageFilesFunction())
+	_ = e.Functions.RegisterOrReplace("manage_files", "Chat files", e.manageFilesFunction())
 }
 
 // manageFilesFunction builds the manage_files tool implementation.

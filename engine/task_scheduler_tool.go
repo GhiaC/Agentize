@@ -91,7 +91,7 @@ func (e *Engine) RegisterTaskSchedulerTool() {
 	}
 	_ = e.Functions.RegisterOrReplace(
 		"manage_schedules",
-		"مدیریت زمان‌بندی‌ها",
+		"Schedules",
 		func(args map[string]interface{}) (string, error) {
 			scheduler := e.GetTaskScheduler()
 			if scheduler == nil {

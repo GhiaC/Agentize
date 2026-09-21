@@ -110,7 +110,7 @@ func (e *Engine) RegisterBrowserUseTool() {
 	}
 	_ = e.Functions.RegisterOrReplace(
 		browserUseToolName,
-		"مرورگر وب",
+		"Browser",
 		func(args map[string]interface{}) (string, error) {
 			return e.executeBrowserUseTool(args)
 		},

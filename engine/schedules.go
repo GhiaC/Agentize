@@ -823,28 +823,10 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		session.PendingUserContext = delta
 	}
 
-	// Generate a title only when neither the session nor the linked conversation
-	// already has a chosen name. User-set and previously summarized titles are
-	// never queried for or overwritten.
-	titleToSync := ""
-	if existing := chosenSessionTitle(sessionStore, session); existing != "" {
-		session.Title = existing
-		if model.UnsetTitle(conversationTitleFromStore(sessionStore, session)) {
-			titleToSync = existing
-		}
-	} else {
-		titleContext := strings.TrimSpace(conversationText + "\nAccumulated summary:\n" + session.Summary.Text())
-		title, err := ss.generateTitle(ctx, titleContext)
-		if err != nil {
-			if !ss.config.DisableLogs {
-				log.Log.Warnf("[SessionScheduler] ⚠️  Failed to generate title for session %s: %v", session.SessionID, err)
-			}
-		} else if title = strings.TrimSpace(title); title != "" {
-			session.Title = title
-			generatedTitle = title
-			titleToSync = title
-		}
-	}
+	// Fill a title only on a conversation or session that still does not have
+	// one. A title that was renamed or generated earlier is not queried for
+	// and is not replaced.
+	generatedTitle, titleToSync := ss.fillMissingTitles(ctx, sessionStore, session, conversationText)
 
 	// Update log with generated content
 	summLog.GeneratedSummary = generatedSummary
@@ -1249,24 +1231,43 @@ func lookupConversation(store model.SessionStore, session *model.Session) *model
 	return conversation
 }
 
-func conversationTitleFromStore(store model.SessionStore, session *model.Session) string {
-	if conversation := lookupConversation(store, session); conversation != nil {
-		return strings.TrimSpace(conversation.Title)
+// fillMissingTitles generates a title only for a conversation or session that
+// still has none. Titles already stored are read again after the model call
+// so a rename during summarization is kept.
+func (ss *SessionScheduler) fillMissingTitles(ctx context.Context, sessionStore model.SessionStore, session *model.Session, conversationText string) (generatedTitle, titleToSync string) {
+	if session == nil {
+		return "", ""
 	}
-	return ""
+	refreshStoredSessionTitle(sessionStore, session)
+	conversation := lookupConversation(sessionStore, session)
+	plan := model.PlanMissingTitles(session.Title, conversation)
+	generated := ""
+	if plan.Generate {
+		titleContext := strings.TrimSpace(conversationText + "\nAccumulated summary:\n" + session.Summary.Text())
+		title, err := ss.generateTitle(ctx, titleContext)
+		if err != nil {
+			if !ss.config.DisableLogs {
+				log.Log.Warnf("[SessionScheduler] ⚠️  Failed to generate title for session %s: %v", session.SessionID, err)
+			}
+		} else {
+			generated = strings.TrimSpace(title)
+		}
+	}
+	refreshStoredSessionTitle(sessionStore, session)
+	conversation = lookupConversation(sessionStore, session)
+	syncTitle, applied := model.ApplyMissingTitle(session, conversation, generated)
+	return applied, syncTitle
 }
 
-func chosenSessionTitle(store model.SessionStore, session *model.Session) string {
-	if session == nil {
-		return ""
+func refreshStoredSessionTitle(store model.SessionStore, session *model.Session) {
+	if store == nil || session == nil || strings.TrimSpace(session.UserID) == "" {
+		return
 	}
-	if conversation := lookupConversation(store, session); conversation != nil && conversation.HasChosenTitle() {
-		return strings.TrimSpace(conversation.Title)
+	fresh, err := store.GetUserSession(session.UserID, session.SessionID)
+	if err != nil {
+		return
 	}
-	if title := strings.TrimSpace(session.Title); !model.UnsetTitle(title) {
-		return title
-	}
-	return ""
+	model.KeepStoredSessionTitle(session, fresh)
 }
 
 func syncConversationTitle(store model.SessionStore, userID, sessionID, title string, updatedAt time.Time) error {

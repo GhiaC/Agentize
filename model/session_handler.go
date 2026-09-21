@@ -52,19 +52,6 @@ func conversationForSession(store SessionStore, userID, sessionID string) *Conve
 	return conversation
 }
 
-func conversationTitleForSession(store SessionStore, userID, sessionID string) string {
-	conversation := conversationForSession(store, userID, sessionID)
-	if conversation == nil {
-		return ""
-	}
-	return strings.TrimSpace(conversation.Title)
-}
-
-func conversationHasChosenTitleForSession(store SessionStore, userID, sessionID string) bool {
-	conversation := conversationForSession(store, userID, sessionID)
-	return conversation != nil && conversation.HasChosenTitle()
-}
-
 func syncConversationTitleForSession(store SessionStore, userID, sessionID, title string, updatedAt time.Time) error {
 	cs, ok := store.(sessionConversationStore)
 	if !ok {
@@ -532,22 +519,7 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	generatedTitle := ""
-	if conversationHasChosenTitleForSession(sh.store, session.UserID, session.SessionID) {
-		if chosen := conversationTitleForSession(sh.store, session.UserID, session.SessionID); chosen != "" {
-			session.Title = chosen
-		}
-	} else if chosen := strings.TrimSpace(session.Title); !UnsetTitle(chosen) {
-		session.Title = chosen
-	} else if chosen = conversationTitleForSession(sh.store, session.UserID, session.SessionID); !UnsetTitle(chosen) {
-		session.Title = chosen
-	} else {
-		title, titleErr := sh.generateSessionTitle(ctx, conversationText)
-		if titleErr == nil && strings.TrimSpace(title) != "" {
-			session.Title = strings.TrimSpace(title)
-			generatedTitle = session.Title
-		}
-	}
+	syncTitle := sh.fillMissingSessionTitle(ctx, session, conversationText)
 	if generatedTags, tagErr := session.generateTags(ctx, sh.llmClient, sh.config.SummaryModel, conversationText); tagErr == nil && len(generatedTags) > 0 {
 		session.Tags = ReplaceTags(generatedTags, MaxSessionTags)
 	}
@@ -577,8 +549,8 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 	if err := sh.store.Put(session); err != nil {
 		return err
 	}
-	if generatedTitle != "" || (UnsetTitle(conversationTitleForSession(sh.store, session.UserID, session.SessionID)) && !UnsetTitle(session.Title)) {
-		_ = syncConversationTitleForSession(sh.store, session.UserID, session.SessionID, session.Title, session.UpdatedAt)
+	if syncTitle != "" {
+		_ = syncConversationTitleForSession(sh.store, session.UserID, session.SessionID, syncTitle, session.UpdatedAt)
 	}
 	return nil
 }
@@ -808,6 +780,45 @@ OUTPUT: a JSON array of compact strings, nothing else.`
 	}
 
 	return summary, nil
+}
+
+// fillMissingSessionTitle generates a title only for this session or its
+// conversation when that side still has none. A title already stored is kept.
+func (sh *SessionHandler) fillMissingSessionTitle(ctx context.Context, session *Session, conversationText string) string {
+	if session == nil {
+		return ""
+	}
+	sh.keepStoredSessionTitle(session)
+	conversation := conversationForSession(sh.store, session.UserID, session.SessionID)
+	plan := PlanMissingTitles(session.Title, conversation)
+	generated := ""
+	if plan.Generate {
+		title, err := sh.generateSessionTitle(ctx, conversationText)
+		if err == nil {
+			generated = strings.TrimSpace(title)
+		}
+	}
+	sh.keepStoredSessionTitle(session)
+	conversation = conversationForSession(sh.store, session.UserID, session.SessionID)
+	syncTitle, _ := ApplyMissingTitle(session, conversation, generated)
+	return syncTitle
+}
+
+func (sh *SessionHandler) keepStoredSessionTitle(session *Session) {
+	if sh == nil || sh.store == nil || session == nil {
+		return
+	}
+	var fresh *Session
+	var err error
+	if strings.TrimSpace(session.UserID) != "" {
+		fresh, err = sh.store.GetUserSession(session.UserID, session.SessionID)
+	} else {
+		fresh, err = sh.store.Get(session.SessionID)
+	}
+	if err != nil {
+		return
+	}
+	KeepStoredSessionTitle(session, fresh)
 }
 
 // generateSessionTitle uses LLM to generate a title for the session

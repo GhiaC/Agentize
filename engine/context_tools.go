@@ -39,7 +39,7 @@ func (e *Engine) RegisterManageContextTool() {
 	if e.Functions == nil || e.Sessions == nil {
 		return
 	}
-	_ = e.Functions.RegisterOrReplace("manage_context", "Manage Context", e.manageContextFunction())
+	_ = e.Functions.RegisterOrReplace("manage_context", "Context", e.manageContextFunction())
 }
 
 func (e *Engine) manageContextFunction() model.ToolFunction {
