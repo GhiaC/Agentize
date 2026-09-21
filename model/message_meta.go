@@ -66,6 +66,7 @@ func NewScheduleMessageMeta(schedule *TaskSchedule) map[string]any {
 			"name":             schedule.Name,
 			"status":           string(schedule.Status),
 			"last_run_status":  string(schedule.LastRunStatus),
+			"pending_run":      schedule.LastRunStatus == TaskRunRunning,
 			"run_count":        schedule.RunCount,
 			"max_runs":         schedule.MaxRuns,
 			"interval_seconds": schedule.IntervalSeconds,
