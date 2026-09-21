@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ghiac/agentize/model"
 	"github.com/ghiac/agentize/store"
@@ -200,5 +201,36 @@ func TestPersistSessionRunState_RoundTrip(t *testing.T) {
 	}
 	if got.RunState.UserMessageID != "alice-conv-s0001-m0003" {
 		t.Fatalf("user message must survive empty updates, got %q", got.RunState.UserMessageID)
+	}
+}
+
+func TestPersistSessionRunState_DoesNotClobberChosenTitle(t *testing.T) {
+	eng := newConversationTestEngine(t)
+	conv, err := eng.CreateConversation(CreateConversationInput{UserID: "alice", Title: "live"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := eng.RenameConversation("alice", conv.ConversationID, "BTC plan"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	stale, err := eng.GetConversation("alice", conv.ConversationID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	stale.Title = "New market conversation"
+	stale.TitleUpdatedAt = time.Time{}
+	stale.RunState = &model.ConversationRunState{Phase: string(StatusThinking), Active: true}
+	if err := eng.Sessions.PutConversation(stale); err != nil {
+		t.Fatalf("stale put: %v", err)
+	}
+	got, err := eng.GetConversation("alice", conv.ConversationID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.Title != "BTC plan" {
+		t.Fatalf("chosen title was overwritten: %q", got.Title)
+	}
+	if got.RunState == nil || !got.RunState.Active {
+		t.Fatalf("run state = %#v", got.RunState)
 	}
 }

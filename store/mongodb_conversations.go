@@ -64,6 +64,24 @@ func (s *MongoDBStore) PutConversation(conversation *model.Conversation) error {
 	if conversation.UpdatedAt.IsZero() {
 		conversation.UpdatedAt = time.Now()
 	}
+	ctx, cancel := s.opCtx()
+	defer cancel()
+	var existing conversationDocument
+	docID := scopedMongoID(conversation.UserID, conversation.ConversationID)
+	err := s.conversationsCollection.FindOne(ctx, bson.M{
+		"user_id": conversation.UserID,
+		"_id":     docID,
+	}).Decode(&existing)
+	if err == mongo.ErrNoDocuments {
+		err = s.conversationsCollection.FindOne(ctx, bson.M{"_id": conversation.ConversationID}).Decode(&existing)
+	}
+	if err == nil {
+		if stored, decErr := decodeConversation(existing); decErr == nil {
+			model.PreserveChosenTitle(conversation, stored)
+		}
+	} else if err != mongo.ErrNoDocuments {
+		return fmt.Errorf("failed to load conversation: %w", err)
+	}
 	data, err := json.Marshal(conversation)
 	if err != nil {
 		return fmt.Errorf("failed to marshal conversation: %w", err)
@@ -80,10 +98,7 @@ func (s *MongoDBStore) PutConversation(conversation *model.Conversation) error {
 		CreatedAt:      conversation.CreatedAt,
 		UpdatedAt:      conversation.UpdatedAt,
 	}
-	ctx, cancel := s.opCtx()
-	defer cancel()
 	opts := options.Replace().SetUpsert(true)
-	docID := scopedMongoID(conversation.UserID, conversation.ConversationID)
 	doc.ConversationID = docID
 	_, err = s.conversationsCollection.ReplaceOne(ctx, bson.M{"_id": docID}, doc, opts)
 	if err != nil {

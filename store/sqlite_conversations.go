@@ -79,6 +79,9 @@ func (s *SQLiteStore) PutConversation(conversation *model.Conversation) error {
 	if conversation.UpdatedAt.IsZero() {
 		conversation.UpdatedAt = time.Now()
 	}
+	if stored := s.conversationDataLocked(conversation.UserID, conversation.ConversationID); stored != nil {
+		model.PreserveChosenTitle(conversation, stored)
+	}
 	data, err := json.Marshal(conversation)
 	if err != nil {
 		return fmt.Errorf("failed to marshal conversation: %w", err)
@@ -223,6 +226,23 @@ func (s *SQLiteStore) GetUserConversationBySession(userID, sessionID string) (*m
 		return nil, fmt.Errorf("failed to query conversation by session: %w", err)
 	}
 	return scanConversation(data, createdAt, updatedAt)
+}
+
+func (s *SQLiteStore) conversationDataLocked(userID, conversationID string) *model.Conversation {
+	var data string
+	var createdAt, updatedAt int64
+	err := s.db.QueryRow(
+		`SELECT data, created_at, updated_at FROM conversations WHERE user_id = ? AND conversation_id = ?`,
+		userID, conversationID,
+	).Scan(&data, &createdAt, &updatedAt)
+	if err != nil {
+		return nil
+	}
+	c, err := scanConversation(data, createdAt, updatedAt)
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
 func (s *SQLiteStore) GetNextConversationSeq(userID string) (int, error) {

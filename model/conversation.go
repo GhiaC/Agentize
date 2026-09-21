@@ -71,6 +71,22 @@ func (c *Conversation) HasChosenTitle() bool {
 	return c != nil && (!c.TitleUpdatedAt.IsZero() || !UnsetTitle(c.Title))
 }
 
+// PreserveChosenTitle keeps a name that was already selected when dst would
+// otherwise replace it. Automatic writers (run-state, activity touch, a
+// concurrent summary) load a stale conversation and PutConversation the whole
+// row; they must not rotate or clear a chosen title. A later TitleUpdatedAt on
+// dst is treated as an explicit rename and is allowed.
+func PreserveChosenTitle(dst, stored *Conversation) {
+	if dst == nil || stored == nil || !stored.HasChosenTitle() {
+		return
+	}
+	if dst.HasChosenTitle() && dst.TitleUpdatedAt.After(stored.TitleUpdatedAt) {
+		return
+	}
+	dst.Title = stored.Title
+	dst.TitleUpdatedAt = stored.TitleUpdatedAt
+}
+
 // IsSubAgent reports whether this session is a worker of another session.
 func (s *Session) IsSubAgent() bool {
 	return s != nil && strings.TrimSpace(s.ParentSessionID) != ""

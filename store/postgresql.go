@@ -117,6 +117,7 @@ func NewPostgreSQLStore(cfg PostgreSQLStoreConfig) (*PostgreSQLStore, error) {
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	db.SetConnMaxIdleTime(2 * time.Minute)
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
 	defer cancel()

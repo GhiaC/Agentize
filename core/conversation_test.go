@@ -62,8 +62,8 @@ func TestConversationTools_ListCreateSelectRename(t *testing.T) {
 		t.Fatalf("rename: %v", err)
 	}
 	got, err := eng.GetConversation("alice", "1")
-	if err != nil || got.Title != "Renamed" || got.Model != "m1" {
-		t.Fatalf("after rename: %+v %v", got, err)
+	if err != nil || got.Title != "Market" || got.Model != "m1" {
+		t.Fatalf("chosen title must not be renamed by the tool: %+v %v", got, err)
 	}
 	if _, err := ch.selectConversationTool(context.Background(), "bob", map[string]interface{}{
 		"conversation_id": "1",
@@ -273,5 +273,49 @@ func TestConversationTools_RegisteredOnCore(t *testing.T) {
 		if !names[want] {
 			t.Errorf("missing conversation tool %s", want)
 		}
+	}
+}
+
+func TestRenameConversationTool_SetsPlaceholderOnce(t *testing.T) {
+	ch, eng := newConversationCore(t)
+	if _, err := ch.createConversationTool(context.Background(), "alice", map[string]interface{}{
+		"title": "New market conversation",
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out, err := ch.renameConversationTool(context.Background(), "alice", map[string]interface{}{
+		"conversation_id": "1",
+		"title":           "BTC plan",
+	})
+	if err != nil {
+		t.Fatalf("first rename: %v", err)
+	}
+	if !strings.Contains(out, "Renamed") {
+		t.Fatalf("first rename = %s", out)
+	}
+	got, err := eng.GetConversation("alice", "1")
+	if err != nil || got.Title != "BTC plan" {
+		t.Fatalf("after first rename: %+v %v", got, err)
+	}
+	out, err = ch.renameConversationTool(context.Background(), "alice", map[string]interface{}{
+		"conversation_id": "1",
+		"title":           "Should not apply",
+	})
+	if err != nil {
+		t.Fatalf("second rename: %v", err)
+	}
+	if !strings.Contains(out, "already has a title") {
+		t.Fatalf("second rename = %s", out)
+	}
+	got, err = eng.GetConversation("alice", "1")
+	if err != nil || got.Title != "BTC plan" {
+		t.Fatalf("chosen title was replaced: %+v %v", got, err)
+	}
+	if err := eng.RenameConversation("alice", "1", "User name"); err != nil {
+		t.Fatalf("user rename: %v", err)
+	}
+	got, err = eng.GetConversation("alice", "1")
+	if err != nil || got.Title != "User name" {
+		t.Fatalf("user rename = %+v %v", got, err)
 	}
 }

@@ -112,7 +112,7 @@ func conversationToolDefs() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        "rename_conversation",
-				Description: "Change only the conversation title. Does not change the id or model.",
+				Description: "Set the conversation title only when it is still unset (empty or a generic placeholder). Does not change the id or model, and will not replace a title the user chose or one that was already generated.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -376,13 +376,20 @@ func (ch *CoreHandler) renameConversationTool(_ context.Context, userID string, 
 	if err != nil {
 		return "", err
 	}
-	title, err := requireStringArg(args, "title")
-	if err != nil {
-		return "", err
-	}
-	if err := eng.RenameConversation(userID, conversationID, title); err != nil {
-		return "", err
-	}
+		title, err := requireStringArg(args, "title")
+		if err != nil {
+			return "", err
+		}
+		conv, err := eng.GetConversation(userID, conversationID)
+		if err != nil {
+			return "", fmt.Errorf("conversation not found: %s", conversationID)
+		}
+		if conv.HasChosenTitle() {
+			return fmt.Sprintf("Conversation %s already has a title (%s); automatic rename skipped", conversationID, conversationTitle(conv)), nil
+		}
+		if err := eng.RenameConversation(userID, conversationID, title); err != nil {
+			return "", err
+		}
 	ch.invalidateSystemPrompt(userID)
 	return fmt.Sprintf("Renamed conversation %s", conversationID), nil
 }

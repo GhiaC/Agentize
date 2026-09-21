@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ghiac/agentize/model"
 )
@@ -58,5 +59,32 @@ func testConversations(t *testing.T, st Store) {
 	}
 	if _, err := st.GetConversation("alice-c0001"); err == nil {
 		t.Fatal("deleted conversation still gettable")
+	}
+
+	keepSession := newSession("carol", model.AgentTypeConversation)
+	mustPutSession(t, st, keepSession)
+	keep := model.NewConversation("carol", "1", keepSession.SessionID, "BTC support review", "m1", 1)
+	if err := st.PutConversation(keep); err != nil {
+		t.Fatalf("PutConversation keep: %v", err)
+	}
+	stale, err := st.GetUserConversation("carol", "1")
+	if err != nil {
+		t.Fatalf("GetUserConversation: %v", err)
+	}
+	stale.Title = "New market conversation"
+	stale.TitleUpdatedAt = time.Time{}
+	stale.RunState = &model.ConversationRunState{Phase: "thinking", Active: true}
+	if err := st.PutConversation(stale); err != nil {
+		t.Fatalf("stale PutConversation: %v", err)
+	}
+	gotKeep, err := st.GetUserConversation("carol", "1")
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if gotKeep.Title != "BTC support review" {
+		t.Fatalf("chosen title was overwritten: %q", gotKeep.Title)
+	}
+	if gotKeep.RunState == nil || !gotKeep.RunState.Active || gotKeep.RunState.Phase != "thinking" {
+		t.Fatalf("run state = %#v", gotKeep.RunState)
 	}
 }

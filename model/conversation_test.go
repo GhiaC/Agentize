@@ -25,6 +25,41 @@ func TestConversationRunStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPreserveChosenTitleKeepsStoredName(t *testing.T) {
+	chosenAt := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	stored := NewConversation("alice", "1", "1", "BTC support review", "m", 1)
+	stored.TitleUpdatedAt = chosenAt
+
+	stale := *stored
+	stale.Title = "New market conversation"
+	stale.TitleUpdatedAt = time.Time{}
+	stale.RunState = &ConversationRunState{Phase: "thinking", Active: true}
+	PreserveChosenTitle(&stale, stored)
+	if stale.Title != "BTC support review" || !stale.TitleUpdatedAt.Equal(chosenAt) {
+		t.Fatalf("stale persist clobbered title: %+v", stale)
+	}
+	if stale.RunState == nil || !stale.RunState.Active {
+		t.Fatal("run state must still apply")
+	}
+
+	rename := *stored
+	rename.Title = "User name"
+	rename.TitleUpdatedAt = chosenAt.Add(time.Minute)
+	PreserveChosenTitle(&rename, stored)
+	if rename.Title != "User name" {
+		t.Fatalf("explicit later rename was blocked: %+v", rename)
+	}
+
+	first := NewConversation("alice", "2", "2", "New market conversation", "", 2)
+	generated := *first
+	generated.Title = "Updated Market Plan"
+	generated.TitleUpdatedAt = time.Now()
+	PreserveChosenTitle(&generated, first)
+	if generated.Title != "Updated Market Plan" {
+		t.Fatalf("first generated title was dropped: %+v", generated)
+	}
+}
+
 func TestGenerateConversationID(t *testing.T) {
 	got := GenerateConversationID("alice", 1)
 	if got != "1" {
