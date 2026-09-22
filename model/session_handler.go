@@ -782,8 +782,8 @@ OUTPUT: a JSON array of compact strings, nothing else.`
 	return summary, nil
 }
 
-// fillMissingSessionTitle generates a title only for this session or its
-// conversation when that side still has none. A title already stored is kept.
+// fillMissingSessionTitle asks for a title only when the linked conversation
+// still has no name. A name already stored on that conversation is kept.
 func (sh *SessionHandler) fillMissingSessionTitle(ctx context.Context, session *Session, conversationText string) string {
 	if session == nil {
 		return ""

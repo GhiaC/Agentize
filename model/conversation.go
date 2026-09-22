@@ -113,28 +113,25 @@ type MissingTitlePlan struct {
 	Existing          string
 }
 
-// PlanMissingTitles decides how to fill titles that are still empty.
-// A set session title and a chosen conversation title are both left alone,
-// even when they differ. A real title on one side is copied to the other
-// side only when that other side has no title. The model is queried only
-// when a side is empty and the other side cannot supply a title.
+// PlanMissingTitles chooses a conversation name at most once.
+// A conversation that already has a name is never regenerated or replaced.
+// The model is called only when that conversation exists and still has no
+// name, and the linked session cannot supply one. A missing conversation row
+// is not a reason to invent a title.
 func PlanMissingTitles(sessionTitle string, conversation *Conversation) MissingTitlePlan {
-	sessionMissing := UnsetTitle(sessionTitle)
-	conversationMissing := conversation != nil && !conversation.HasChosenTitle()
-	conversationChosen := conversation != nil && conversation.HasChosenTitle()
-	switch {
-	case !sessionMissing && conversationMissing:
-		return MissingTitlePlan{WriteConversation: true, Existing: strings.TrimSpace(sessionTitle)}
-	case sessionMissing && conversationChosen && !UnsetTitle(conversation.Title):
-		return MissingTitlePlan{WriteSession: true, Existing: strings.TrimSpace(conversation.Title)}
-	case sessionMissing && (conversation == nil || conversationMissing):
-		return MissingTitlePlan{
-			Generate:          true,
-			WriteSession:      true,
-			WriteConversation: conversationMissing,
+	if conversation == nil || conversation.HasChosenTitle() {
+		if conversation != nil && conversation.HasChosenTitle() && UnsetTitle(sessionTitle) && !UnsetTitle(conversation.Title) {
+			return MissingTitlePlan{WriteSession: true, Existing: strings.TrimSpace(conversation.Title)}
 		}
-	default:
 		return MissingTitlePlan{}
+	}
+	if title := strings.TrimSpace(sessionTitle); !UnsetTitle(title) {
+		return MissingTitlePlan{WriteConversation: true, Existing: title}
+	}
+	return MissingTitlePlan{
+		Generate:          true,
+		WriteSession:      true,
+		WriteConversation: true,
 	}
 }
 

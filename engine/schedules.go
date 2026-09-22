@@ -823,9 +823,8 @@ func (ss *SessionScheduler) summarizeSession(ctx context.Context, session *model
 		session.PendingUserContext = delta
 	}
 
-	// Fill a title only on a conversation or session that still does not have
-	// one. A title that was renamed or generated earlier is not queried for
-	// and is not replaced.
+	// Choose a conversation name only when that conversation still has none.
+	// A name the user set, or one created on an earlier pass, is not replaced.
 	generatedTitle, titleToSync := ss.fillMissingTitles(ctx, sessionStore, session, conversationText)
 
 	// Update log with generated content
@@ -1231,9 +1230,9 @@ func lookupConversation(store model.SessionStore, session *model.Session) *model
 	return conversation
 }
 
-// fillMissingTitles generates a title only for a conversation or session that
-// still has none. Titles already stored are read again after the model call
-// so a rename during summarization is kept.
+// fillMissingTitles asks the model for a title only when the linked
+// conversation still has no name. The conversation is read again after the
+// model call so a rename during summarization is kept.
 func (ss *SessionScheduler) fillMissingTitles(ctx context.Context, sessionStore model.SessionStore, session *model.Session, conversationText string) (generatedTitle, titleToSync string) {
 	if session == nil {
 		return "", ""

@@ -110,6 +110,19 @@ func TestPlanMissingTitlesLeavesTitlesThatAreAlreadySet(t *testing.T) {
 	if session.Title != "BTC support review" || syncTitle != "" || applied != "" {
 		t.Fatalf("chosen placeholder replaced a session title: session=%q sync=%q", session.Title, syncTitle)
 	}
+
+	session = &Session{Title: "New market conversation"}
+	plan = PlanMissingTitles(session.Title, nil)
+	if plan.Generate || plan.WriteSession || plan.WriteConversation {
+		t.Fatalf("a missing conversation must not be given a generated title: %+v", plan)
+	}
+
+	again := NewConversation("u", "5", "5", "ETH funding review", "", 5)
+	session = &Session{Title: "New market conversation"}
+	syncTitle, applied = ApplyMissingTitle(session, again, "Generated again")
+	if session.Title != "ETH funding review" || syncTitle != "" || applied != "" {
+		t.Fatalf("wiped session title caused another conversation name: session=%q sync=%q applied=%q", session.Title, syncTitle, applied)
+	}
 }
 
 func TestGenerateConversationID(t *testing.T) {
