@@ -1241,9 +1241,9 @@ func (ss *SessionScheduler) fillMissingTitles(ctx context.Context, sessionStore 
 	conversation := lookupConversation(sessionStore, session)
 	plan := model.PlanMissingTitles(session.Title, conversation)
 	generated := ""
-	if plan.Generate {
+	if plan.Generate && model.TitleRequestAllowed(session.Title, conversation) {
 		titleContext := strings.TrimSpace(conversationText + "\nAccumulated summary:\n" + session.Summary.Text())
-		title, err := ss.generateTitle(ctx, titleContext)
+		title, err := ss.generateTitle(ctx, session, conversation, titleContext)
 		if err != nil {
 			if !ss.config.DisableLogs {
 				log.Log.Warnf("[SessionScheduler] ⚠️  Failed to generate title for session %s: %v", session.SessionID, err)
@@ -1288,8 +1288,12 @@ func syncConversationTitle(store model.SessionStore, userID, sessionID, title st
 	return conversations.PutConversation(conversation)
 }
 
-// generateTitle generates a title for the session
-func (ss *SessionScheduler) generateTitle(ctx context.Context, conversationText string) (string, error) {
+// generateTitle asks the model for a title. It returns before any network
+// call when the session or the conversation already has a name.
+func (ss *SessionScheduler) generateTitle(ctx context.Context, session *model.Session, conversation *model.Conversation, conversationText string) (string, error) {
+	if !model.TitleRequestAllowed(sessionTitleOf(session), conversation) {
+		return "", nil
+	}
 	systemPrompt := ss.config.SummarizationPrompts.TitleSystemPrompt
 	if systemPrompt == "" {
 		systemPrompt = DefaultSummarizationPrompts().TitleSystemPrompt
@@ -1336,6 +1340,13 @@ func (ss *SessionScheduler) generateTitle(ctx context.Context, conversationText 
 		}
 	}
 	return title, nil
+}
+
+func sessionTitleOf(session *model.Session) string {
+	if session == nil {
+		return ""
+	}
+	return session.Title
 }
 
 // getMessageContentString returns the text content of a chat message as a trimmed string.

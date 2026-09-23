@@ -113,20 +113,32 @@ type MissingTitlePlan struct {
 	Existing          string
 }
 
+// TitleRequestAllowed is the only permission to send a title-generation request.
+// The request is refused when the session already has a name, when the
+// conversation already has a name, or when there is no conversation to name.
+func TitleRequestAllowed(sessionTitle string, conversation *Conversation) bool {
+	if conversation == nil || conversation.HasChosenTitle() || !UnsetTitle(sessionTitle) {
+		return false
+	}
+	return true
+}
+
 // PlanMissingTitles chooses a conversation name at most once.
 // A conversation that already has a name is never regenerated or replaced.
 // The model is called only when that conversation exists and still has no
 // name, and the linked session cannot supply one. A missing conversation row
 // is not a reason to invent a title.
 func PlanMissingTitles(sessionTitle string, conversation *Conversation) MissingTitlePlan {
-	if conversation == nil || conversation.HasChosenTitle() {
-		if conversation != nil && conversation.HasChosenTitle() && UnsetTitle(sessionTitle) && !UnsetTitle(conversation.Title) {
-			return MissingTitlePlan{WriteSession: true, Existing: strings.TrimSpace(conversation.Title)}
+	if conversation != nil && conversation.HasChosenTitle() && UnsetTitle(sessionTitle) && !UnsetTitle(conversation.Title) {
+		return MissingTitlePlan{WriteSession: true, Existing: strings.TrimSpace(conversation.Title)}
+	}
+	if !TitleRequestAllowed(sessionTitle, conversation) {
+		if conversation != nil && !conversation.HasChosenTitle() {
+			if title := strings.TrimSpace(sessionTitle); !UnsetTitle(title) {
+				return MissingTitlePlan{WriteConversation: true, Existing: title}
+			}
 		}
 		return MissingTitlePlan{}
-	}
-	if title := strings.TrimSpace(sessionTitle); !UnsetTitle(title) {
-		return MissingTitlePlan{WriteConversation: true, Existing: title}
 	}
 	return MissingTitlePlan{
 		Generate:          true,

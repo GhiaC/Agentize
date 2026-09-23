@@ -123,6 +123,20 @@ func TestPlanMissingTitlesLeavesTitlesThatAreAlreadySet(t *testing.T) {
 	if session.Title != "ETH funding review" || syncTitle != "" || applied != "" {
 		t.Fatalf("wiped session title caused another conversation name: session=%q sync=%q applied=%q", session.Title, syncTitle, applied)
 	}
+
+	for _, title := range []string{"TTTTTTTTT", "Not Change", "Title: Momentum Scan Enhancements"} {
+		if TitleRequestAllowed(title, nil) {
+			t.Fatalf("named session %q must not request a title without a conversation", title)
+		}
+		untitled := NewConversation("u", "6", "6", "New market conversation", "", 6)
+		if TitleRequestAllowed(title, untitled) {
+			t.Fatalf("named session %q must not request a title", title)
+		}
+		named := NewConversation("u", "7", "7", title, "", 7)
+		if TitleRequestAllowed("", named) || TitleRequestAllowed("New market conversation", named) {
+			t.Fatalf("named conversation %q must not request a title", title)
+		}
+	}
 }
 
 func TestGenerateConversationID(t *testing.T) {

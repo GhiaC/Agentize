@@ -65,10 +65,7 @@ func ToolCallTableRow(tc *debuger.ToolCallInfo, config ToolCallRowConfig, rowInd
 	resultPreview := TruncatedText(tc.Result, 80)
 
 	// Display name: label for dashboard (e.g. "Execute plan") or function name when no label
-	displayName := tc.DisplayLabel
-	if displayName == "" {
-		displayName = tc.FunctionName
-	}
+	displayName := model.ToolActivityLabel(tc.DisplayLabel, tc.FunctionName, tc.Arguments)
 
 	// Format time as "ago"
 	timeAgo := debuger.FormatTimeAgo(tc.CreatedAt)

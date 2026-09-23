@@ -141,10 +141,7 @@ func RenderUserToolCallDetail(handler *debuger.DebugHandler, userID, sessionID, 
 	content := ui.ContainerStart()
 
 	// Breadcrumb: use display label when set for clearer distinction
-	breadcrumbLabel := tc.DisplayLabel
-	if breadcrumbLabel == "" {
-		breadcrumbLabel = tc.FunctionName
-	}
+	breadcrumbLabel := model.ToolActivityLabel(tc.DisplayLabel, tc.FunctionName, tc.Arguments)
 	content += components.Breadcrumb([]components.BreadcrumbItem{
 		{Label: "Dashboard", URL: "/agentize/debug"},
 		{Label: "Tool Calls", URL: "/agentize/debug/tool-calls"},
@@ -161,14 +158,10 @@ func RenderUserToolCallDetail(handler *debuger.DebugHandler, userID, sessionID, 
 	// Left column - Basic Info
 	content += `<div class="col-md-6">`
 	content += `<table class="table table-sm">`
-	displayName := tc.DisplayLabel
-	if displayName == "" {
-		displayName = tc.FunctionName
-	}
 	content += fmt.Sprintf(`<tr><th class="w-25">Tool ID</th><td>%s</td></tr>`, components.EntityID(tc.ToolID))
 	content += fmt.Sprintf(`<tr><th>Tool Call ID</th><td>%s</td></tr>`, components.EntityID(tc.ToolCallID))
 	content += fmt.Sprintf(`<tr><th>Function</th><td>%s</td></tr>`, components.InlineCode(tc.FunctionName))
-	content += fmt.Sprintf(`<tr><th>Label</th><td>%s</td></tr>`, template.HTMLEscapeString(displayName))
+	content += fmt.Sprintf(`<tr><th>Label</th><td>%s</td></tr>`, template.HTMLEscapeString(breadcrumbLabel))
 	content += fmt.Sprintf(`<tr><th>Agent Type</th><td>%s</td></tr>`, agentBadge)
 	content += fmt.Sprintf(`<tr><th>Duration</th><td>%s</td></tr>`, debuger.FormatDurationMs(tc.DurationMs))
 	content += fmt.Sprintf(`<tr><th>Status</th><td>%s</td></tr>`, tc.Status)

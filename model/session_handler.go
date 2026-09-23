@@ -792,8 +792,8 @@ func (sh *SessionHandler) fillMissingSessionTitle(ctx context.Context, session *
 	conversation := conversationForSession(sh.store, session.UserID, session.SessionID)
 	plan := PlanMissingTitles(session.Title, conversation)
 	generated := ""
-	if plan.Generate {
-		title, err := sh.generateSessionTitle(ctx, conversationText)
+	if plan.Generate && TitleRequestAllowed(session.Title, conversation) {
+		title, err := sh.generateSessionTitle(ctx, session, conversation, conversationText)
 		if err == nil {
 			generated = strings.TrimSpace(title)
 		}
@@ -821,8 +821,16 @@ func (sh *SessionHandler) keepStoredSessionTitle(session *Session) {
 	KeepStoredSessionTitle(session, fresh)
 }
 
-// generateSessionTitle uses LLM to generate a title for the session
-func (sh *SessionHandler) generateSessionTitle(ctx context.Context, conversationText string) (string, error) {
+// generateSessionTitle uses LLM to generate a title for the session.
+// A session or conversation that already has a name never reaches the model.
+func (sh *SessionHandler) generateSessionTitle(ctx context.Context, session *Session, conversation *Conversation, conversationText string) (string, error) {
+	sessionTitle := ""
+	if session != nil {
+		sessionTitle = session.Title
+	}
+	if !TitleRequestAllowed(sessionTitle, conversation) {
+		return "", nil
+	}
 	systemPrompt := `Generate a short title (3-5 words) for this conversation.
 The title should capture the main topic or purpose.
 Return only the title, no quotes or extra text.

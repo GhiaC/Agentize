@@ -2011,12 +2011,11 @@ func (e *Engine) executeTool(
 
 	log.Log.Infof("[Engine] 🔧 executeTool | Function=%s | SessionID=%s", toolCall.Function.Name, sessionID)
 
-	toolDetail := toolCall.Function.Name
+	displayName := ""
 	if e.Functions != nil {
-		if d := e.Functions.GetDisplayName(toolCall.Function.Name); d != "" {
-			toolDetail = d
-		}
+		displayName = e.Functions.GetDisplayName(toolCall.Function.Name)
 	}
+	toolDetail := model.ToolActivityLabel(displayName, toolCall.Function.Name, toolCall.Function.Arguments)
 
 	// Save tool call to DB
 	persister := NewToolCallPersister(e.Sessions, "Engine")

@@ -186,15 +186,10 @@ func (ch *CoreHandler) executeCoreToolWithError(
 	requireApproval bool,
 ) (string, error) {
 	persister := ch.getToolCallPersister()
+	toolDetail := model.ToolActivityLabel(ch.coreTools.GetDisplayName(toolCall.Function.Name), toolCall.Function.Name, toolCall.Function.Arguments)
 	var toolID string
 	if coreSession != nil {
-		displayLabel := ch.coreTools.GetDisplayName(toolCall.Function.Name)
-		toolID = persister.SaveWithAgentTypeForTurn(coreSession, messageID, engine.UserMessageIDFrom(ctx), toolCall, model.AgentTypeCore, displayLabel)
-	}
-
-	toolDetail := ch.coreTools.GetDisplayName(toolCall.Function.Name)
-	if toolDetail == "" {
-		toolDetail = toolCall.Function.Name
+		toolID = persister.SaveWithAgentTypeForTurn(coreSession, messageID, engine.UserMessageIDFrom(ctx), toolCall, model.AgentTypeCore, toolDetail)
 	}
 	if ch.Callback != nil {
 		if cbErr := ch.Callback.BeforeAction(ctx, &engine.UsageEvent{
@@ -785,26 +780,26 @@ func (ch *CoreHandler) registerCoreTools() {
 		ch.coreTools.MustRegister(toolName, agent.Config.DisplayName, coreToolNoOp)
 	}
 
-		ch.coreTools.MustRegister("update_status", "Update status", coreToolNoOp)
-		ch.coreTools.MustRegister("create_session", "Create session", coreToolNoOp)
-		ch.coreTools.MustRegister("change_session", "Switch session", coreToolNoOp)
-		ch.coreTools.MustRegister("list_sessions", "List sessions", coreToolNoOp)
-		ch.coreTools.MustRegister("list_conversations", "List chats", coreToolNoOp)
-		ch.coreTools.MustRegister("get_conversation", "Chat details", coreToolNoOp)
-		ch.coreTools.MustRegister("create_conversation", "Create chat", coreToolNoOp)
-		ch.coreTools.MustRegister("select_conversation", "Select chat", coreToolNoOp)
-		ch.coreTools.MustRegister("send_conversation", "Send to chat", coreToolNoOp)
-		ch.coreTools.MustRegister("rename_conversation", "Rename chat", coreToolNoOp)
-		ch.coreTools.MustRegister("set_conversation_model", "Set chat model", coreToolNoOp)
-		ch.coreTools.MustRegister("archive_conversation", "Archive chat", coreToolNoOp)
-		ch.coreTools.MustRegister("delete_conversation", "Delete chat", coreToolNoOp)
-		ch.coreTools.MustRegister("ban_user", "Ban user", coreToolNoOp)
-		ch.coreTools.MustRegister("sleep", "Sleep", coreToolNoOp)
-		ch.coreTools.MustRegister("web_search", "Web search", coreToolNoOp)
-		ch.coreTools.MustRegister("web_search_deepresearch", "Deep web search", coreToolNoOp)
-		ch.coreTools.MustRegister("execute_workflow", "Run workflow", coreToolNoOp)
-		ch.coreTools.MustRegister("get_workflow_status", "Workflow status", coreToolNoOp)
-		ch.coreTools.MustRegister("create_workflow_schedule", "Schedule workflow", coreToolNoOp)
+	ch.coreTools.MustRegister("update_status", "Update status", coreToolNoOp)
+	ch.coreTools.MustRegister("create_session", "Create session", coreToolNoOp)
+	ch.coreTools.MustRegister("change_session", "Switch session", coreToolNoOp)
+	ch.coreTools.MustRegister("list_sessions", "List sessions", coreToolNoOp)
+	ch.coreTools.MustRegister("list_conversations", "List chats", coreToolNoOp)
+	ch.coreTools.MustRegister("get_conversation", "Chat details", coreToolNoOp)
+	ch.coreTools.MustRegister("create_conversation", "Create chat", coreToolNoOp)
+	ch.coreTools.MustRegister("select_conversation", "Select chat", coreToolNoOp)
+	ch.coreTools.MustRegister("send_conversation", "Send to chat", coreToolNoOp)
+	ch.coreTools.MustRegister("rename_conversation", "Rename chat", coreToolNoOp)
+	ch.coreTools.MustRegister("set_conversation_model", "Set chat model", coreToolNoOp)
+	ch.coreTools.MustRegister("archive_conversation", "Archive chat", coreToolNoOp)
+	ch.coreTools.MustRegister("delete_conversation", "Delete chat", coreToolNoOp)
+	ch.coreTools.MustRegister("ban_user", "Ban user", coreToolNoOp)
+	ch.coreTools.MustRegister("sleep", "Sleep", coreToolNoOp)
+	ch.coreTools.MustRegister("web_search", "Web search", coreToolNoOp)
+	ch.coreTools.MustRegister("web_search_deepresearch", "Deep web search", coreToolNoOp)
+	ch.coreTools.MustRegister("execute_workflow", "Run workflow", coreToolNoOp)
+	ch.coreTools.MustRegister("get_workflow_status", "Workflow status", coreToolNoOp)
+	ch.coreTools.MustRegister("create_workflow_schedule", "Schedule workflow", coreToolNoOp)
 }
 
 // saveCoreMessage saves a message from CoreHandler to the database.

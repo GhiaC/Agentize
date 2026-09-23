@@ -240,6 +240,63 @@ func TestSummarizeSessionFillsOnlyUntitledConversation(t *testing.T) {
 	}
 }
 
+func TestSummarizeNamedCoreSessionDoesNotRequestTitle(t *testing.T) {
+	for _, title := range []string{"TTTTTTTTT", "Not Change", "Title: Momentum Scan Enhancements"} {
+		t.Run(title, func(t *testing.T) {
+			var bodies []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request openai.ChatCompletionRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				raw, _ := json.Marshal(request.Messages)
+				bodies = append(bodies, string(raw))
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"test","model":"summary-test","choices":[{"message":{"role":"assistant","content":"[\"fact\"]"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`)
+			}))
+			t.Cleanup(server.Close)
+
+			st, err := store.NewSQLiteStore(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			session := model.NewSessionWithID("u1", "62", model.AgentTypeCore)
+			session.Title = title
+			session.Summary = model.SummaryEntries{"old fact"}
+			session.Msgs = []openai.ChatCompletionMessage{
+				{Role: openai.ChatMessageRoleUser, Content: "scan open interest"},
+			}
+			if err := st.Put(session); err != nil {
+				t.Fatal(err)
+			}
+			config := openai.DefaultConfig("test")
+			config.BaseURL = server.URL
+			handler := model.NewSessionHandler(st, model.DefaultSessionHandlerConfig())
+			schedulerConfig := DefaultSessionSchedulerConfig()
+			schedulerConfig.SummaryModel = "summary-test"
+			schedulerConfig.RetainRecentMessages = 1
+			schedulerConfig.DisableLogs = true
+			scheduler := NewSessionScheduler(handler, openai.NewClientWithConfig(config), schedulerConfig)
+			if err := scheduler.summarizeSession(context.Background(), session); err != nil {
+				t.Fatal(err)
+			}
+			for _, body := range bodies {
+				if strings.Contains(body, "Generate a title") {
+					t.Fatalf("title request was sent for session title %q", title)
+				}
+			}
+			got, err := st.GetUserSession("u1", "62")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Title != title {
+				t.Fatalf("session title changed from %q to %q", title, got.Title)
+			}
+		})
+	}
+}
+
 func TestSummarizeSessionDoesNotReplaceTitleOnLaterPass(t *testing.T) {
 	got, linked, calls := summarizeSessionWithTitle(t, "New market conversation", "New market conversation", false, 2, []string{
 		`["old fact","new decision"]`, "bitcoin,new-topic", `{"summary":["prefers market plans"],"tags":["planner"]}`, "Updated Market Plan",
