@@ -718,22 +718,7 @@ func (e *Engine) ProcessIncoming(
 	msg IncomingMessage,
 ) (string, int, error) {
 	e.ensureSessionProgress()
-	key := e.sessionKey(ctx, sessionID)
-	queued := e.sessionProgress.TryQueueMessage(key, QueuedMessage{Content: msg.Content, Metadata: msg.Metadata}, msg.queueClass())
-	if queued {
-		if msg.queueClass() == QueueDeferred {
-			metrics.MessageQueued("agent_deferred")
-		} else {
-			metrics.MessageQueued("agent")
-		}
-		return queuedAckMessage, 0, nil
-	}
-
-	sessionMu := e.getSessionMutex(key)
-	sessionMu.Lock()
-	defer sessionMu.Unlock()
-
-	return e.processMessageLocked(ctx, key, sessionID, msg)
+	return e.admitAndRun(ctx, sessionID, msg)
 }
 
 // ProcessDeferredMessage queues an alert/schedule until the current turn and
@@ -761,7 +746,10 @@ func (e *Engine) ProcessMessageWithGeneratedFiles(
 ) (string, int, []*model.UserFile, error) {
 	e.ensureSessionProgress()
 	key := e.sessionKey(ctx, sessionID)
-	if e.sessionProgress.TryQueueMessage(key, QueuedMessage{Content: userMessage}, QueueUser) {
+	if queued, rejected := e.sessionProgress.TryQueueMessage(key, QueuedMessage{Content: userMessage}, QueueUser); rejected {
+		metrics.SessionAdmission("rejected")
+		return "", 0, nil, store.ErrSessionQueueFull
+	} else if queued {
 		metrics.MessageQueued("agent")
 		return queuedAckMessage, 0, nil, nil
 	}
@@ -1257,8 +1245,20 @@ func (e *Engine) removeFunctionCalls(ctx context.Context, sessionID string) erro
 	if err != nil {
 		return err
 	}
+	lastUser := -1
+	for i, msg := range session.Msgs {
+		if msg.Role == openai.ChatMessageRoleUser {
+			lastUser = i
+		}
+	}
 	msgs := []openai.ChatCompletionMessage{}
-	for _, msg := range session.Msgs {
+	for i, msg := range session.Msgs {
+		// The latest turn is the resume checkpoint. Dropping its tool calls
+		// would force the next retry to start over.
+		if lastUser >= 0 && i >= lastUser {
+			msgs = append(msgs, msg)
+			continue
+		}
 		if msg.ToolCallID != "" || len(msg.ToolCalls) > 0 || msg.FunctionCall != nil {
 			continue
 		}
@@ -1715,9 +1715,7 @@ func (e *Engine) processChatRequest(
 	var pendingImages []openai.ChatCompletionMessage
 
 	for i := 0; i < maxIterations; i++ {
-		if queue != QueueDeferred {
-			localMsgs = e.absorbQueuedUserMessages(ctx, session, localMsgs)
-		}
+		// Follow-ups stay in the durable FIFO. They are not injected into this turn.
 
 		// Build request messages: system prompts + local messages + open images
 		reqMessages := make([]openai.ChatCompletionMessage, 0, len(systemPrompts)+len(localMsgs)+len(pendingImages))
@@ -2017,10 +2015,19 @@ func (e *Engine) executeTool(
 	}
 	toolDetail := model.ToolActivityLabel(displayName, toolCall.Function.Name, toolCall.Function.Arguments)
 
-	// Save tool call to DB
+	if admitted, ok := admittedRunFrom(ctx); ok && e.Sessions != nil {
+		_ = e.Sessions.HeartbeatSessionRun(admitted.UserID, admitted.Run.SessionID, admitted.Run.RunID, "engine", admitted.Run.Fence)
+	}
+	// Save tool call to DB. A resume reuses the existing row so a retry does not
+	// insert a second tool call or drop the failed one.
 	persister := NewToolCallPersister(e.Sessions, "Engine")
 	toolID := ""
-	if persister != nil {
+	if replay, ok := toolReplayFrom(ctx); ok {
+		toolID = replay.ToolID
+		if replay.MessageID != "" {
+			messageID = replay.MessageID
+		}
+	} else if persister != nil {
 		toolID = persister.SaveForTurn(session, messageID, UserMessageIDFrom(ctx), toolCall, toolDetail)
 	}
 

@@ -45,10 +45,15 @@ func TestProgressGuard_QueueCapEnforced(t *testing.T) {
 	pg := NewProgressGuard()
 	pg.SetInProgress("u1", true)
 
-	over := maxQueuedPerKey + 5
-	for i := 0; i < over; i++ {
+	for i := 0; i < maxQueuedPerKey; i++ {
 		if !pg.TryQueue("u1", fmt.Sprintf("msg%d", i)) {
-			t.Fatalf("TryQueue should stay true while in-progress (msg %d)", i)
+			t.Fatalf("TryQueue should accept msg %d", i)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		queued, rejected := pg.TryQueueMessage("u1", QueuedMessage{Content: fmt.Sprintf("extra%d", i)}, QueueUser)
+		if queued || !rejected {
+			t.Fatalf("full queue must reject without accepting, queued=%v rejected=%v", queued, rejected)
 		}
 	}
 
@@ -86,7 +91,7 @@ func TestProgressGuard_DeferredWaitsSeparateFromUser(t *testing.T) {
 	if !pg.TryQueue("s1", "user-1") {
 		t.Fatal("user follow-up should queue")
 	}
-	if !pg.TryQueueMessage("s1", QueuedMessage{Content: "alert-1", Metadata: map[string]any{"kind": "alert"}}, QueueDeferred) {
+	if queued, rejected := pg.TryQueueMessage("s1", QueuedMessage{Content: "alert-1", Metadata: map[string]any{"kind": "alert"}}, QueueDeferred); !queued || rejected {
 		t.Fatal("alert should queue as deferred")
 	}
 	if !pg.TryQueueDeferred("s1", "schedule-1") {

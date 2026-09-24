@@ -45,3 +45,9 @@ browseruse/sidecar/.env
 !/docs/context-architecture.md
 .cursor/rules/postgres-first.mdc
 AGENTS.md
+.codegraph/codegraph.db
+.codegraph/codegraph.db-shm
+.codegraph/codegraph.db-wal
+.codegraph/daemon.log
+.codegraph/daemon.pid
+.codegraph/errors.log

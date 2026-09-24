@@ -38,7 +38,10 @@ func (ch *CoreHandler) ProcessMessageWithImage(
 	imageData []byte,
 	imageMimeType string,
 ) (string, error) {
-	if ch.userProgress.TryQueue(userID, userMessage) {
+	if queued, rejected := ch.userProgress.TryQueueMessage(userID, engine.QueuedMessage{Content: userMessage}, engine.QueueUser); rejected {
+		metrics.SessionAdmission("rejected")
+		return "", engine.ErrSessionQueueFull
+	} else if queued {
 		return "⏳ Processing previous request... Please wait. 📋 Your message was queued and will be answered in order.", nil
 	}
 	userMu := ch.getUserMutex(userID)

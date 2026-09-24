@@ -688,6 +688,30 @@ func (s *DBStore) UpdateMessageToolCallResponse(userID, sessionID, messageID, to
 	return s.sqliteStore.UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID, response, execErr)
 }
 
+func (s *DBStore) AdmitSessionRun(in model.SessionRunInput) (model.SessionAdmitResult, error) {
+	return s.sqliteStore.AdmitSessionRun(in)
+}
+
+func (s *DBStore) ClaimHeadSessionRun(userID, sessionID, workerID string) (*model.SessionRun, error) {
+	return s.sqliteStore.ClaimHeadSessionRun(userID, sessionID, workerID)
+}
+
+func (s *DBStore) HeartbeatSessionRun(userID, sessionID, runID, workerID string, fence int64) error {
+	return s.sqliteStore.HeartbeatSessionRun(userID, sessionID, runID, workerID, fence)
+}
+
+func (s *DBStore) FinalizeSessionRun(userID, sessionID, runID string, fence int64, status, errText string) error {
+	return s.sqliteStore.FinalizeSessionRun(userID, sessionID, runID, fence, status, errText)
+}
+
+func (s *DBStore) SnapshotSessionExecution(userID, sessionID string) (model.SessionExecutionSnapshot, error) {
+	return s.sqliteStore.SnapshotSessionExecution(userID, sessionID)
+}
+
+func (s *DBStore) GetSessionRun(userID, sessionID, runID string) (*model.SessionRun, error) {
+	return s.sqliteStore.GetSessionRun(userID, sessionID, runID)
+}
+
 // DeleteUserData deletes all Agentize data for a user (delegates to SQLiteStore
 // and clears caches plus in-memory visited nodes)
 func (s *DBStore) DeleteUserData(userID string) error {

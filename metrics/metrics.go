@@ -105,6 +105,33 @@ func MessageDone(layer, status string, dur time.Duration) {
 // MessageQueued records a queued (deferred) message.
 func MessageQueued(layer string) { messagesQueued.WithLabelValues(layer).Inc() }
 
+var (
+	sessionAdmissions = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "session", Name: "admissions_total",
+		Help: "Durable session admissions by result: accepted, duplicate, rejected, error.",
+	}, []string{"result"})
+	sessionClaimConflicts = factory.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "session", Name: "claim_conflicts_total",
+		Help: "Session claim results: held, expired, claimed.",
+	}, []string{"result"})
+)
+
+// SessionAdmission records one durable admission result. It does not include message content.
+func SessionAdmission(result string) {
+	if result == "" {
+		result = "error"
+	}
+	sessionAdmissions.WithLabelValues(result).Inc()
+}
+
+// SessionClaim records a head-of-line claim result.
+func SessionClaim(result string) {
+	if result == "" {
+		result = "error"
+	}
+	sessionClaimConflicts.WithLabelValues(result).Inc()
+}
+
 // ---------------------------------------------------------------------------
 // LLM calls
 // ---------------------------------------------------------------------------

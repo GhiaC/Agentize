@@ -565,6 +565,27 @@ CREATE TABLE IF NOT EXISTS conversations (
  conversation_seq BIGINT NOT NULL DEFAULT 0, title TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
  archived BIGINT NOT NULL DEFAULT 0, data JSONB NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS session_execution (
+ user_id TEXT NOT NULL, session_id TEXT NOT NULL, next_admission_seq BIGINT NOT NULL DEFAULT 1,
+ active_run_id TEXT NOT NULL DEFAULT '', revision BIGINT NOT NULL DEFAULT 0, lease_owner TEXT NOT NULL DEFAULT '',
+ lease_expires BIGINT NOT NULL DEFAULT 0, fence BIGINT NOT NULL DEFAULT 0,
+ PRIMARY KEY (user_id, session_id));
+
+CREATE TABLE IF NOT EXISTS session_runs (
+ run_id TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, admission_seq BIGINT NOT NULL,
+ origin_kind TEXT NOT NULL DEFAULT '', idempotency_key TEXT NOT NULL DEFAULT '', content TEXT NOT NULL,
+ status TEXT NOT NULL, phase TEXT NOT NULL DEFAULT '', version BIGINT NOT NULL DEFAULT 1, fence BIGINT NOT NULL DEFAULT 0,
+ attempts BIGINT NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
+ PRIMARY KEY (user_id, session_id, run_id));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_runs_admission ON session_runs(user_id, session_id, admission_seq);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_runs_idempotency ON session_runs(user_id, session_id, idempotency_key) WHERE idempotency_key <> '';
+CREATE INDEX IF NOT EXISTS idx_session_runs_status ON session_runs(user_id, session_id, status, admission_seq);
+
+CREATE TABLE IF NOT EXISTS session_run_events (
+ event_id TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, run_id TEXT NOT NULL,
+ event_seq BIGINT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL,
+ PRIMARY KEY (user_id, session_id, event_id));
 `
 
 // postgreSQLNumericIDKeys switches scoped entities from globally-unique string

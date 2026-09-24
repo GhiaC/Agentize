@@ -487,6 +487,52 @@ var sqliteMigrations = []sqliteMigration{
 	}},
 	{17, "composite keys so numeric ids are unique per user/session/message", applySQLiteScopedKeys},
 	{18, "task_schedule_runs.user_id so numeric schedule ids stay per owner", applySQLiteTaskScheduleRunUserIDs},
+	{19, "durable session execution queue", func(tx *sql.Tx) error {
+		return execAll(tx, `
+		CREATE TABLE IF NOT EXISTS session_execution (
+			user_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			next_admission_seq INTEGER NOT NULL DEFAULT 1,
+			active_run_id TEXT NOT NULL DEFAULT '',
+			revision INTEGER NOT NULL DEFAULT 0,
+			lease_owner TEXT NOT NULL DEFAULT '',
+			lease_expires INTEGER NOT NULL DEFAULT 0,
+			fence INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (user_id, session_id)
+		)`, `
+		CREATE TABLE IF NOT EXISTS session_runs (
+			run_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			admission_seq INTEGER NOT NULL,
+			origin_kind TEXT NOT NULL DEFAULT '',
+			idempotency_key TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			status TEXT NOT NULL,
+			phase TEXT NOT NULL DEFAULT '',
+			version INTEGER NOT NULL DEFAULT 1,
+			fence INTEGER NOT NULL DEFAULT 0,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			error TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (user_id, session_id, run_id)
+		)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_session_runs_admission ON session_runs(user_id, session_id, admission_seq)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_session_runs_idempotency ON session_runs(user_id, session_id, idempotency_key) WHERE idempotency_key <> ''`,
+			`CREATE INDEX IF NOT EXISTS idx_session_runs_status ON session_runs(user_id, session_id, status, admission_seq)`, `
+		CREATE TABLE IF NOT EXISTS session_run_events (
+			event_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			event_seq INTEGER NOT NULL,
+			event_type TEXT NOT NULL,
+			payload TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (user_id, session_id, event_id)
+		)`)
+	}},
 }
 
 // runMigrations applies every migration newer than the recorded schema version.

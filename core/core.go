@@ -323,7 +323,10 @@ func (ch *CoreHandler) ProcessMessageWithGeneratedFiles(
 	userID string,
 	userMessage string,
 ) (string, []*model.UserFile, error) {
-	if ch.userProgress.TryQueue(userID, userMessage) {
+	if queued, rejected := ch.userProgress.TryQueueMessage(userID, engine.QueuedMessage{Content: userMessage}, engine.QueueUser); rejected {
+		metrics.SessionAdmission("rejected")
+		return "", nil, engine.ErrSessionQueueFull
+	} else if queued {
 		metrics.MessageQueued("core")
 		return "⏳ Processing previous request... Please wait. 📋 Your message was queued and will be answered in order.", nil, nil
 	}
@@ -359,7 +362,10 @@ func (ch *CoreHandler) ProcessMessageWithContentType(
 	userMessage string,
 	contentType model.ContentType,
 ) (string, error) {
-	if ch.userProgress.TryQueue(userID, userMessage) {
+	if queued, rejected := ch.userProgress.TryQueueMessage(userID, engine.QueuedMessage{Content: userMessage}, engine.QueueUser); rejected {
+		metrics.SessionAdmission("rejected")
+		return "", engine.ErrSessionQueueFull
+	} else if queued {
 		metrics.MessageQueued("core")
 		return "⏳ Processing previous request... Please wait. 📋 Your message was queued and will be answered in order.", nil
 	}

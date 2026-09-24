@@ -37,40 +37,39 @@ func NewProgressGuard() *ProgressGuard {
 // TryQueue queues a user follow-up and returns true if the key is already in
 // progress. Returns false if the key is idle (caller should process now).
 func (p *ProgressGuard) TryQueue(key, message string) (queued bool) {
-	return p.TryQueueMessage(key, QueuedMessage{Content: message}, QueueUser)
+	queued, _ = p.TryQueueMessage(key, QueuedMessage{Content: message}, QueueUser)
+	return queued
 }
 
 // TryQueueDeferred queues an alert/schedule message while the key is busy.
 func (p *ProgressGuard) TryQueueDeferred(key, message string) (queued bool) {
-	return p.TryQueueMessage(key, QueuedMessage{Content: message}, QueueDeferred)
+	queued, _ = p.TryQueueMessage(key, QueuedMessage{Content: message}, QueueDeferred)
+	return queued
 }
 
 // TryQueueMessage queues IncomingMessage-shaped content onto the user or
-// deferred queue. Returns true when the key is already in progress.
-func (p *ProgressGuard) TryQueueMessage(key string, message QueuedMessage, class QueueClass) (queued bool) {
-	p.mu.RLock()
-	s := p.state[key]
-	inProg := s != nil && s.InProgress
-	p.mu.RUnlock()
-	if !inProg {
-		return false
-	}
+// deferred queue. queued is true when the message was stored. rejected is true
+// when the key is busy and the queue is already at capacity; nothing is stored.
+func (p *ProgressGuard) TryQueueMessage(key string, message QueuedMessage, class QueueClass) (queued, rejected bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.state[key] == nil {
-		p.state[key] = &progressState{}
+	s := p.state[key]
+	if s == nil || !s.InProgress {
+		return false, false
 	}
 	message.Metadata = cloneIncomingMeta(message.Metadata)
 	if class == QueueDeferred {
-		if len(p.state[key].Deferred) < maxQueuedPerKey {
-			p.state[key].Deferred = append(p.state[key].Deferred, message)
+		if len(s.Deferred) >= maxQueuedPerKey {
+			return false, true
 		}
-		return true
+		s.Deferred = append(s.Deferred, message)
+		return true, false
 	}
-	if len(p.state[key].Queue) < maxQueuedPerKey {
-		p.state[key].Queue = append(p.state[key].Queue, message)
+	if len(s.Queue) >= maxQueuedPerKey {
+		return false, true
 	}
-	return true
+	s.Queue = append(s.Queue, message)
+	return true, false
 }
 
 // SetInProgress sets the in-progress flag for the key. Call when starting/ending

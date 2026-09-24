@@ -163,6 +163,24 @@ type Store interface {
 	// GetUserWorkflowRun looks up a workflow owned by userID.
 	GetUserWorkflowRun(userID, workflowID string) (*model.WorkflowRun, error)
 
+	// --- Durable session admission (FIFO per owner+session) ---
+
+	// AdmitSessionRun persists one input before execution. A repeated idempotency
+	// key returns the existing run. A full queue returns ErrSessionQueueFull and
+	// stores nothing.
+	AdmitSessionRun(in model.SessionRunInput) (model.SessionAdmitResult, error)
+	// ClaimHeadSessionRun claims the earliest queued run. An unexpired lease
+	// returns (nil, nil). An expired lease is marked interrupted, never succeeded.
+	ClaimHeadSessionRun(userID, sessionID, workerID string) (*model.SessionRun, error)
+	// HeartbeatSessionRun extends the lease. A stale fence returns ErrSessionRunFence.
+	HeartbeatSessionRun(userID, sessionID, runID, workerID string, fence int64) error
+	// FinalizeSessionRun commits a terminal status only for the current fence.
+	FinalizeSessionRun(userID, sessionID, runID string, fence int64, status, errText string) error
+	// SnapshotSessionExecution reads the session projection from run rows.
+	SnapshotSessionExecution(userID, sessionID string) (model.SessionExecutionSnapshot, error)
+	// GetSessionRun returns one admitted run, or (nil, nil) when it does not exist.
+	GetSessionRun(userID, sessionID, runID string) (*model.SessionRun, error)
+
 	// --- Visited-node tracking (user-scoped, in-memory, not persisted) ---
 
 	AddVisitedNode(userID string, nodeDigest *model.NodeDigest)

@@ -832,6 +832,12 @@ func (ag *Agentize) ProcessConversation(ctx context.Context, userID, conversatio
 	return ag.engine.ProcessConversation(ctx, userID, conversationID, message)
 }
 
+// ResumeConversation continues an unfinished turn from the last failed tool
+// call or incomplete DAG. Existing messages and tool-call rows are kept.
+func (ag *Agentize) ResumeConversation(ctx context.Context, userID, conversationID string) (string, int, error) {
+	return ag.engine.ResumeConversation(ctx, userID, conversationID)
+}
+
 // ProcessConversationDeferred delivers an alert or schedule. If the conversation
 // is already running a turn, the message waits until that turn and every tool
 // call finish. User follow-ups still use ProcessConversation and can be

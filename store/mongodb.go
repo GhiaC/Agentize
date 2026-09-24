@@ -49,6 +49,9 @@ type MongoDBStore struct {
 
 	opTimeout time.Duration
 	quotas    Quotas
+
+	// admission is process-local FIFO state. Durable admission lives on PostgreSQL and SQLite.
+	admission *admissionMem
 }
 
 // MongoDBStoreConfig holds configuration for MongoDBStore
@@ -3032,6 +3035,34 @@ func (s *MongoDBStore) ListWorkflowRuns(userID string, limit int) ([]*model.Work
 		workflows = append(workflows, workflow)
 	}
 	return workflows, cursor.Err()
+}
+
+func (s *MongoDBStore) admitBook() *admissionMem {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.admission == nil {
+		s.admission = newAdmissionMem()
+	}
+	return s.admission
+}
+
+func (s *MongoDBStore) AdmitSessionRun(in model.SessionRunInput) (model.SessionAdmitResult, error) {
+	return s.admitBook().AdmitSessionRun(in)
+}
+func (s *MongoDBStore) ClaimHeadSessionRun(userID, sessionID, workerID string) (*model.SessionRun, error) {
+	return s.admitBook().ClaimHeadSessionRun(userID, sessionID, workerID)
+}
+func (s *MongoDBStore) HeartbeatSessionRun(userID, sessionID, runID, workerID string, fence int64) error {
+	return s.admitBook().HeartbeatSessionRun(userID, sessionID, runID, workerID, fence)
+}
+func (s *MongoDBStore) FinalizeSessionRun(userID, sessionID, runID string, fence int64, status, errText string) error {
+	return s.admitBook().FinalizeSessionRun(userID, sessionID, runID, fence, status, errText)
+}
+func (s *MongoDBStore) SnapshotSessionExecution(userID, sessionID string) (model.SessionExecutionSnapshot, error) {
+	return s.admitBook().SnapshotSessionExecution(userID, sessionID)
+}
+func (s *MongoDBStore) GetSessionRun(userID, sessionID, runID string) (*model.SessionRun, error) {
+	return s.admitBook().GetSessionRun(userID, sessionID, runID)
 }
 
 // Ensure MongoDBStore implements model.SessionStore and debuger.DebugStore
