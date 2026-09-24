@@ -387,15 +387,7 @@ func (s *TaskScheduler) dispatchDue(ctx context.Context) {
 		_, busy := s.inFlight[model.ScopeKey(schedule.UserID, schedule.ScheduleID)]
 		s.mu.Unlock()
 		if schedule.LastRunStatus == model.TaskRunRunning && !busy {
-			if schedule.NextRunAt.After(now) {
-				s.reconcileOrphanedRunning(schedule, now)
-				continue
-			}
-			if !s.accepts(schedule) {
-				s.reconcileOrphanedRunning(schedule, now)
-				continue
-			}
-			s.startRun(ctx, schedule)
+			s.reconcileOrphanedRunning(schedule, now)
 			continue
 		}
 		if schedule.NextRunAt.After(now) {
@@ -433,9 +425,32 @@ func (s *TaskScheduler) reconcileOrphanedRunning(schedule *model.TaskSchedule, n
 		metrics.TaskSchedulePersistError("reload")
 		return
 	}
+	s.closeOpenScheduleRuns(current, now, current.LastError)
 	log.Log.Warnf("[TaskScheduler] reconciled orphaned running schedule %s user=%s", current.ScheduleID, current.UserID)
 	metrics.TaskScheduleOp("execute", "interrupted")
 	s.publishScheduleState(context.Background(), current)
+}
+
+func (s *TaskScheduler) closeOpenScheduleRuns(schedule *model.TaskSchedule, now time.Time, reason string) {
+	if s == nil || schedule == nil || s.store == nil {
+		return
+	}
+	runs, err := s.store.ListTaskScheduleRuns(schedule.UserID, schedule.ScheduleID, 20)
+	if err != nil {
+		log.Log.Errorf("[TaskScheduler] failed to list open runs for %s: %v", schedule.ScheduleID, err)
+		return
+	}
+	for _, run := range runs {
+		if run == nil || run.Status != model.TaskRunRunning {
+			continue
+		}
+		run.Status = model.TaskRunFailed
+		run.Error = reason
+		run.CompletedAt = now
+		if err := s.store.PutTaskScheduleRun(run); err != nil {
+			log.Log.Errorf("[TaskScheduler] failed to close run %s: %v", run.RunID, err)
+		}
+	}
 }
 
 func (s *TaskScheduler) startRun(parent context.Context, schedule *model.TaskSchedule) {

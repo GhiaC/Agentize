@@ -20,6 +20,8 @@ type ConversationRunState struct {
 	Active        bool      `json:"active"`
 	UserMessageID string    `json:"user_message_id,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+	// Resumable is true when the latest turn can continue from its last step.
+	Resumable bool `json:"resumable,omitempty"`
 }
 
 type Conversation struct {

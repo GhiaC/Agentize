@@ -665,3 +665,50 @@ func TestTaskSchedulerReconcilesOrphanedRunningStatus(t *testing.T) {
 	}
 	t.Fatalf("orphaned running was not reconciled: %#v", got)
 }
+
+func TestTaskSchedulerClosesDueOrphanWithoutRestarting(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	calls := 0
+	scheduler := NewTaskScheduler(st, func(context.Context, *model.TaskSchedule) (string, error) {
+		calls++
+		return "ok", nil
+	}, nil)
+	schedule, err := scheduler.Create(CreateTaskScheduleInput{
+		UserID: "user-1", SessionID: "user-1-low-s0001",
+		Name: "due-orphan", Prompt: "work", Interval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	schedule.LastRunStatus = model.TaskRunRunning
+	schedule.NextRunAt = now.Add(-time.Minute)
+	schedule.UpdatedAt = now
+	if err := st.PutTaskSchedule(schedule); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTaskScheduleRun(&model.TaskScheduleRun{
+		RunID: "run-open", ScheduleID: schedule.ScheduleID, UserID: schedule.UserID,
+		SessionID: schedule.SessionID, Status: model.TaskRunRunning, StartedAt: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	scheduler.dispatchDue(context.Background())
+	if calls != 0 {
+		t.Fatalf("executor calls = %d, want 0", calls)
+	}
+	got, err := scheduler.Get(schedule.ScheduleID, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastRunStatus != model.TaskRunFailed {
+		t.Fatalf("status = %s", got.LastRunStatus)
+	}
+	runs, err := st.ListTaskScheduleRuns(schedule.UserID, schedule.ScheduleID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Status != model.TaskRunFailed || runs[0].CompletedAt.IsZero() {
+		t.Fatalf("runs = %#v", runs)
+	}
+}
