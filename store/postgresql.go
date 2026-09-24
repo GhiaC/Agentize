@@ -467,6 +467,11 @@ var postgreSQLMigrations = []postgreSQLMigration{
 	{2, "composite keys for numeric scoped ids", postgreSQLNumericIDKeys},
 	{3, "composite keys for per-message tool ids", postgreSQLToolCallKeys},
 	{4, "task_schedule_runs.user_id so numeric schedule ids stay per owner", postgreSQLTaskScheduleRunUserIDs},
+	// session_execution / session_runs were added to migration 1 after existing
+	// databases had already recorded that version. Version 1 does not re-run,
+	// so those databases never created the admission tables and every chat
+	// turn failed before the user message was stored.
+	{5, "durable session execution queue", postgreSQLSessionAdmission},
 }
 
 // Foreign keys are intentionally omitted on session/user children: Delete of a
@@ -565,7 +570,13 @@ CREATE TABLE IF NOT EXISTS conversations (
  conversation_seq BIGINT NOT NULL DEFAULT 0, title TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
  archived BIGINT NOT NULL DEFAULT 0, data JSONB NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC);
+` + postgreSQLSessionAdmission
 
+// postgreSQLSessionAdmission is migration 5. These tables were also appended to
+// migration 1 after that version had already been recorded, so existing
+// databases need this version. Fresh databases create them in version 1 and
+// this migration is a no-op.
+const postgreSQLSessionAdmission = `
 CREATE TABLE IF NOT EXISTS session_execution (
  user_id TEXT NOT NULL, session_id TEXT NOT NULL, next_admission_seq BIGINT NOT NULL DEFAULT 1,
  active_run_id TEXT NOT NULL DEFAULT '', revision BIGINT NOT NULL DEFAULT 0, lease_owner TEXT NOT NULL DEFAULT '',

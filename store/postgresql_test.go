@@ -111,8 +111,12 @@ func TestPostgreSQLSchemaHasProductionIndexes(t *testing.T) {
 			t.Fatalf("numeric-id migration missing %q", fragment)
 		}
 	}
-	if postgreSQLMigrations[len(postgreSQLMigrations)-1].version != 4 {
-		t.Fatalf("unexpected latest PostgreSQL migration version")
+	latest := postgreSQLMigrations[len(postgreSQLMigrations)-1]
+	if latest.version != 5 || !strings.Contains(latest.sql, "CREATE TABLE IF NOT EXISTS session_runs") {
+		t.Fatalf("latest PostgreSQL migration = %d, want session admission version 5", latest.version)
+	}
+	if !strings.Contains(postgreSQLSchema, "CREATE TABLE IF NOT EXISTS session_runs") {
+		t.Fatal("fresh PostgreSQL schema missing session_runs")
 	}
 }
 
