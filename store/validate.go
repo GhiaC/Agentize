@@ -127,9 +127,9 @@ func validateToolCall(tc *model.ToolCall) error {
 		return validationErr("toolCall", "UserID")
 	}
 	switch tc.Status {
-	case "", model.ToolCallStatusPending, model.ToolCallStatusSuccess, model.ToolCallStatusFailed:
+	case "", model.ToolCallStatusPending, model.ToolCallStatusSuccess, model.ToolCallStatusFailed, model.ToolCallStatusStopped:
 	default:
-		return fmt.Errorf("%w: toolCall has invalid status %q (want pending|success|failed)", ErrValidation, tc.Status)
+		return fmt.Errorf("%w: toolCall has invalid status %q (want pending|success|failed|stopped)", ErrValidation, tc.Status)
 	}
 	return nil
 }

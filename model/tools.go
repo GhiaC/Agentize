@@ -280,4 +280,5 @@ const (
 	ToolCallStatusPending = "pending"
 	ToolCallStatusSuccess = "success"
 	ToolCallStatusFailed  = "failed"
+	ToolCallStatusStopped = "stopped"
 )
