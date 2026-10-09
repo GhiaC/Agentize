@@ -113,7 +113,7 @@ func (e *Engine) ResumeIncompleteTurn(ctx context.Context, sessionID string) (st
 	session.Msgs = ensureTurnToolMessages(session.Msgs, toolsForUser(tools, plan.UserMessageID))
 	plan = planTurnResume(session.Msgs, stored, tools)
 	if err := e.replayFailedTools(ctx, session, plan); err != nil {
-		e.persistSessionRunState(session, StatusError, err.Error(), false, plan.UserMessageID)
+		e.persistSessionRunState(session, StatusError, PublicTurnError(err), false, plan.UserMessageID)
 		return "", 0, err
 	}
 	session.UpdatedAt = time.Now()
@@ -134,7 +134,7 @@ func (e *Engine) ResumeIncompleteTurn(ctx context.Context, sessionID string) (st
 	response, tokens, err := e.processChatRequest(ctx, sessionID, QueueUser)
 	if err != nil {
 		rec.Fail(err.Error())
-		e.persistSessionRunState(session, StatusError, err.Error(), false, plan.UserMessageID)
+		e.persistSessionRunState(session, StatusError, PublicTurnError(err), false, plan.UserMessageID)
 		return "", tokens, err
 	}
 	e.persistSessionRunState(session, StatusCompleted, "", false, plan.UserMessageID)

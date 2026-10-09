@@ -368,14 +368,18 @@ func (e *Engine) callLLM(ctx context.Context, model string, messages []openai.Ch
 	return resp, err
 }
 
-// callLLMWithNetworkRetry retries only dropped connections, timeouts, and 5xx/429.
-// Backoff is 30s * retry count, up to 10 times. Payment and access errors fail immediately.
+// callLLMWithNetworkRetry retries dropped connections, provider 5xx/429, and
+// http.Client deadlines. Fast network failures wait 30s times the attempt, up
+// to 10 times. A client deadline already spent the completion budget, so it is
+// repeated only a couple of times. Payment and access errors fail immediately.
+// Cancelling the turn context stops the loop.
 func (e *Engine) callLLMWithNetworkRetry(ctx context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
 	if e.llmClient == nil {
 		return openai.ChatCompletionResponse{}, errors.New("LLM client is not configured")
 	}
-	var lastErr error
-	for attempt := 0; attempt <= llmutils.TurnNetworkRetryMax; attempt++ {
+	networkRetries := 0
+	timeoutRetries := 0
+	for {
 		if err := ctx.Err(); err != nil {
 			return openai.ChatCompletionResponse{}, err
 		}
@@ -383,20 +387,36 @@ func (e *Engine) callLLMWithNetworkRetry(ctx context.Context, request openai.Cha
 		if err == nil {
 			return resp, nil
 		}
-		lastErr = err
-		if !llmutils.IsRetriableNetworkError(err) || attempt == llmutils.TurnNetworkRetryMax {
+		// The caller's context ending is a stop or a real deadline. Do not
+		// confuse it with http.Client.Timeout, which uses the same Go error
+		// identity while the turn context is still active.
+		if ctx.Err() != nil {
+			return openai.ChatCompletionResponse{}, ctx.Err()
+		}
+		if !llmutils.IsRetriableNetworkError(err) {
 			return openai.ChatCompletionResponse{}, err
 		}
-		retryCount := attempt + 1
-		wait := llmutils.NetworkRetryDelay(retryCount)
-		log.Log.Warnf("[Engine] ⚠️  LLM network error, retry %d/%d in %s | Model: %s | Error: %v", retryCount, llmutils.TurnNetworkRetryMax, wait, request.Model, err)
+		var retryCount, retryMax int
+		var wait time.Duration
+		if llmutils.IsClientTimeout(err) {
+			timeoutRetries++
+			retryCount, retryMax = timeoutRetries, llmutils.ClientTimeoutRetryMax
+			wait = llmutils.ClientTimeoutRetryDelay
+		} else {
+			networkRetries++
+			retryCount, retryMax = networkRetries, llmutils.TurnNetworkRetryMax
+			wait = llmutils.NetworkRetryDelay(retryCount)
+		}
+		if retryCount > retryMax {
+			return openai.ChatCompletionResponse{}, err
+		}
+		log.Log.Warnf("[Engine] ⚠️  LLM network error, retry %d/%d in %s | Model: %s | Error: %v", retryCount, retryMax, wait, request.Model, err)
 		userID, _ := model.GetUserIDFromContext(ctx)
-		NotifyStatus(ctx, userID, "", StatusThinking, fmt.Sprintf("Retrying network error (%d/%d) in %s", retryCount, llmutils.TurnNetworkRetryMax, wait.Round(time.Second)))
-		if waitErr := llmutils.RetryNetworkError(ctx, retryCount); waitErr != nil {
+		NotifyStatus(ctx, userID, "", StatusThinking, fmt.Sprintf("Retrying network error (%d/%d) in %s", retryCount, retryMax, wait.Round(time.Second)))
+		if waitErr := llmutils.Wait(ctx, wait); waitErr != nil {
 			return openai.ChatCompletionResponse{}, waitErr
 		}
 	}
-	return openai.ChatCompletionResponse{}, lastErr
 }
 
 // startScheduler starts the session scheduler
@@ -863,7 +883,7 @@ func (e *Engine) processMessageLocked(
 		if errors.Is(err, context.Canceled) {
 			phase = StatusPhase("stopped")
 		}
-		e.persistSessionRunState(session, phase, err.Error(), false, UserMessageIDFrom(ctx))
+		e.persistSessionRunState(session, phase, PublicTurnError(err), false, UserMessageIDFrom(ctx))
 		e.drainSessionQueues(ctx, key, sessionID)
 		return "", tokens, err
 	}
@@ -923,11 +943,11 @@ func (e *Engine) drainSessionQueues(ctx context.Context, key, sessionID string) 
 		if errors.Is(lastErr, context.Canceled) {
 			phase = StatusPhase("stopped")
 		}
-		e.persistSessionRunState(session, phase, lastErr.Error(), false, UserMessageIDFrom(ctx))
+		e.persistSessionRunState(session, phase, PublicTurnError(lastErr), false, UserMessageIDFrom(ctx))
 		return
 	}
 	if ctx.Err() != nil {
-		e.persistSessionRunState(session, StatusPhase("stopped"), ctx.Err().Error(), false, UserMessageIDFrom(ctx))
+		e.persistSessionRunState(session, StatusPhase("stopped"), PublicTurnError(ctx.Err()), false, UserMessageIDFrom(ctx))
 		return
 	}
 	e.persistSessionRunState(session, StatusCompleted, "", false, UserMessageIDFrom(ctx))

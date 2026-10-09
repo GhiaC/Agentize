@@ -41,6 +41,27 @@ func TestIsRetriableNetworkError(t *testing.T) {
 	if IsRetriableNetworkError(context.Canceled) {
 		t.Fatal("canceled must not retry")
 	}
+	if IsRetriableNetworkError(context.DeadlineExceeded) {
+		t.Fatal("caller deadline must not retry")
+	}
+	clientTimeout := clientTimeoutError("net/http: request canceled (Client.Timeout or context cancellation while reading body)")
+	if !errors.Is(clientTimeout, context.DeadlineExceeded) {
+		t.Fatal("client timeout must match DeadlineExceeded the way net/http does")
+	}
+	if !IsClientTimeout(clientTimeout) || !IsRetriableNetworkError(clientTimeout) {
+		t.Fatal("http.Client timeout while reading the body must retry")
+	}
+}
+
+// clientTimeoutError matches net/http's unexported timeoutError: it is a
+// net.Error and it reports itself as context.DeadlineExceeded.
+type clientTimeoutError string
+
+func (e clientTimeoutError) Error() string   { return string(e) }
+func (e clientTimeoutError) Timeout() bool   { return true }
+func (e clientTimeoutError) Temporary() bool { return true }
+func (e clientTimeoutError) Is(target error) bool {
+	return target == context.DeadlineExceeded
 }
 
 func TestNetworkRetryDelay(t *testing.T) {
