@@ -1713,6 +1713,8 @@ func (e *Engine) processChatRequest(
 	// manage_files "read" on an image. They are sent to the LLM for the rest of
 	// this turn but never persisted to session.Msgs (avoids base64 history bloat).
 	var pendingImages []openai.ChatCompletionMessage
+	protocolCorrection := ""
+	invalidContinuations := 0
 
 	for i := 0; i < maxIterations; i++ {
 		// Follow-ups stay in the durable FIFO. They are not injected into this turn.
@@ -1729,6 +1731,12 @@ func (e *Engine) processChatRequest(
 		}
 		reqMessages = append(reqMessages, collapseCompletedTurnTools(localMsgs)...)
 		reqMessages = append(reqMessages, pendingImages...)
+		if protocolCorrection != "" {
+			reqMessages = append(reqMessages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: protocolCorrection,
+			})
+		}
 
 		openaiTools := toolsForLLMRequest(allTools, catalogMode, discoveredTools)
 
@@ -1815,18 +1823,37 @@ func (e *Engine) processChatRequest(
 		// Save LLM message to DB
 		request := openai.ChatCompletionRequest{Model: modelName, Messages: reqMessages, Tools: openaiTools}
 		messageID := e.saveMessage(session, request, resp, choice, cost, llmDuration.Milliseconds())
+		choiceKind := classifyAssistantChoice(choice)
+		decisionStatus := model.RouteStatusOK
+		decisionDetail := fmt.Sprintf("finish_reason=%s · tool_calls=%d", choice.FinishReason, len(choice.Message.ToolCalls))
+		if choiceKind == assistantChoiceInvalid {
+			decisionStatus = model.RouteStatusError
+			decisionDetail = "invalid_output " + decisionDetail
+		}
 		rec.Decision(
 			fmt.Sprintf("Decision %d", i+1),
 			modelName,
 			resp.Usage.TotalTokens,
 			llmDuration.Milliseconds(),
-			model.RouteStatusOK,
-			fmt.Sprintf("finish_reason=%s · tool_calls=%d", choice.FinishReason, len(choice.Message.ToolCalls)),
+			decisionStatus,
+			decisionDetail,
 		)
 		persistTurnTrace(e.Sessions, rec, 0)
 
-		// Handle tool calls
-		if choice.FinishReason == openai.FinishReasonToolCalls {
+		if choiceKind == assistantChoiceInvalid {
+			invalidContinuations++
+			protocolCorrection = invalidOutputCorrection
+			if invalidContinuations > maxInvalidOutputContinuations {
+				return "", totalTokenUsage, ErrInvalidFinalOutput
+			}
+			continue
+		}
+
+		// Handle structured tool calls. finish_reason is not trusted when the
+		// provider also returned a tool-call array, and prose is never parsed
+		// into a call.
+		if choiceKind == assistantChoiceTools {
+			protocolCorrection = ""
 			if e.Executor == nil {
 				for _, toolCall := range choice.Message.ToolCalls {
 					if toolCall.Function.Name != searchToolsName {
@@ -1884,6 +1911,7 @@ func (e *Engine) processChatRequest(
 		}
 
 		// Text response - we're done
+		protocolCorrection = ""
 		textResponse := choice.Message.Content
 		localMsgs = append(localMsgs, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleAssistant,
@@ -1941,6 +1969,12 @@ func (e *Engine) saveMessage(
 	msg.CostCredits = cost
 	msg.DurationMs = durationMs
 	msg.HydrateUsageMeta()
+	if classifyAssistantChoice(choice) == assistantChoiceInvalid {
+		if msg.Metadata == nil {
+			msg.Metadata = map[string]any{}
+		}
+		msg.Metadata["invalid_output"] = true
+	}
 
 	if err := e.Sessions.PutMessage(msg); err != nil {
 		log.Log.Warnf("[Engine] ⚠️  Failed to save message | SessionID: %s | Error: %v", session.SessionID, err)

@@ -157,6 +157,23 @@ func newMessageSource(kind, id, name string, extra map[string]any) map[string]an
 	return source
 }
 
+// MessageInvalidOutput reports an assistant row kept for audit only.
+// A tool-only placeholder, blank completion, or truncated provider response
+// is not a visible final answer and must not close the turn.
+func MessageInvalidOutput(message *Message) bool {
+	if message == nil || message.Metadata == nil {
+		return false
+	}
+	switch value := message.Metadata["invalid_output"].(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(strings.TrimSpace(value), "true")
+	default:
+		return false
+	}
+}
+
 func truncateMetaText(text string, limit int) string {
 	text = strings.TrimSpace(text)
 	if limit <= 0 {

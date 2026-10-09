@@ -282,11 +282,11 @@ func isFinalAssistantStored(msg *model.Message) bool {
 	if msg == nil || msg.Role != openai.ChatMessageRoleAssistant {
 		return false
 	}
-	if msg.HasToolCalls {
+	if msg.HasToolCalls || model.MessageInvalidOutput(msg) {
 		return false
 	}
 	content := strings.TrimSpace(msg.Content)
-	if content == "" || strings.HasPrefix(content, "[Tool Calls:") {
+	if content == "" || isToolOnlyPlaceholder(content) {
 		return false
 	}
 	return true
@@ -303,7 +303,7 @@ func turnHasFinalAssistant(msgs []openai.ChatCompletionMessage, lastUser int) bo
 	}
 	for i := lastUser + 1; i < len(msgs); i++ {
 		msg := msgs[i]
-		if msg.Role == openai.ChatMessageRoleAssistant && len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) != "" && !strings.HasPrefix(strings.TrimSpace(msg.Content), "[Tool Calls:") {
+		if msg.Role == openai.ChatMessageRoleAssistant && len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) != "" && !isToolOnlyPlaceholder(msg.Content) {
 			return true
 		}
 	}
