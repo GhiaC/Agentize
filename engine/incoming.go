@@ -1,5 +1,7 @@
 package engine
 
+import "context"
+
 // QueueClass selects which session queue an inbound message joins while a turn
 // is already running.
 type QueueClass string
@@ -39,4 +41,11 @@ func cloneIncomingMeta(meta map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+type disabledToolsContextKey struct{}
+
+func toolsDisabled(ctx context.Context) bool {
+	disabled, _ := ctx.Value(disabledToolsContextKey{}).(bool)
+	return disabled
 }

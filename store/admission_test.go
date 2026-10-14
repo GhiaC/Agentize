@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -120,4 +121,59 @@ func join(parts []string) string {
 		out += part
 	}
 	return out
+}
+
+func TestSessionAdmissionMetadataReceiptSurvivesReopen(t *testing.T) {
+	path := t.TempDir() + "/admission.db"
+	st, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := model.SessionRunInput{UserID: "alice", SessionID: "chat", Content: "digest", OriginKind: "alert", IdempotencyKey: "digest:12", Metadata: map[string]any{"tools_disabled": true, "batch_id": "batch-12"}}
+	got, err := st.AdmitSessionRun(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Metadata["batch_id"] = "changed"
+	if err = st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	receipt, err := st.FindSessionRun("alice", "chat", "digest:12")
+	if err != nil || receipt == nil || receipt.RunID != got.Run.RunID || receipt.Metadata["batch_id"] != "batch-12" || receipt.Metadata["tools_disabled"] != true {
+		t.Fatalf("receipt=%+v err=%v", receipt, err)
+	}
+	foreign, err := st.FindSessionRun("bob", "chat", "digest:12")
+	if err != nil || foreign != nil {
+		t.Fatal("receipt crossed owners")
+	}
+	missing, err := st.FindSessionRun("alice", "chat", "missing")
+	if err != nil || missing != nil {
+		t.Fatal("lookup admitted missing turn")
+	}
+	duplicate, err := st.AdmitSessionRun(in)
+	if err != nil || duplicate.Run.RunID != receipt.RunID || duplicate.Run.Metadata["batch_id"] != "batch-12" {
+		t.Fatal("duplicate replaced immutable metadata")
+	}
+	run, err := st.ClaimHeadSessionRun("alice", "chat", "worker")
+	if err != nil || run.Metadata["tools_disabled"] != true {
+		t.Fatal("claimed run lost tool policy")
+	}
+}
+
+func TestSessionAdmissionCanceledContextWritesNothing(t *testing.T) {
+	st := openAdmissionStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := st.AdmitSessionRunContext(ctx, model.SessionRunInput{UserID: "owner", SessionID: "chat", Content: "digest", IdempotencyKey: "canceled"}); !errors.Is(err, context.Canceled) {
+		t.Fatal("admission ignored canceled context")
+	}
+	receipt, err := st.FindSessionRun("owner", "chat", "canceled")
+	if err != nil || receipt != nil {
+		t.Fatal("canceled admission wrote a receipt")
+	}
 }

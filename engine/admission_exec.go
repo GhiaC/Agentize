@@ -46,9 +46,9 @@ func (e *Engine) admitAndRun(ctx context.Context, sessionID string, msg Incoming
 			keyName = strings.TrimSpace(raw)
 		}
 	}
-	admitted, err := e.Sessions.AdmitSessionRun(model.SessionRunInput{
+	admitted, err := e.Sessions.AdmitSessionRunContext(ctx, model.SessionRunInput{
 		UserID: userID, SessionID: sessionID, OriginKind: origin,
-		IdempotencyKey: keyName, Content: msg.Content,
+		IdempotencyKey: keyName, Content: msg.Content, Metadata: msg.Metadata,
 	})
 	if errors.Is(err, store.ErrSessionQueueFull) {
 		metrics.SessionAdmission("rejected")
@@ -98,7 +98,7 @@ func (e *Engine) admitAndRun(ctx context.Context, sessionID string, msg Incoming
 			class = QueueDeferred
 		}
 		runCtx := withAdmittedRun(ctx, userID, run)
-		text, used, bodyErr := e.processOneMessageBody(runCtx, sessionID, IncomingMessage{Content: run.Content, Metadata: msg.Metadata, Queue: class})
+		text, used, bodyErr := e.processOneMessageBody(runCtx, sessionID, IncomingMessage{Content: run.Content, Metadata: run.Metadata, Queue: class})
 		status := model.SessionRunSucceeded
 		errText := ""
 		if bodyErr != nil {

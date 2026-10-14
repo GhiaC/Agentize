@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -169,6 +170,7 @@ type Store interface {
 	// key returns the existing run. A full queue returns ErrSessionQueueFull and
 	// stores nothing.
 	AdmitSessionRun(in model.SessionRunInput) (model.SessionAdmitResult, error)
+	AdmitSessionRunContext(context.Context, model.SessionRunInput) (model.SessionAdmitResult, error)
 	// ClaimHeadSessionRun claims the earliest queued run. An unexpired lease
 	// returns (nil, nil). An expired lease is marked interrupted, never succeeded.
 	ClaimHeadSessionRun(userID, sessionID, workerID string) (*model.SessionRun, error)
@@ -180,6 +182,8 @@ type Store interface {
 	SnapshotSessionExecution(userID, sessionID string) (model.SessionExecutionSnapshot, error)
 	// GetSessionRun returns one admitted run, or (nil, nil) when it does not exist.
 	GetSessionRun(userID, sessionID, runID string) (*model.SessionRun, error)
+	// FindSessionRun reads an admission receipt without enqueueing a new turn.
+	FindSessionRun(userID, sessionID, idempotencyKey string) (*model.SessionRun, error)
 
 	// --- Visited-node tracking (user-scoped, in-memory, not persisted) ---
 

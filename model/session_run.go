@@ -25,6 +25,7 @@ type SessionRun struct {
 	OriginKind     string
 	IdempotencyKey string
 	Content        string
+	Metadata       map[string]any
 	Status         string
 	Phase          string
 	Version        int64
@@ -42,6 +43,7 @@ type SessionRunInput struct {
 	OriginKind     string
 	IdempotencyKey string
 	Content        string
+	Metadata       map[string]any
 }
 
 // SessionAdmitResult is the durable acceptance record. QueueFull is returned as

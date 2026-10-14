@@ -472,6 +472,7 @@ var postgreSQLMigrations = []postgreSQLMigration{
 	// so those databases never created the admission tables and every chat
 	// turn failed before the user message was stored.
 	{5, "durable session execution queue", postgreSQLSessionAdmission},
+	{6, "durable admission metadata", `ALTER TABLE session_runs ADD COLUMN IF NOT EXISTS metadata TEXT NOT NULL DEFAULT '{}'`},
 }
 
 // Foreign keys are intentionally omitted on session/user children: Delete of a

@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,6 +22,12 @@ var ErrSessionRunFence = errors.New("session run fence mismatch")
 const sessionRunLease = 2 * time.Minute
 
 func (s *SQLiteStore) AdmitSessionRun(in model.SessionRunInput) (model.SessionAdmitResult, error) {
+	return s.AdmitSessionRunContext(context.Background(), in)
+}
+func (s *SQLiteStore) AdmitSessionRunContext(ctx context.Context, in model.SessionRunInput) (model.SessionAdmitResult, error) {
+	if err := ctx.Err(); err != nil {
+		return model.SessionAdmitResult{}, err
+	}
 	in.UserID = strings.TrimSpace(in.UserID)
 	in.SessionID = strings.TrimSpace(in.SessionID)
 	in.Content = strings.TrimSpace(in.Content)
@@ -34,21 +42,28 @@ func (s *SQLiteStore) AdmitSessionRun(in model.SessionRunInput) (model.SessionAd
 	if in.OriginKind == "" {
 		in.OriginKind = "user"
 	}
+	metadata, err := json.Marshal(in.Metadata)
+	if err != nil {
+		return model.SessionAdmitResult{}, fmt.Errorf("invalid admission metadata")
+	}
+	if string(metadata) == "null" {
+		metadata = []byte("{}")
+	}
 	if !s.isPostgres() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.SessionAdmitResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := ensureSessionExecution(tx, in.UserID, in.SessionID, s.isPostgres()); err != nil {
+	if err := ensureSessionExecutionContext(ctx, tx, in.UserID, in.SessionID, s.isPostgres()); err != nil {
 		return model.SessionAdmitResult{}, err
 	}
 	if in.IdempotencyKey != "" {
-		existing, err := findRunByIdempotency(tx, in.UserID, in.SessionID, in.IdempotencyKey)
+		existing, err := findRunByIdempotencyContext(ctx, tx, in.UserID, in.SessionID, in.IdempotencyKey)
 		if err != nil {
 			return model.SessionAdmitResult{}, err
 		}
@@ -71,28 +86,28 @@ func (s *SQLiteStore) AdmitSessionRun(in model.SessionRunInput) (model.SessionAd
 		return model.SessionAdmitResult{}, ErrSessionQueueFull
 	}
 	var seq int64
-	if err := tx.QueryRow(`SELECT next_admission_seq FROM session_execution WHERE user_id = ? AND session_id = ?`, in.UserID, in.SessionID).Scan(&seq); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT next_admission_seq FROM session_execution WHERE user_id = ? AND session_id = ?`, in.UserID, in.SessionID).Scan(&seq); err != nil {
 		return model.SessionAdmitResult{}, err
 	}
 	now := time.Now().Unix()
 	runID := fmt.Sprintf("%d", seq)
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_runs (
-			run_id, user_id, session_id, admission_seq, origin_kind, idempotency_key, content,
+			run_id, user_id, session_id, admission_seq, origin_kind, idempotency_key, content, metadata,
 			status, phase, version, fence, attempts, error, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 1, 0, 0, '', ?, ?)`,
-		runID, in.UserID, in.SessionID, seq, in.OriginKind, in.IdempotencyKey, in.Content,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 1, 0, 0, '', ?, ?)`,
+		runID, in.UserID, in.SessionID, seq, in.OriginKind, in.IdempotencyKey, in.Content, string(metadata),
 		model.SessionRunQueued, now, now,
 	); err != nil {
 		return model.SessionAdmitResult{}, err
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE session_execution
 		SET next_admission_seq = ?, revision = revision + 1
 		WHERE user_id = ? AND session_id = ?`, seq+1, in.UserID, in.SessionID); err != nil {
 		return model.SessionAdmitResult{}, err
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_run_events (event_id, user_id, session_id, run_id, event_seq, event_type, payload, created_at)
 		VALUES (?, ?, ?, ?, ?, 'admitted', '', ?)`,
 		in.UserID+"/"+in.SessionID+"/"+runID+"/admitted", in.UserID, in.SessionID, runID, seq, now,
@@ -107,7 +122,7 @@ func (s *SQLiteStore) AdmitSessionRun(in model.SessionRunInput) (model.SessionAd
 		QueuedCount: open,
 		Run: model.SessionRun{
 			RunID: runID, UserID: in.UserID, SessionID: in.SessionID, AdmissionSeq: seq,
-			OriginKind: in.OriginKind, IdempotencyKey: in.IdempotencyKey, Content: in.Content,
+			OriginKind: in.OriginKind, IdempotencyKey: in.IdempotencyKey, Content: in.Content, Metadata: in.Metadata,
 			Status: model.SessionRunQueued, Version: 1, CreatedAt: time.Unix(now, 0), UpdatedAt: time.Unix(now, 0),
 		},
 	}, nil
@@ -157,7 +172,7 @@ func (s *SQLiteStore) ClaimHeadSessionRun(userID, sessionID, workerID string) (*
 		}
 	}
 	row := tx.QueryRow(`
-		SELECT run_id, user_id, session_id, admission_seq, origin_kind, idempotency_key, content, status, phase, version, fence, attempts, error, created_at, updated_at
+		SELECT run_id, user_id, session_id, admission_seq, origin_kind, idempotency_key, content, metadata, status, phase, version, fence, attempts, error, created_at, updated_at
 		FROM session_runs
 		WHERE user_id = ? AND session_id = ? AND status = ?
 		ORDER BY admission_seq ASC
@@ -314,7 +329,7 @@ func (s *SQLiteStore) GetSessionRun(userID, sessionID, runID string) (*model.Ses
 		defer s.mu.RUnlock()
 	}
 	row := s.db.QueryRow(`
-		SELECT run_id, user_id, session_id, admission_seq, origin_kind, idempotency_key, content, status, phase, version, fence, attempts, error, created_at, updated_at
+		SELECT run_id, user_id, session_id, admission_seq, origin_kind, idempotency_key, content, metadata, status, phase, version, fence, attempts, error, created_at, updated_at
 		FROM session_runs WHERE user_id = ? AND session_id = ? AND run_id = ?`, userID, sessionID, runID)
 	run, err := scanSessionRun(row)
 	if err == sql.ErrNoRows {
@@ -330,7 +345,10 @@ type queryRower interface {
 }
 
 func ensureSessionExecution(tx *sql.Tx, userID, sessionID string, postgres bool) error {
-	if _, err := tx.Exec(`
+	return ensureSessionExecutionContext(context.Background(), tx, userID, sessionID, postgres)
+}
+func ensureSessionExecutionContext(ctx context.Context, tx *sql.Tx, userID, sessionID string, postgres bool) error {
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_execution (
 			user_id, session_id, next_admission_seq, active_run_id, revision, lease_owner, lease_expires, fence
 		) VALUES (?, ?, 1, '', 0, '', 0, 0)
@@ -342,12 +360,15 @@ func ensureSessionExecution(tx *sql.Tx, userID, sessionID string, postgres bool)
 		lock += ` FOR UPDATE`
 	}
 	var seq int64
-	return tx.QueryRow(lock, userID, sessionID).Scan(&seq)
+	return tx.QueryRowContext(ctx, lock, userID, sessionID).Scan(&seq)
 }
 
 func findRunByIdempotency(tx *sql.Tx, userID, sessionID, key string) (*model.SessionRun, error) {
-	row := tx.QueryRow(`
-		SELECT run_id, user_id, session_id, admission_seq, origin_kind, idempotency_key, content, status, phase, version, fence, attempts, error, created_at, updated_at
+	return findRunByIdempotencyContext(context.Background(), tx, userID, sessionID, key)
+}
+func findRunByIdempotencyContext(ctx context.Context, tx *sql.Tx, userID, sessionID, key string) (*model.SessionRun, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT run_id, user_id, session_id, admission_seq, origin_kind, idempotency_key, content, metadata, status, phase, version, fence, attempts, error, created_at, updated_at
 		FROM session_runs
 		WHERE user_id = ? AND session_id = ? AND idempotency_key = ?`, userID, sessionID, key)
 	run, err := scanSessionRun(row)
@@ -377,12 +398,16 @@ type sessionRunScanner interface {
 func scanSessionRun(row sessionRunScanner) (*model.SessionRun, error) {
 	var run model.SessionRun
 	var created, updated int64
+	var metadata string
 	err := row.Scan(
 		&run.RunID, &run.UserID, &run.SessionID, &run.AdmissionSeq, &run.OriginKind, &run.IdempotencyKey,
-		&run.Content, &run.Status, &run.Phase, &run.Version, &run.Fence, &run.Attempts, &run.Error, &created, &updated,
+		&run.Content, &metadata, &run.Status, &run.Phase, &run.Version, &run.Fence, &run.Attempts, &run.Error, &created, &updated,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if err := json.Unmarshal([]byte(metadata), &run.Metadata); err != nil {
+		return nil, fmt.Errorf("invalid persisted admission metadata")
 	}
 	run.CreatedAt = time.Unix(created, 0)
 	run.UpdatedAt = time.Unix(updated, 0)
@@ -395,4 +420,20 @@ func truncateRunPayload(text string) string {
 		return text[:500]
 	}
 	return text
+}
+
+// FindSessionRun performs a read only lookup. A missing key is not admitted.
+func (s *SQLiteStore) FindSessionRun(userID, sessionID, key string) (*model.SessionRun, error) {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(key) == "" {
+		return nil, fmt.Errorf("receipt requires owner, session and key")
+	}
+	if !s.isPostgres() {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+	}
+	run, err := scanSessionRun(s.db.QueryRow(`SELECT run_id, user_id, session_id, admission_seq, origin_kind, idempotency_key, content, metadata, status, phase, version, fence, attempts, error, created_at, updated_at FROM session_runs WHERE user_id=? AND session_id=? AND idempotency_key=?`, userID, sessionID, key))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return run, err
 }

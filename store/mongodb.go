@@ -3147,3 +3147,14 @@ func (s *MongoDBStore) Verify() ([]Issue, error) {
 	}
 	return issues, nil
 }
+
+func (s *MongoDBStore) FindSessionRun(userID, sessionID, key string) (*model.SessionRun, error) {
+	return s.admitBook().FindSessionRun(userID, sessionID, key)
+}
+
+func (s *MongoDBStore) AdmitSessionRunContext(ctx context.Context, in model.SessionRunInput) (model.SessionAdmitResult, error) {
+	if err := ctx.Err(); err != nil {
+		return model.SessionAdmitResult{}, err
+	}
+	return s.admitBook().AdmitSessionRun(in)
+}

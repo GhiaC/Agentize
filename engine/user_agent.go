@@ -956,6 +956,9 @@ func (e *Engine) drainSessionQueues(ctx context.Context, key, sessionID string) 
 // processOneMessageBody appends the user message to session and runs the chat request.
 // Caller must hold session mutex.
 func (e *Engine) processOneMessageBody(ctx context.Context, sessionID string, msg IncomingMessage) (string, int, error) {
+	if disabled, _ := msg.Metadata["tools_disabled"].(bool); disabled {
+		ctx = context.WithValue(ctx, disabledToolsContextKey{}, true)
+	}
 	userMessage := msg.Content
 	if len(userMessage) > 0 {
 		session, err := e.loadSession(ctx, sessionID)
@@ -1759,6 +1762,9 @@ func (e *Engine) processChatRequest(
 		}
 
 		openaiTools := toolsForLLMRequest(allTools, catalogMode, discoveredTools)
+		if toolsDisabled(ctx) {
+			openaiTools = nil
+		}
 
 		log.Log.Infof("[Engine] LLM request | iteration=%d/%d | messages=%d | tools=%d",
 			i+1, maxIterations, len(reqMessages), len(openaiTools))
@@ -1892,7 +1898,9 @@ func (e *Engine) processChatRequest(
 			for _, toolCall := range choice.Message.ToolCalls {
 				var result string
 				var inject *injectedImage
-				if toolCall.Function.Name == searchToolsName {
+				if toolsDisabled(ctx) {
+					result = "Tools are disabled for this automated alert turn."
+				} else if toolCall.Function.Name == searchToolsName {
 					result, discoveredTools = e.executeSearchTools(allTools, toolCall.Function.Arguments, discoveredTools)
 					e.recordSearchToolsOnTurn(ctx, session, messageID, toolCall, result)
 				} else {
@@ -2059,6 +2067,9 @@ func (e *Engine) executeTool(
 	messageID string,
 	toolCall openai.ToolCall,
 ) (string, *injectedImage) {
+	if toolsDisabled(ctx) {
+		return "Tools are disabled for this automated alert turn.", nil
+	}
 	sessionID := session.SessionID
 
 	log.Log.Infof("[Engine] 🔧 executeTool | Function=%s | SessionID=%s", toolCall.Function.Name, sessionID)

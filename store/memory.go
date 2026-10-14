@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -745,3 +746,14 @@ var (
 	_ model.SessionStore = (*DBStore)(nil)
 	_ debuger.DebugStore = (*DBStore)(nil)
 )
+
+func (s *DBStore) FindSessionRun(userID, sessionID, key string) (*model.SessionRun, error) {
+	return s.sqliteStore.FindSessionRun(userID, sessionID, key)
+}
+
+func (s *DBStore) AdmitSessionRunContext(ctx context.Context, in model.SessionRunInput) (model.SessionAdmitResult, error) {
+	if err := ctx.Err(); err != nil {
+		return model.SessionAdmitResult{}, err
+	}
+	return s.sqliteStore.AdmitSessionRunContext(ctx, in)
+}

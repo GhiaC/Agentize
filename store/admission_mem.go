@@ -60,7 +60,7 @@ func (b *admissionMem) AdmitSessionRun(in model.SessionRunInput) (model.SessionA
 	run := &model.SessionRun{
 		RunID: fmt.Sprintf("%d", ex.next), UserID: in.UserID, SessionID: in.SessionID,
 		AdmissionSeq: ex.next, OriginKind: in.OriginKind, IdempotencyKey: in.IdempotencyKey,
-		Content: in.Content, Status: model.SessionRunQueued, Version: 1, CreatedAt: now, UpdatedAt: now,
+		Content: in.Content, Metadata: in.Metadata, Status: model.SessionRunQueued, Version: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	ex.next++
 	ex.rev++
@@ -202,4 +202,16 @@ func memOpen(ex *memExecution) int {
 		}
 	}
 	return n
+}
+
+func (b *admissionMem) FindSessionRun(userID, sessionID, key string) (*model.SessionRun, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, run := range b.execution(userID, sessionID).runs {
+		if key != "" && run.IdempotencyKey == key {
+			copy := *run
+			return &copy, nil
+		}
+	}
+	return nil, nil
 }

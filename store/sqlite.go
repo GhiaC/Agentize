@@ -533,6 +533,9 @@ var sqliteMigrations = []sqliteMigration{
 			PRIMARY KEY (user_id, session_id, event_id)
 		)`)
 	}},
+	{20, "durable admission metadata", func(tx *sql.Tx) error {
+		return addColumns(tx, "session_runs", `metadata TEXT NOT NULL DEFAULT '{}'`)
+	}},
 }
 
 // runMigrations applies every migration newer than the recorded schema version.
