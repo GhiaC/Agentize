@@ -35,7 +35,7 @@ func TestCreateConversation_IDFormat(t *testing.T) {
 	if conv.Title != "BTC plan" || conv.Model != "provider/fast" {
 		t.Fatalf("title/model = %q %q", conv.Title, conv.Model)
 	}
-	session, err := eng.Sessions.Get(conv.SessionID)
+	session, err := eng.Sessions.GetUserSession(conv.UserID, conv.SessionID)
 	if err != nil {
 		t.Fatalf("linked session: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestListConversations_LastUsedFirst(t *testing.T) {
 	eng := newConversationTestEngine(t)
 	first, _ := eng.CreateConversation(CreateConversationInput{UserID: "alice", Title: "old"})
 	second, _ := eng.CreateConversation(CreateConversationInput{UserID: "alice", Title: "new"})
-	if err := eng.Sessions.TouchConversationBySession(first.SessionID); err != nil {
+	if err := eng.Sessions.TouchUserConversationBySession(first.UserID, first.SessionID); err != nil {
 		t.Fatalf("touch: %v", err)
 	}
 	list, err := eng.ListConversations("alice")
@@ -119,7 +119,7 @@ func TestSetConversationModel_DoesNotChangeTitle(t *testing.T) {
 	if got.Title != "keep" || got.Model != "m2" {
 		t.Fatalf("got %+v", got)
 	}
-	session, _ := eng.Sessions.Get(got.SessionID)
+	session, _ := eng.Sessions.GetUserSession(got.UserID, got.SessionID)
 	if session.Model != "m2" {
 		t.Fatalf("session model = %q", session.Model)
 	}
@@ -165,10 +165,10 @@ func TestDeleteConversation_RemovesSubAgents(t *testing.T) {
 	if _, err := eng.Sessions.GetConversation(conv.ConversationID); err == nil {
 		t.Fatal("conversation still present")
 	}
-	if _, err := eng.Sessions.Get(conv.SessionID); err == nil {
+	if _, err := eng.Sessions.GetUserSession(conv.UserID, conv.SessionID); err == nil {
 		t.Fatal("main session still present")
 	}
-	if _, err := eng.Sessions.Get(child.SessionID); err == nil {
+	if _, err := eng.Sessions.GetUserSession("alice", child.SessionID); err == nil {
 		t.Fatal("sub-agent session still present")
 	}
 }
@@ -179,7 +179,7 @@ func TestPersistSessionRunState_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	session, err := eng.Sessions.Get(conv.SessionID)
+	session, err := eng.Sessions.GetUserSession(conv.UserID, conv.SessionID)
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}

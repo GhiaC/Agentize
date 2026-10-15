@@ -41,8 +41,8 @@ func TestProcessUserMessageAndDeliverSendsGeneratedFileBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := ag.RecordUserFile(
-		session.SessionID,
+	file, err := ag.RecordUserFileForUser(
+		session.UserID,
 		"browser.png",
 		"image/png",
 		model.FileSourceGenerated,
@@ -106,8 +106,8 @@ func TestDeliverGeneratedFilesEnforcesOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := ag.RecordUserFile(
-		session.SessionID,
+	file, err := ag.RecordUserFileForUser(
+		session.UserID,
 		"secret.txt",
 		"text/plain",
 		model.FileSourceGenerated,

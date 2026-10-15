@@ -78,7 +78,7 @@ func TestDeleteSession_ClearsActiveForAnyAgentType(t *testing.T) {
 		t.Error("active session should be set before delete")
 	}
 
-	if err := sh.DeleteSession(session.SessionID); err != nil {
+	if err := sh.DeleteSession("user1", session.SessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 

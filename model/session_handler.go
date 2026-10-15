@@ -39,14 +39,14 @@ func conversationForSession(store SessionStore, userID, sessionID string) *Conve
 	if !ok {
 		return nil
 	}
-	if strings.TrimSpace(userID) != "" {
-		conversation, err := cs.GetUserConversationBySession(userID, sessionID)
-		if err == nil && conversation != nil {
-			return conversation
-		}
+	if strings.TrimSpace(userID) == "" {
+		return nil
 	}
-	conversation, err := cs.GetConversationBySession(sessionID)
+	conversation, err := cs.GetUserConversationBySession(userID, sessionID)
 	if err != nil || conversation == nil {
+		return nil
+	}
+	if conversation.UserID != userID {
 		return nil
 	}
 	return conversation
@@ -362,10 +362,13 @@ func (sh *SessionHandler) ListUserSessionsByType(userID string, agentType AgentT
 }
 
 // DeleteSession removes a session and cleans up any active session references
-func (sh *SessionHandler) DeleteSession(sessionID string) error {
-	session, err := sh.store.Get(sessionID)
+func (sh *SessionHandler) DeleteSession(userID, sessionID string) error {
+	session, err := sh.store.GetUserSession(strings.TrimSpace(userID), sessionID)
 	if err != nil {
 		return err
+	}
+	if session == nil {
+		return fmt.Errorf("session not found: %s", sessionID)
 	}
 
 	// Remove from index
@@ -401,12 +404,12 @@ func (sh *SessionHandler) DeleteSession(sessionID string) error {
 		}
 	}
 
-	return sh.store.Delete(sessionID)
+	return sh.store.DeleteUserSession(session.UserID, sessionID)
 }
 
 // UpdateSessionMetadata updates the title, tags, and summary of a session
-func (sh *SessionHandler) UpdateSessionMetadata(sessionID string, title string, tags []string, summary string) error {
-	session, err := sh.store.Get(sessionID)
+func (sh *SessionHandler) UpdateSessionMetadata(userID, sessionID string, title string, tags []string, summary string) error {
+	session, err := sh.store.GetUserSession(strings.TrimSpace(userID), sessionID)
 	if err != nil {
 		return err
 	}
@@ -427,12 +430,12 @@ func (sh *SessionHandler) UpdateSessionMetadata(sessionID string, title string, 
 }
 
 // AddMessage adds a message to a session and checks for auto-summarization
-func (sh *SessionHandler) AddMessage(ctx context.Context, sessionID string, msg openai.ChatCompletionMessage) error {
+func (sh *SessionHandler) AddMessage(ctx context.Context, userID, sessionID string, msg openai.ChatCompletionMessage) error {
 	// Lock the session to prevent race conditions with summarization
 	sh.LockSession(sessionID)
 	defer sh.UnlockSession(sessionID)
 
-	session, err := sh.store.Get(sessionID)
+	session, err := sh.store.GetUserSession(strings.TrimSpace(userID), sessionID)
 	if err != nil {
 		return err
 	}
@@ -447,7 +450,7 @@ func (sh *SessionHandler) AddMessage(ctx context.Context, sessionID string, msg 
 	// Check for auto-summarization (runs in background but will acquire lock)
 	if len(session.Msgs) >= sh.config.AutoSummarizeThreshold {
 		go func() {
-			if err := sh.SummarizeSession(ctx, sessionID); err != nil {
+			if err := sh.SummarizeSession(ctx, userID, sessionID); err != nil {
 				// Log error but don't block
 				fmt.Printf("auto-summarization failed for session %s: %v\n", sessionID, err)
 			}
@@ -458,7 +461,7 @@ func (sh *SessionHandler) AddMessage(ctx context.Context, sessionID string, msg 
 }
 
 // SummarizeSession generates a summary of the conversation and archives messages
-func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string) error {
+func (sh *SessionHandler) SummarizeSession(ctx context.Context, userID, sessionID string) error {
 	if sh.llmClient == nil {
 		return fmt.Errorf("LLM client not configured")
 	}
@@ -467,7 +470,7 @@ func (sh *SessionHandler) SummarizeSession(ctx context.Context, sessionID string
 	sh.LockSession(sessionID)
 	defer sh.UnlockSession(sessionID)
 
-	session, err := sh.store.Get(sessionID)
+	session, err := sh.store.GetUserSession(strings.TrimSpace(userID), sessionID)
 	if err != nil {
 		return err
 	}
@@ -810,11 +813,10 @@ func (sh *SessionHandler) keepStoredSessionTitle(session *Session) {
 	}
 	var fresh *Session
 	var err error
-	if strings.TrimSpace(session.UserID) != "" {
-		fresh, err = sh.store.GetUserSession(session.UserID, session.SessionID)
-	} else {
-		fresh, err = sh.store.Get(session.SessionID)
+	if strings.TrimSpace(session.UserID) == "" {
+		return
 	}
+	fresh, err = sh.store.GetUserSession(session.UserID, session.SessionID)
 	if err != nil {
 		return
 	}

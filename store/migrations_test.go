@@ -42,7 +42,7 @@ func TestSQLiteStore_VersionedMigrations(t *testing.T) {
 	if err != nil || v2 != want {
 		t.Errorf("schema version after reopen = %d (%v), want %d", v2, err, want)
 	}
-	if _, err := st2.Get(s.SessionID); err != nil {
+	if _, err := st2.GetUserSession(s.UserID, s.SessionID); err != nil {
 		t.Errorf("session lost across reopen: %v", err)
 	}
 }
@@ -73,7 +73,7 @@ func TestSQLiteStore_BackupIsRestorable(t *testing.T) {
 		t.Fatalf("open restored: %v", err)
 	}
 	defer st2.Close()
-	got, err := st2.Get(s.SessionID)
+	got, err := st2.GetUserSession(s.UserID, s.SessionID)
 	if err != nil || got.UserID != "user-1" {
 		t.Errorf("restored backup missing session: %v / %+v", err, got)
 	}
@@ -98,7 +98,7 @@ func TestSQLiteStore_VerifyFindsOrphans(t *testing.T) {
 	}
 
 	// Remove the session directly; the message becomes an orphan.
-	if err := st.Delete(s.SessionID); err != nil {
+	if err := st.DeleteUserSession(s.UserID, s.SessionID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	issues, err := st.Verify()
@@ -134,7 +134,7 @@ func TestMessageMetadataRoundTrip(t *testing.T) {
 	if err := st.PutMessage(msg); err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.GetMessagesBySession(s.SessionID)
+	got, err := st.GetUserMessagesBySession(s.UserID, s.SessionID)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("messages = %#v err=%v", got, err)
 	}

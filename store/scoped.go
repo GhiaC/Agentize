@@ -13,6 +13,9 @@ func errAmbiguousID(kind, id string) error {
 }
 
 func (s *SQLiteStore) errIfAmbiguousLocked(table, column, id string) error {
+	if model.IsNumericID(id) {
+		return errAmbiguousID(table, id)
+	}
 	query, ok := ambiguousCountSQL(table, column)
 	if !ok {
 		return fmt.Errorf("store: unknown uniqueness check %s.%s", table, column)
@@ -37,6 +40,8 @@ func ambiguousCountSQL(table, column string) (string, bool) {
 		return "SELECT COUNT(*) FROM conversations WHERE session_id = ?", true
 	case "user_files.file_id":
 		return "SELECT COUNT(*) FROM user_files WHERE file_id = ?", true
+	case "user_files.session_id":
+		return "SELECT COUNT(DISTINCT user_id) FROM user_files WHERE session_id = ?", true
 	case "workflow_runs.workflow_id":
 		return "SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = ?", true
 	case "task_schedules.schedule_id":
@@ -53,6 +58,8 @@ func ambiguousCountSQL(table, column string) (string, bool) {
 		return "SELECT COUNT(*) FROM route_traces WHERE trace_id = ?", true
 	case "summarization_logs.log_id":
 		return "SELECT COUNT(*) FROM summarization_logs WHERE log_id = ?", true
+	case "summarization_logs.session_id":
+		return "SELECT COUNT(DISTINCT user_id) FROM summarization_logs WHERE session_id = ?", true
 	default:
 		return "", false
 	}

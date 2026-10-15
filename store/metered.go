@@ -498,6 +498,11 @@ func (m *meteredStore) GetSummarizationLogsBySession(sessionID string) ([]*model
 	return m.Store.GetSummarizationLogsBySession(sessionID)
 }
 
+func (m *meteredStore) GetUserSummarizationLogsBySession(userID, sessionID string) ([]*model.SummarizationLog, error) {
+	defer m.observe(m.begin("GetUserSummarizationLogsBySession"))
+	return m.Store.GetUserSummarizationLogsBySession(userID, sessionID)
+}
+
 func (m *meteredStore) GetAllSummarizationLogs() ([]*model.SummarizationLog, error) {
 	defer m.observe(m.begin("GetAllSummarizationLogs"))
 	return m.Store.GetAllSummarizationLogs()

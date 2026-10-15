@@ -393,7 +393,7 @@ func RenderUserSummarizationLogDetail(handler *debuger.DebugHandler, userID, ses
 
 	var log *model.SummarizationLog
 	if userID != "" && sessionID != "" {
-		items, err := dp.GetSummarizationLogsBySession(sessionID)
+		items, err := userSummarizationLogs(handler, userID, sessionID)
 		if err != nil {
 			return "", fmt.Errorf("failed to get summarization logs: %w", err)
 		}

@@ -85,6 +85,9 @@ func RenderUserWorkflowDetail(handler *debuger.DebugHandler, userID, workflowID 
 		}
 	}
 	if workflow == nil && userID == "" {
+		if model.IsNumericID(workflowID) {
+			return "", fmt.Errorf("workflow_runs %q is not unique; look up with user id", workflowID)
+		}
 		workflow, err = handler.GetStore().GetWorkflowRun(workflowID)
 	}
 	if err != nil {

@@ -68,7 +68,7 @@ func TestTaskSchedulerPersistsEachRunAsChatTranscript(t *testing.T) {
 	}
 
 	waitScheduleRunCount(t, scheduler, schedule.ScheduleID, 1)
-	assertSourceRunTranscript(t, st, conversation.SessionID, [][2]string{
+	assertSourceRunTranscript(t, st, "user-1", conversation.SessionID, [][2]string{
 		{"user", "check"},
 		{"assistant", "latest result"},
 	})
@@ -90,7 +90,7 @@ func TestTaskSchedulerPersistsEachRunAsChatTranscript(t *testing.T) {
 		t.Fatal(runErr)
 	}
 	waitScheduleRunCount(t, scheduler, schedule.ScheduleID, 2)
-	assertSourceRunTranscript(t, st, conversation.SessionID, [][2]string{
+	assertSourceRunTranscript(t, st, "user-1", conversation.SessionID, [][2]string{
 		{"user", "check"},
 		{"assistant", "latest result"},
 		{"user", "check"},
@@ -145,13 +145,13 @@ func waitScheduleRunCount(t *testing.T, scheduler *TaskScheduler, scheduleID str
 	t.Fatalf("schedule %s did not reach run count %d", scheduleID, want)
 }
 
-func assertSourceRunTranscript(t *testing.T, st *store.SQLiteStore, sessionID string, want [][2]string) {
+func assertSourceRunTranscript(t *testing.T, st *store.SQLiteStore, userID, sessionID string, want [][2]string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	var messages []*model.Message
 	var err error
 	for time.Now().Before(deadline) {
-		messages, err = st.GetMessagesBySession(sessionID)
+		messages, err = st.GetUserMessagesBySession(userID, sessionID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -378,7 +378,7 @@ func TestTaskSchedulerDeleteCancelsWithoutRecreatingRows(t *testing.T) {
 	if err := scheduler.Delete(schedule.ScheduleID, "user-1"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.GetTaskSchedule(schedule.ScheduleID)
+	got, err := st.GetUserTaskSchedule(schedule.UserID, schedule.ScheduleID)
 	if err != nil || got != nil {
 		t.Fatalf("schedule recreated after delete: got=%#v err=%v", got, err)
 	}
@@ -393,7 +393,7 @@ func TestTaskSchedulerCreatesDedicatedMemorySessionAndCompletesAtMaxRuns(t *test
 	seenSessionIDs := make(chan string, 2)
 	scheduler := NewTaskScheduler(st, func(_ context.Context, schedule *model.TaskSchedule) (string, error) {
 		seenSessionIDs <- schedule.SessionID
-		session, err := st.Get(schedule.SessionID)
+		session, err := st.GetUserSession(schedule.UserID, schedule.SessionID)
 		if err != nil {
 			return "", err
 		}
@@ -418,7 +418,7 @@ func TestTaskSchedulerCreatesDedicatedMemorySessionAndCompletesAtMaxRuns(t *test
 	if schedule.SessionID == schedule.SourceSessionID {
 		t.Fatalf("schedule reused foreground session %q", schedule.SessionID)
 	}
-	dedicated, err := st.Get(schedule.SessionID)
+	dedicated, err := st.GetUserSession(schedule.UserID, schedule.SessionID)
 	if err != nil || dedicated == nil {
 		t.Fatalf("dedicated session: %#v err=%v", dedicated, err)
 	}
@@ -460,7 +460,7 @@ func TestTaskSchedulerCreatesDedicatedMemorySessionAndCompletesAtMaxRuns(t *test
 	if _, err := scheduler.Resume(schedule.ScheduleID, "user-1"); err == nil {
 		t.Fatal("completed schedule should not resume past max_runs")
 	}
-	dedicated, err = st.Get(schedule.SessionID)
+	dedicated, err = st.GetUserSession(schedule.UserID, schedule.SessionID)
 	if err != nil || len(dedicated.Msgs) != 1 || dedicated.Msgs[0].Content != "remembered" {
 		t.Fatalf("dedicated session memory was not persisted: %#v err=%v", dedicated, err)
 	}
@@ -520,7 +520,7 @@ func TestRunNowMarksRunningAndRejectsOverlap(t *testing.T) {
 	if got.LastRunStatus != model.TaskRunRunning {
 		t.Fatalf("run now status = %q, want running", got.LastRunStatus)
 	}
-	messages, err := st.GetMessagesBySession(conversation.SessionID)
+	messages, err := st.GetUserMessagesBySession("user-1", conversation.SessionID)
 	if err != nil {
 		t.Fatal(err)
 	}

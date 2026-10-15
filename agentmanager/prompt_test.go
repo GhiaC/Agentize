@@ -284,7 +284,7 @@ func TestBuildActiveSessionsPrompt_NoActive(t *testing.T) {
 	am := newTestManagerWithAgents([]AgentConfig{
 		{Name: "a", DisplayName: "Agent A", CostTier: CostTierLow},
 	}, nil)
-	getSession := func(sessionID string) (*model.Session, error) { return nil, nil }
+	getSession := func(_, sessionID string) (*model.Session, error) { return nil, nil }
 	getActiveID := func(userID string, agentType model.AgentType) string { return "" }
 	got := am.BuildActiveSessionsPrompt(getSession, getActiveID, "user1")
 	if got != "" {
@@ -297,7 +297,7 @@ func TestBuildActiveSessionsPrompt_WithActive(t *testing.T) {
 		{Name: "a", DisplayName: "Agent A", CostTier: CostTierLow},
 	}, nil)
 	session := &model.Session{SessionID: "sess-1", Title: "Test Topic"}
-	getSession := func(sessionID string) (*model.Session, error) {
+	getSession := func(_, sessionID string) (*model.Session, error) {
 		if sessionID == "sess-1" {
 			return session, nil
 		}
@@ -319,7 +319,7 @@ func TestBuildSessionContextPrompt_NoSession(t *testing.T) {
 	am := newTestManagerWithAgents([]AgentConfig{
 		{Name: "a", CostTier: CostTierLow},
 	}, nil)
-	getSession := func(sessionID string) (*model.Session, error) { return nil, nil }
+	getSession := func(_, sessionID string) (*model.Session, error) { return nil, nil }
 	getActiveID := func(userID string, agentType model.AgentType) string { return "" }
 	got := am.BuildSessionContextPrompt("a", getSession, getActiveID, "user1")
 	if got != "" {
@@ -332,7 +332,7 @@ func TestBuildSessionContextPrompt_WithSummary(t *testing.T) {
 		{Name: "a", DisplayName: "Agent A", CostTier: CostTierLow},
 	}, nil)
 	session := &model.Session{SessionID: "s1", Summary: model.SummaryEntries{"test summary"}, Tags: []string{"go", "testing"}}
-	getSession := func(sessionID string) (*model.Session, error) {
+	getSession := func(_, sessionID string) (*model.Session, error) {
 		if sessionID == "s1" {
 			return session, nil
 		}
@@ -355,7 +355,7 @@ func TestBuildAllSessionContextsPrompt_Empty(t *testing.T) {
 	am := newTestManagerWithAgents([]AgentConfig{
 		{Name: "a", CostTier: CostTierLow},
 	}, nil)
-	getSession := func(sessionID string) (*model.Session, error) { return nil, nil }
+	getSession := func(_, sessionID string) (*model.Session, error) { return nil, nil }
 	getActiveID := func(userID string, agentType model.AgentType) string { return "" }
 	got := am.BuildAllSessionContextsPrompt(getSession, getActiveID, "user1")
 	if got != "" {
@@ -370,7 +370,7 @@ func TestBuildAllSessionContextsPrompt_Multiple(t *testing.T) {
 	}, nil)
 	s1 := &model.Session{SessionID: "s1", Summary: model.SummaryEntries{"summary one"}}
 	s2 := &model.Session{SessionID: "s2", Summary: model.SummaryEntries{"summary two"}}
-	getSession := func(sessionID string) (*model.Session, error) {
+	getSession := func(_, sessionID string) (*model.Session, error) {
 		if sessionID == "s1" {
 			return s1, nil
 		}

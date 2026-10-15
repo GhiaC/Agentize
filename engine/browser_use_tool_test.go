@@ -157,7 +157,7 @@ func TestBrowserUseToolRunUsesTrustedSessionAndReturnsNextAction(t *testing.T) {
 
 func TestBrowserUseToolStagesSessionFileForBrowserUpload(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
-	upload, err := eng.RecordUserFile(session.SessionID, "resume.pdf", "application/pdf", model.FileSourceUploaded, []byte("PDF"))
+	upload, err := eng.RecordUserFileForUser(session.UserID, "resume.pdf", "application/pdf", model.FileSourceUploaded, []byte("PDF"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestBrowserUseToolStagesSessionFileForBrowserUpload(t *testing.T) {
 
 	if _, err := eng.executeBrowserUseTool(map[string]interface{}{
 		"action": "run", "task": "Upload the attached resume to the application form", "file_ids": []interface{}{upload.FileID},
-		"wait_seconds": float64(0), "__session_id__": session.SessionID,
+		"wait_seconds": float64(0), "__session_id__": session.SessionID, "__user_id__": session.UserID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestBrowserUseToolScreenshotRecordsGeneratedUserFile(t *testing.T) {
 	result, err := eng.executeBrowserUseTool(map[string]interface{}{
 		"action":         "screenshot",
 		"job_id":         "job-3",
-		"__session_id__": session.SessionID,
+		"__session_id__": session.SessionID, "__user_id__": session.UserID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -268,7 +268,7 @@ func TestBrowserUseToolScreenshotRecordsGeneratedUserFile(t *testing.T) {
 	if response.Delivery.Type != "generated_user_file" {
 		t.Fatalf("unexpected delivery type: %s", result)
 	}
-	data, meta, err := eng.ReadUserFile(response.Screenshot.FileID)
+	data, meta, err := eng.ReadUserFileForUser(session.UserID, response.Screenshot.FileID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestBrowserUseToolDeliversBrowserDownload(t *testing.T) {
 	eng.SetBrowserUse(service)
 
 	listed, err := eng.executeBrowserUseTool(map[string]interface{}{
-		"action": "downloads", "job_id": "job-4", "__session_id__": session.SessionID,
+		"action": "downloads", "job_id": "job-4", "__session_id__": session.SessionID, "__user_id__": session.UserID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -299,7 +299,7 @@ func TestBrowserUseToolDeliversBrowserDownload(t *testing.T) {
 	}
 
 	result, err := eng.executeBrowserUseTool(map[string]interface{}{
-		"action": "download", "job_id": "job-4", "file_name": "report.csv", "__session_id__": session.SessionID,
+		"action": "download", "job_id": "job-4", "file_name": "report.csv", "__session_id__": session.SessionID, "__user_id__": session.UserID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -315,7 +315,7 @@ func TestBrowserUseToolDeliversBrowserDownload(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &response); err != nil {
 		t.Fatal(err)
 	}
-	data, meta, err := eng.ReadUserFile(response.Download.FileID)
+	data, meta, err := eng.ReadUserFileForUser(session.UserID, response.Download.FileID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -300,9 +300,9 @@ func testSessionCRUD(t *testing.T, st Store) {
 	s.Title = "hello"
 	mustPutSession(t, st, s)
 
-	got, err := st.Get(s.SessionID)
+	got, err := st.GetUserSession(s.UserID, s.SessionID)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("GetUserSession: %v", err)
 	}
 	if got.SessionID != s.SessionID || got.UserID != "user-1" || got.Title != "hello" {
 		t.Errorf("round-trip mismatch: %+v", got)
@@ -326,16 +326,19 @@ func testSessionCRUD(t *testing.T, st Store) {
 	if list, _ := st.List("user-1"); len(list) != 1 {
 		t.Fatalf("after update List len = %d, want 1", len(list))
 	}
-	if got, _ := st.Get(s.SessionID); got.Title != "updated" {
+	if got, _ := st.GetUserSession(s.UserID, s.SessionID); got.Title != "updated" {
 		t.Errorf("update not applied: title = %q", got.Title)
+	}
+	if _, err := st.Get(s.SessionID); err == nil {
+		t.Fatal("unscoped Get of a numeric session id must require a user id")
 	}
 
 	// Delete removes it; Get then errors (session is a required entity).
-	if err := st.Delete(s.SessionID); err != nil {
-		t.Fatalf("Delete: %v", err)
+	if err := st.DeleteUserSession(s.UserID, s.SessionID); err != nil {
+		t.Fatalf("DeleteUserSession: %v", err)
 	}
-	if _, err := st.Get(s.SessionID); err == nil {
-		t.Error("Get after Delete should error")
+	if _, err := st.GetUserSession(s.UserID, s.SessionID); err == nil {
+		t.Error("GetUserSession after Delete should error")
 	}
 }
 
@@ -420,7 +423,7 @@ func testMessagesOrdering(t *testing.T, st Store) {
 	}
 
 	// Contract: GetMessagesBySession is newest-first.
-	msgs, err := st.GetMessagesBySession(s.SessionID)
+	msgs, err := st.GetUserMessagesBySession(s.UserID, s.SessionID)
 	if err != nil {
 		t.Fatalf("GetMessagesBySession: %v", err)
 	}
@@ -455,7 +458,7 @@ func testOpenedFiles(t *testing.T, st Store) {
 	}
 
 	// Contract: oldest-first ordering.
-	got, err := st.GetOpenedFilesBySession(s.SessionID)
+	got, err := st.GetUserOpenedFilesBySession(s.UserID, s.SessionID)
 	if err != nil {
 		t.Fatalf("GetOpenedFilesBySession: %v", err)
 	}
@@ -476,7 +479,7 @@ func testOpenedFiles(t *testing.T, st Store) {
 	if len(cur) != 1 || cur[0].FilePath != "/b.md" {
 		t.Fatalf("after close, currently-open = %+v, want only /b.md", cur)
 	}
-	all, _ := st.GetOpenedFilesBySession(s.SessionID)
+	all, _ := st.GetUserOpenedFilesBySession(s.UserID, s.SessionID)
 	for _, f := range all {
 		if f.FilePath == "/a.md" {
 			if f.IsOpen {
@@ -510,7 +513,7 @@ func testUserFiles(t *testing.T, st Store) {
 		t.Fatalf("PutUserFile: %v", err)
 	}
 
-	got, err := st.GetUserFile(uf.FileID)
+	got, err := st.GetUserFileForUser(s.UserID, uf.FileID)
 	if err != nil || got == nil {
 		t.Fatalf("GetUserFile: got=%v err=%v", got, err)
 	}
@@ -526,17 +529,17 @@ func testUserFiles(t *testing.T, st Store) {
 	if byUser, _ := st.GetUserFilesByUser("user-1"); len(byUser) != 1 {
 		t.Errorf("GetUserFilesByUser = %d, want 1", len(byUser))
 	}
-	if bySession, _ := st.GetUserFilesBySession(s.SessionID); len(bySession) != 1 {
-		t.Errorf("GetUserFilesBySession = %d, want 1", len(bySession))
+	if _, err := st.GetUserFilesBySession(s.SessionID); err == nil {
+		t.Fatal("numeric session file list must require a user id")
 	}
 	if all, _ := st.GetAllUserFiles(); len(all) != 1 {
 		t.Errorf("GetAllUserFiles = %d, want 1", len(all))
 	}
 
-	if err := st.DeleteUserFile(uf.FileID); err != nil {
-		t.Fatalf("DeleteUserFile: %v", err)
+	if err := st.DeleteUserFileForUser(s.UserID, uf.FileID); err != nil {
+		t.Fatalf("DeleteUserFileForUser: %v", err)
 	}
-	if mf, _ := st.GetUserFile(uf.FileID); mf != nil {
+	if mf, _ := st.GetUserFileForUser(s.UserID, uf.FileID); mf != nil {
 		t.Error("file still present after delete")
 	}
 }
@@ -586,7 +589,7 @@ func testToolCalls(t *testing.T, st Store) {
 		t.Errorf("update not applied: %+v", updated)
 	}
 
-	if bySession, _ := st.GetToolCallsBySession(s.SessionID); len(bySession) != 1 {
+	if bySession, _ := st.GetUserToolCallsBySession(s.UserID, s.SessionID); len(bySession) != 1 {
 		t.Errorf("GetToolCallsBySession = %d, want 1", len(bySession))
 	}
 	if all, _ := st.GetAllToolCalls(); len(all) != 1 {
@@ -666,7 +669,7 @@ func testSummarizationLogs(t *testing.T, st Store) {
 	}
 
 	// Contract: newest-first ordering.
-	logs, err := st.GetSummarizationLogsBySession(s.SessionID)
+	logs, err := st.GetUserSummarizationLogsBySession(s.UserID, s.SessionID)
 	if err != nil {
 		t.Fatalf("GetSummarizationLogsBySession: %v", err)
 	}
@@ -684,7 +687,7 @@ func testSummarizationLogs(t *testing.T, st Store) {
 	if err := st.PutSummarizationLog(dup); err != nil {
 		t.Fatalf("PutSummarizationLog (upsert): %v", err)
 	}
-	if logs, _ := st.GetSummarizationLogsBySession(s.SessionID); len(logs) != 3 {
+	if logs, _ := st.GetUserSummarizationLogsBySession(s.UserID, s.SessionID); len(logs) != 3 {
 		t.Errorf("upsert created a duplicate: len = %d, want 3", len(logs))
 	}
 	if all, _ := st.GetAllSummarizationLogs(); len(all) != 3 {
@@ -718,7 +721,13 @@ func testRouteTraces(t *testing.T, st Store) {
 	}
 
 	// Get-by-id round-trips the full DAG (nodes + edges + dispatched agent).
-	got, err := st.GetRouteTraceByID(t1.TraceID)
+	traces, err := st.GetUserRouteTracesBySession(s.UserID, s.SessionID)
+	var got *model.RouteTrace
+	for _, tr := range traces {
+		if tr != nil && tr.TraceID == t1.TraceID {
+			got = tr
+		}
+	}
 	if err != nil || got == nil {
 		t.Fatalf("GetRouteTraceByID: got=%v err=%v", got, err)
 	}
@@ -738,7 +747,7 @@ func testRouteTraces(t *testing.T, st Store) {
 	}
 
 	// Contract: newest-first ordering.
-	bySession, err := st.GetRouteTracesBySession(s.SessionID)
+	bySession, err := st.GetUserRouteTracesBySession(s.UserID, s.SessionID)
 	if err != nil {
 		t.Fatalf("GetRouteTracesBySession: %v", err)
 	}
@@ -890,7 +899,7 @@ func testDeleteUserData(t *testing.T, st Store) {
 	if convs, _ := st.ListConversations("user-del"); len(convs) != 0 {
 		t.Errorf("conversations remain after DeleteUserData: %d", len(convs))
 	}
-	if logs, _ := st.GetSummarizationLogsBySession(s.SessionID); len(logs) != 0 {
+	if logs, _ := st.GetUserSummarizationLogsBySession(s.UserID, s.SessionID); len(logs) != 0 {
 		t.Errorf("summarization logs remain for session after DeleteUserData: %d", len(logs))
 	}
 	if all, _ := st.GetAllSummarizationLogs(); true {

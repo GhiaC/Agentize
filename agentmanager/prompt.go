@@ -14,8 +14,9 @@ import (
 // to avoid circular imports.
 // ---------------------------------------------------------------------------
 
-// SessionGetter retrieves a session by ID.
-type SessionGetter func(sessionID string) (*model.Session, error)
+// SessionGetter retrieves a session owned by userID. Numeric session ids are
+// per user, so the owner is required.
+type SessionGetter func(userID, sessionID string) (*model.Session, error)
 
 // ActiveSessionIDGetter returns the active session ID for a user and agent type.
 type ActiveSessionIDGetter func(userID string, agentType model.AgentType) string
@@ -284,7 +285,7 @@ func (am *AgentManager) BuildActiveSessionsPrompt(
 			continue
 		}
 
-		session, err := getSession(sessionID)
+		session, err := getSession(userID, sessionID)
 		if err != nil || session == nil {
 			sb.WriteString(fmt.Sprintf("- **%s**: No active session (previous session was deleted)\n", displayName))
 			continue
@@ -330,7 +331,7 @@ func (am *AgentManager) BuildSessionContextPrompt(
 		return ""
 	}
 
-	session, err := getSession(sessionID)
+	session, err := getSession(userID, sessionID)
 	if err != nil || session == nil {
 		return ""
 	}

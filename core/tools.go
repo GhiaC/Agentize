@@ -597,7 +597,7 @@ func (ch *CoreHandler) createSessionTool(_ context.Context, userID string, args 
 
 	if title, ok := args["title"].(string); ok && title != "" {
 		session.Title = title
-		ch.sessionHandler.UpdateSessionMetadata(session.SessionID, title, nil, "")
+		ch.sessionHandler.UpdateSessionMetadata(userID, session.SessionID, title, nil, "")
 	}
 
 	if err := ch.setActiveSessionID(userID, agent.Config.AgentType, session.SessionID); err != nil {

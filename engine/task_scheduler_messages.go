@@ -17,13 +17,10 @@ func taskScheduleStatusMessageID(sourceSessionID, scheduleID string) string {
 func (s *TaskScheduler) nextSourceMessage(userID, sessionID string) (id string, seq int) {
 	sessionID = strings.TrimSpace(sessionID)
 	userID = strings.TrimSpace(userID)
-	if s == nil || s.store == nil || sessionID == "" {
+	if s == nil || s.store == nil || userID == "" || sessionID == "" {
 		return "", 0
 	}
 	session, err := s.store.GetUserSession(userID, sessionID)
-	if err != nil || session == nil {
-		session, err = s.store.Get(sessionID)
-	}
 	if err != nil || session == nil {
 		return "", 0
 	}

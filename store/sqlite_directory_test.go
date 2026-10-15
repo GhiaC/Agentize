@@ -37,7 +37,7 @@ func TestSQLiteStore_AutoCreateDirectory(t *testing.T) {
 		t.Fatalf("Failed to put session: %v", err)
 	}
 
-	retrieved, err := store.Get(session.SessionID)
+	retrieved, err := store.GetUserSession(session.UserID, session.SessionID)
 	if err != nil {
 		t.Fatalf("Failed to get session: %v", err)
 	}

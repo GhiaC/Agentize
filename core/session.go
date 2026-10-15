@@ -87,8 +87,8 @@ func (ch *CoreHandler) saveCoreSession(session *model.Session) error {
 }
 
 func (ch *CoreHandler) getSessionFunc() agentmanager.SessionGetter {
-	return func(sessionID string) (*model.Session, error) {
-		return ch.sessionHandler.GetSession(sessionID)
+	return func(userID, sessionID string) (*model.Session, error) {
+		return ch.sessionHandler.GetUserSession(userID, sessionID)
 	}
 }
 

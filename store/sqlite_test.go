@@ -31,7 +31,7 @@ func TestSQLiteStore_BasicOperations(t *testing.T) {
 	}
 
 	// Test Get
-	retrieved, err := store.Get(session.SessionID)
+	retrieved, err := store.GetUserSession(session.UserID, session.SessionID)
 	if err != nil {
 		t.Fatalf("Failed to get session: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestSQLiteStore_BasicOperations(t *testing.T) {
 		t.Fatalf("Failed to update session: %v", err)
 	}
 
-	retrieved, err = store.Get(session.SessionID)
+	retrieved, err = store.GetUserSession(session.UserID, session.SessionID)
 	if err != nil {
 		t.Fatalf("Failed to get updated session: %v", err)
 	}
@@ -73,11 +73,11 @@ func TestSQLiteStore_BasicOperations(t *testing.T) {
 	}
 
 	// Test Delete
-	if err := store.Delete(session.SessionID); err != nil {
+	if err := store.DeleteUserSession(session.UserID, session.SessionID); err != nil {
 		t.Fatalf("Failed to delete session: %v", err)
 	}
 
-	_, err = store.Get(session.SessionID)
+	_, err = store.GetUserSession(session.UserID, session.SessionID)
 	if err == nil {
 		t.Error("Expected error when getting deleted session, got nil")
 	}
@@ -111,7 +111,7 @@ func TestSQLiteStore_ConversationState(t *testing.T) {
 		t.Fatalf("Failed to put session: %v", err)
 	}
 
-	retrieved, err := store.Get(session.SessionID)
+	retrieved, err := store.GetUserSession(session.UserID, session.SessionID)
 	if err != nil {
 		t.Fatalf("Failed to get session: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestSQLiteStore_NodeDigests(t *testing.T) {
 		t.Fatalf("Failed to put session: %v", err)
 	}
 
-	retrieved, err := store.Get(session.SessionID)
+	retrieved, err := store.GetUserSession(session.UserID, session.SessionID)
 	if err != nil {
 		t.Fatalf("Failed to get session: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestSQLiteStore_ToolResults(t *testing.T) {
 		t.Fatalf("Failed to put session: %v", err)
 	}
 
-	retrieved, err := store.Get(session.SessionID)
+	retrieved, err := store.GetUserSession(session.UserID, session.SessionID)
 	if err != nil {
 		t.Fatalf("Failed to get session: %v", err)
 	}

@@ -26,7 +26,7 @@ func testConversations(t *testing.T, st Store) {
 	if got.Title != "plan" || got.SessionID != session.SessionID || got.Model != "m1" {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
-	bySession, err := st.GetConversationBySession(session.SessionID)
+	bySession, err := st.GetUserConversationBySession("alice", session.SessionID)
 	if err != nil || bySession == nil || bySession.ConversationID != "alice-c0001" {
 		t.Fatalf("GetConversationBySession: %v %+v", err, bySession)
 	}
@@ -40,7 +40,7 @@ func testConversations(t *testing.T, st Store) {
 	if err := st.PutConversation(second); err != nil {
 		t.Fatalf("PutConversation 2: %v", err)
 	}
-	if err := st.TouchConversationBySession(session.SessionID); err != nil {
+	if err := st.TouchUserConversationBySession("alice", session.SessionID); err != nil {
 		t.Fatalf("Touch: %v", err)
 	}
 	list, err := st.ListConversations("alice")

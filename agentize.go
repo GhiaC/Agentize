@@ -711,7 +711,7 @@ type UploadedFile struct {
 func (ag *Agentize) ProcessMessageWithFiles(ctx context.Context, sessionID, userMessage string, files []UploadedFile) (string, int, []*model.UserFile, error) {
 	var saved []*model.UserFile
 	for _, f := range files {
-		uf, err := ag.RecordUserFile(sessionID, f.Name, f.MIMEType, model.FileSourceUploaded, f.Data)
+		uf, err := ag.engine.RecordUserFileInSession(model.UserIDFrom(ctx), sessionID, f.Name, f.MIMEType, model.FileSourceUploaded, f.Data)
 		if err != nil {
 			log.Log.Warnf("[Agentize] ⚠️  Failed to record uploaded file %q for session %s: %v", f.Name, sessionID, err)
 			continue

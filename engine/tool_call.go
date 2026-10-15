@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ func FormatToolCallsContent(toolCalls []openai.ToolCall) string {
 type ToolCallStore interface {
 	PutToolCall(*model.ToolCall) error
 	UpdateToolCallResponse(toolID string, response string, err error) error
+	UpdateUserToolCallResponse(userID, sessionID, toolID string, response string, err error) error
 	UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID string, response string, err error) error
 }
 
@@ -177,9 +179,14 @@ func (p *ToolCallPersister) Update(session *model.Session, messageID, toolID, re
 	}
 
 	var err error
-	if session != nil && strings.TrimSpace(messageID) != "" {
+	switch {
+	case session != nil && strings.TrimSpace(session.UserID) != "" && strings.TrimSpace(messageID) != "":
 		err = p.store.UpdateMessageToolCallResponse(session.UserID, session.SessionID, messageID, toolID, response, execErr)
-	} else {
+	case session != nil && strings.TrimSpace(session.UserID) != "":
+		err = p.store.UpdateUserToolCallResponse(session.UserID, session.SessionID, toolID, response, execErr)
+	case model.IsNumericID(toolID):
+		err = fmt.Errorf("tool_calls %q is not unique; look up with user id", toolID)
+	default:
 		err = p.store.UpdateToolCallResponse(toolID, response, execErr)
 	}
 	if err != nil {

@@ -2039,6 +2039,9 @@ func (s *MongoDBStore) GetUserFilesByUser(userID string) ([]*model.UserFile, err
 func (s *MongoDBStore) GetUserFilesBySession(sessionID string) ([]*model.UserFile, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*s.opTimeout)
 	defer cancel()
+	if err := s.errIfAmbiguous(ctx, s.userFilesCollection, "session_id", "user_files", sessionID); err != nil {
+		return nil, err
+	}
 
 	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
 	cursor, err := s.userFilesCollection.Find(ctx, bson.M{"session_id": sessionID}, opts)
@@ -2466,9 +2469,24 @@ func (s *MongoDBStore) PutSummarizationLog(log *model.SummarizationLog) error {
 func (s *MongoDBStore) GetSummarizationLogsBySession(sessionID string) ([]*model.SummarizationLog, error) {
 	ctx, cancel := s.opCtx()
 	defer cancel()
+	if err := s.errIfAmbiguous(ctx, s.summarizationLogsCollection, "session_id", "summarization_logs", sessionID); err != nil {
+		return nil, err
+	}
+	return s.listSummarizationLogs(ctx, bson.M{"session_id": sessionID})
+}
 
+func (s *MongoDBStore) GetUserSummarizationLogsBySession(userID, sessionID string) ([]*model.SummarizationLog, error) {
+	if err := requireOwnerID("summarization log", userID, sessionID); err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.opCtx()
+	defer cancel()
+	return s.listSummarizationLogs(ctx, bson.M{"user_id": userID, "session_id": sessionID})
+}
+
+func (s *MongoDBStore) listSummarizationLogs(ctx context.Context, filter bson.M) ([]*model.SummarizationLog, error) {
 	// Newest first, matching the SQLite backend (contract parity).
-	cursor, err := s.summarizationLogsCollection.Find(ctx, bson.M{"session_id": sessionID}, options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}))
+	cursor, err := s.summarizationLogsCollection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query summarization logs: %w", err)
 	}

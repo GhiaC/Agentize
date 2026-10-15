@@ -1219,11 +1219,10 @@ func lookupConversation(store model.SessionStore, session *model.Session) *model
 	}
 	var conversation *model.Conversation
 	var err error
-	if strings.TrimSpace(session.UserID) != "" {
-		conversation, err = conversations.GetUserConversationBySession(session.UserID, session.SessionID)
-	} else {
-		conversation, err = conversations.GetConversationBySession(session.SessionID)
+	if strings.TrimSpace(session.UserID) == "" {
+		return nil
 	}
+	conversation, err = conversations.GetUserConversationBySession(session.UserID, session.SessionID)
 	if err != nil || conversation == nil {
 		return nil
 	}

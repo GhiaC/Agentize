@@ -34,14 +34,13 @@ func TestUserFileRecordingAndDashboard(t *testing.T) {
 		t.Fatalf("failed to create agentize: %v", err)
 	}
 
-	sess, err := ag.CreateSession("user-1")
-	if err != nil {
+	if _, err := ag.CreateSession("user-1"); err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}
 
 	// Record an uploaded file — the same primitive ProcessMessageWithFiles and a
 	// bot integration use when a user sends an attachment.
-	uf, err := ag.RecordUserFile(sess.SessionID, "notes.txt", "text/plain", model.FileSourceUploaded, []byte("hello world"))
+	uf, err := ag.RecordUserFileForUser("user-1", "notes.txt", "text/plain", model.FileSourceUploaded, []byte("hello world"))
 	if err != nil {
 		t.Fatalf("RecordUserFile failed: %v", err)
 	}

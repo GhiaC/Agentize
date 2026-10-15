@@ -16,6 +16,17 @@ import (
 
 const sessionDetailItemsPerPage = 25
 
+func userSummarizationLogs(handler *debuger.DebugHandler, userID, sessionID string) ([]*model.SummarizationLog, error) {
+	type scoped interface {
+		GetUserSummarizationLogsBySession(userID, sessionID string) ([]*model.SummarizationLog, error)
+	}
+	store, ok := handler.GetStore().(scoped)
+	if !ok {
+		return nil, fmt.Errorf("summarization_logs %q is not unique; look up with user id", sessionID)
+	}
+	return store.GetUserSummarizationLogsBySession(userID, sessionID)
+}
+
 // SessionDetailPages keeps every collection on a large session independently
 // pageable. Page 1 means newest/current; higher pages walk backward in history.
 type SessionDetailPages struct {
@@ -211,7 +222,7 @@ func RenderUserSessionDetailPage(handler *debuger.DebugHandler, userID, sessionI
 	}
 	files = openNodes
 
-	allLogs, _ := dp.GetSummarizationLogsBySession(sessionID)
+	allLogs, _ := userSummarizationLogs(handler, userID, sessionID)
 	summarizationLogs := allLogs[:0]
 	for _, log := range allLogs {
 		if log != nil && log.UserID == userID {

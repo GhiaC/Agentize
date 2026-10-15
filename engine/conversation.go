@@ -50,7 +50,7 @@ func (e *Engine) CreateConversation(input CreateConversationInput) (*model.Conve
 	conversationID := model.GenerateConversationID(userID, seq)
 	conv := model.NewConversation(userID, conversationID, session.SessionID, session.Title, session.Model, seq)
 	if err := e.Sessions.PutConversation(conv); err != nil {
-		_ = e.Sessions.Delete(session.SessionID)
+		_ = e.Sessions.DeleteUserSession(userID, session.SessionID)
 		return nil, fmt.Errorf("failed to store conversation: %w", err)
 	}
 	log.Log.Infof("[Engine] ✅ Created conversation | ConversationID: %s | SessionID: %s", conv.ConversationID, conv.SessionID)
@@ -219,14 +219,11 @@ func (e *Engine) touchOwningConversation(session *model.Session) {
 	if session.ParentSessionID != "" {
 		sessionID = session.ParentSessionID
 	}
-	if session.UserID != "" {
-		if err := e.Sessions.TouchUserConversationBySession(session.UserID, sessionID); err != nil {
-			log.Log.Warnf("[Engine] ⚠️  Failed to touch conversation | UserID: %s | SessionID: %s | Error: %v", session.UserID, sessionID, err)
-		}
+	if strings.TrimSpace(session.UserID) == "" {
 		return
 	}
-	if err := e.Sessions.TouchConversationBySession(sessionID); err != nil {
-		log.Log.Warnf("[Engine] ⚠️  Failed to touch conversation | SessionID: %s | Error: %v", sessionID, err)
+	if err := e.Sessions.TouchUserConversationBySession(session.UserID, sessionID); err != nil {
+		log.Log.Warnf("[Engine] ⚠️  Failed to touch conversation | UserID: %s | SessionID: %s | Error: %v", session.UserID, sessionID, err)
 	}
 }
 

@@ -98,7 +98,7 @@ func TestImmediateWorkflowApprovesEveryTaskAndResolvesOutputs(t *testing.T) {
 	if payload.Status != model.WorkflowSucceeded || payload.WorkflowID == "" {
 		t.Fatalf("workflow result = %s", result)
 	}
-	persisted, err := st.GetWorkflowRun(payload.WorkflowID)
+	persisted, err := st.GetUserWorkflowRun("user-1", payload.WorkflowID)
 	if err != nil || persisted == nil {
 		t.Fatalf("persisted workflow=%#v err=%v", persisted, err)
 	}
@@ -167,7 +167,7 @@ func TestScheduledWorkflowUsesDedicatedSessionAndBypassesPerTaskApproval(t *test
 	if created.ScheduleID == "" || created.SessionID == "" || created.SessionID == source.SessionID {
 		t.Fatalf("create result = %s", result)
 	}
-	scheduleSession, err := st.Get(created.SessionID)
+	scheduleSession, err := st.GetUserSession("user-1", created.SessionID)
 	if err != nil || scheduleSession == nil {
 		t.Fatalf("schedule session=%#v err=%v", scheduleSession, err)
 	}
@@ -188,7 +188,7 @@ func TestScheduledWorkflowUsesDedicatedSessionAndBypassesPerTaskApproval(t *test
 			if schedule.LastRunStatus != model.TaskRunSucceeded || schedule.LastWorkflowID == "" {
 				t.Fatalf("completed schedule = %#v", schedule)
 			}
-			workflow, workflowErr := st.GetWorkflowRun(schedule.LastWorkflowID)
+			workflow, workflowErr := st.GetUserWorkflowRun("user-1", schedule.LastWorkflowID)
 			if workflowErr != nil || workflow == nil || workflow.Status != model.WorkflowSucceeded {
 				t.Fatalf("workflow=%#v err=%v", workflow, workflowErr)
 			}
@@ -252,7 +252,7 @@ func TestCorePromptScheduleBindsDedicatedSessionToNamedAgent(t *testing.T) {
 		payload.Schedule.SessionID == source.SessionID {
 		t.Fatalf("schedule = %#v", payload.Schedule)
 	}
-	dedicated, err := st.Get(payload.Schedule.SessionID)
+	dedicated, err := st.GetUserSession("user-1", payload.Schedule.SessionID)
 	if err != nil || dedicated == nil || dedicated.Title != "Schedule: memory" {
 		t.Fatalf("dedicated session=%#v err=%v", dedicated, err)
 	}

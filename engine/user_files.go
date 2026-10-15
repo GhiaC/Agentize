@@ -64,7 +64,15 @@ func (e *Engine) SetImageEditor(editor ImageEditorFunc) {
 // source should be model.FileSourceUploaded for files the user sent, or
 // model.FileSourceGenerated for files produced for the user.
 func (e *Engine) RecordUserFile(sessionID, name, mimeType string, source model.FileSource, data []byte) (*model.UserFile, error) {
-	return e.recordUserFile("", sessionID, name, mimeType, source, "", data)
+	return nil, fmt.Errorf("sessions %q is not unique; look up with user id", sessionID)
+}
+
+// RecordUserFileInSession stores bytes on the session owned by userID.
+func (e *Engine) RecordUserFileInSession(userID, sessionID, name, mimeType string, source model.FileSource, data []byte) (*model.UserFile, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, fmt.Errorf("sessions %q is not unique; look up with user id", sessionID)
+	}
+	return e.recordUserFile(userID, sessionID, name, mimeType, source, "", data)
 }
 
 // RecordUserFileForUser records a file without making a host choose an engine

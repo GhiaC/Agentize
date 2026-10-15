@@ -103,7 +103,7 @@ func TestRenderRoutes(t *testing.T) {
 
 	// Detail renders the graph container, the JSON data island, the ECharts
 	// init, and the steps — with the message escaped.
-	detail, err := RenderRouteDetail(handler, tr.TraceID)
+	detail, err := RenderUserRouteDetail(handler, sess.UserID, sess.SessionID, tr.TraceID)
 	if err != nil {
 		t.Fatalf("RenderRouteDetail failed: %v", err)
 	}

@@ -35,6 +35,9 @@ func scopedChildMongoID(userID, parentID, id string) string {
 }
 
 func (s *MongoDBStore) errIfAmbiguous(ctx context.Context, coll *mongo.Collection, field, kind, id string) error {
+	if model.IsNumericID(id) {
+		return errAmbiguousID(kind, id)
+	}
 	n, err := coll.CountDocuments(ctx, bson.M{field: id})
 	if err != nil {
 		return fmt.Errorf("failed to check %s uniqueness: %w", kind, err)

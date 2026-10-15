@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ghiac/agentize/model"
 )
@@ -84,13 +85,10 @@ func (ag *Agentize) ProcessMessageAndDeliver(
 	}
 
 	userID := model.UserIDFrom(ctx)
-	var session *model.Session
-	var sessionErr error
-	if userID != "" {
-		session, sessionErr = ag.GetSessionStore().GetUserSession(userID, sessionID)
-	} else {
-		session, sessionErr = ag.GetSessionStore().Get(sessionID)
+	if strings.TrimSpace(userID) == "" {
+		return response, tokens, errors.Join(processErr, fmt.Errorf("sessions %q is not unique; look up with user id", sessionID))
 	}
+	session, sessionErr := ag.GetSessionStore().GetUserSession(userID, sessionID)
 	if sessionErr != nil {
 		return response, tokens, errors.Join(processErr, fmt.Errorf("load session for generated file delivery: %w", sessionErr))
 	}

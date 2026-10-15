@@ -178,8 +178,11 @@ func testTaskScheduleOwnerIsolation(t *testing.T, st Store) {
 	if runs, err := st.ListTaskScheduleRuns("bob", "1", 10); err != nil || len(runs) != 1 {
 		t.Fatalf("bob runs after alice delete: %#v err=%v", runs, err)
 	}
-	if got, err := st.GetTaskSchedule("1"); err != nil || got == nil || got.UserID != "bob" {
-		t.Fatalf("admin get after alice delete: %#v err=%v", got, err)
+	if _, err := st.GetTaskSchedule("1"); err == nil {
+		t.Fatal("unscoped GetTaskSchedule must require a user id even when one owner remains")
+	}
+	if got, err := st.GetUserTaskSchedule("bob", "1"); err != nil || got == nil || got.UserID != "bob" {
+		t.Fatalf("owned schedule after alice delete: %#v err=%v", got, err)
 	}
 
 	carolSess := model.NewSessionWithID("carol", "1", model.AgentTypeLow)

@@ -27,6 +27,9 @@ func RenderToolCalls(handler *debuger.DebugHandler, page int, userID, sessionID 
 		title = "Tool Calls for Session: " + model.DisplayID(sessionID)
 		baseURL = debuger.SessionToolCallsPath(userID, sessionID)
 	} else if sessionID != "" {
+		if model.IsNumericID(sessionID) {
+			return "", fmt.Errorf("tool_calls %q is not unique; look up with user id", sessionID)
+		}
 		dbToolCalls, err = dp.GetToolCallsBySession(sessionID)
 		title = "Tool Calls for Session: " + model.DisplayID(sessionID)
 		baseURL = "/agentize/debug/tool-calls?session=" + template.URLQueryEscaper(sessionID)

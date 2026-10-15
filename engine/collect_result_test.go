@@ -55,7 +55,7 @@ func TestProcessToolResult_OversizedPersistsAndCollectible(t *testing.T) {
 	}
 
 	// collect_result retrieval goes through a fresh Get (clone). It must find it.
-	got, ok := eng.GetToolResult(sessionID, resultID)
+	got, ok := eng.GetUserToolResult("u1", sessionID, resultID)
 	if !ok {
 		t.Fatalf("regression: stored tool result not found after Put — collect_result would fail")
 	}
@@ -66,14 +66,14 @@ func TestProcessToolResult_OversizedPersistsAndCollectible(t *testing.T) {
 	// The full collect_result entry point must parse the id and locate it (no
 	// "result not found in session" error).
 	if model.IsNumericID(resultID) {
-		if _, ok := eng.GetToolResult(sessionID, resultID); !ok {
-			t.Fatalf("GetToolResult should locate numeric result_id %q", resultID)
+		if _, ok := eng.GetUserToolResult("u1", sessionID, resultID); !ok {
+			t.Fatalf("GetUserToolResult should locate numeric result_id %q", resultID)
 		}
 	} else if sid, ok := parseResultID(resultID); !ok || sid != sessionID {
 		t.Fatalf("parseResultID(%q) = %q,%v; want %q,true", resultID, sid, ok, sessionID)
 	}
-	if _, ok := eng.GetToolResult(sessionID, resultID); !ok {
-		t.Fatalf("GetToolResult should locate the stored result")
+	if _, ok := eng.GetUserToolResult("u1", sessionID, resultID); !ok {
+		t.Fatalf("GetUserToolResult should locate the stored result")
 	}
 }
 

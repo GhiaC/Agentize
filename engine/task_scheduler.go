@@ -171,6 +171,14 @@ func (e *Engine) InitializeTaskScheduler() {
 		e.taskScheduler = NewTaskScheduler(
 			e.Sessions,
 			func(ctx context.Context, schedule *model.TaskSchedule) (string, error) {
+				if schedule == nil || strings.TrimSpace(schedule.UserID) == "" {
+					sessionID := ""
+					if schedule != nil {
+						sessionID = schedule.SessionID
+					}
+					return "", fmt.Errorf("sessions %q is not unique; look up with user id", sessionID)
+				}
+				ctx = model.WithUserID(ctx, schedule.UserID)
 				output, _, err := e.ProcessScheduledIncoming(ctx, schedule.SessionID, IncomingMessage{
 					Content:  schedule.Prompt,
 					Metadata: model.NewScheduleMessageMeta(schedule),
@@ -532,9 +540,12 @@ func (s *TaskScheduler) execute(ctx context.Context, userID, scheduleID string) 
 	}
 	var output string
 	var execErr error
-	if executor == nil {
+	if strings.TrimSpace(schedule.UserID) == "" {
+		execErr = fmt.Errorf("sessions %q is not unique; look up with user id", schedule.SessionID)
+	} else if executor == nil {
 		execErr = fmt.Errorf("workflow schedule execution is not configured")
 	} else {
+		ctx = model.WithUserID(ctx, schedule.UserID)
 		output, execErr = executor(ctx, schedule)
 	}
 	output = truncateTaskScheduleText(output, maxTaskScheduleTextLength)
@@ -723,18 +734,18 @@ func (s *TaskScheduler) Create(input CreateTaskScheduleInput) (*model.TaskSchedu
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if conversation, convErr := s.store.GetUserConversationBySession(input.UserID, input.SessionID); convErr != nil {
-		_ = s.store.Delete(dedicatedSession.SessionID)
+		_ = s.store.DeleteUserSession(input.UserID, dedicatedSession.SessionID)
 		return nil, fmt.Errorf("resolve source conversation: %w", convErr)
 	} else if conversation != nil {
 		schedule.SourceConversationID = conversation.ConversationID
 	}
 	schedule.StatusMessageID = taskScheduleStatusMessageID(input.SessionID, scheduleID)
 	if err := schedule.Validate(); err != nil {
-		_ = s.store.Delete(dedicatedSession.SessionID)
+		_ = s.store.DeleteUserSession(input.UserID, dedicatedSession.SessionID)
 		return nil, err
 	}
 	if err := s.store.PutTaskSchedule(schedule); err != nil {
-		_ = s.store.Delete(dedicatedSession.SessionID)
+		_ = s.store.DeleteUserSession(input.UserID, dedicatedSession.SessionID)
 		metrics.TaskScheduleOp("create", "error")
 		return nil, err
 	}

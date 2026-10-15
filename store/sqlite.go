@@ -2101,6 +2101,9 @@ func (s *SQLiteStore) GetUserFilesByUser(userID string) ([]*model.UserFile, erro
 func (s *SQLiteStore) GetUserFilesBySession(sessionID string) ([]*model.UserFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := s.errIfAmbiguousLocked("user_files", "session_id", sessionID); err != nil {
+		return nil, err
+	}
 	return s.queryUserFiles(
 		`SELECT `+userFileColumns+` FROM user_files WHERE session_id = ? ORDER BY created_at DESC`,
 		sessionID,
@@ -2615,10 +2618,21 @@ func (s *SQLiteStore) PutSummarizationLog(log *model.SummarizationLog) error {
 	return nil
 }
 
-// GetSummarizationLogsBySession returns all summarization logs for a session
+const summarizationLogSelect = `SELECT log_id, session_id, user_id, session_title, previous_summary, previous_tags,
+			messages_before_count, messages_after_count, archived_messages_count,
+			prompt_sent, response_received, model_used, requested_model,
+			generated_summary, generated_tags, generated_title,
+			prompt_tokens, completion_tokens, total_tokens, duration_ms,
+			status, error_message, summarization_type, created_at, completed_at`
+
+// GetSummarizationLogsBySession returns all summarization logs for a session.
+// Numeric session ids require GetUserSummarizationLogsBySession.
 func (s *SQLiteStore) GetSummarizationLogsBySession(sessionID string) ([]*model.SummarizationLog, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := s.errIfAmbiguousLocked("summarization_logs", "session_id", sessionID); err != nil {
+		return nil, err
+	}
 
 	rows, err := s.db.Query(
 		`SELECT log_id, session_id, user_id, session_title, previous_summary, previous_tags,
@@ -2635,6 +2649,25 @@ func (s *SQLiteStore) GetSummarizationLogsBySession(sessionID string) ([]*model.
 	}
 	defer rows.Close()
 
+	return s.scanSummarizationLogs(rows)
+}
+
+// GetUserSummarizationLogsBySession returns one owner's summarization logs.
+func (s *SQLiteStore) GetUserSummarizationLogsBySession(userID, sessionID string) ([]*model.SummarizationLog, error) {
+	if err := requireOwnerID("summarization log", userID, sessionID); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(
+		summarizationLogSelect+`
+		FROM summarization_logs WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC`,
+		userID, sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query summarization logs: %w", err)
+	}
+	defer rows.Close()
 	return s.scanSummarizationLogs(rows)
 }
 

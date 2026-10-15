@@ -509,6 +509,10 @@ func (s *DBStore) GetSummarizationLogsBySession(sessionID string) ([]*model.Summ
 	return s.sqliteStore.GetSummarizationLogsBySession(sessionID)
 }
 
+func (s *DBStore) GetUserSummarizationLogsBySession(userID, sessionID string) ([]*model.SummarizationLog, error) {
+	return s.sqliteStore.GetUserSummarizationLogsBySession(userID, sessionID)
+}
+
 // GetAllSummarizationLogs returns all summarization logs (delegates to SQLiteStore)
 func (s *DBStore) GetAllSummarizationLogs() ([]*model.SummarizationLog, error) {
 	return s.sqliteStore.GetAllSummarizationLogs()

@@ -21,12 +21,12 @@ type DebugStore interface {
 	GetUserFilesBySession(sessionID string) ([]*model.UserFile, error)
 	GetMessagesBySession(sessionID string) ([]*model.Message, error)
 	GetMessagesByUser(userID string) ([]*model.Message, error)
-		GetUser(userID string) (*model.User, error)
-		// GetSession looks up a session by id alone.
-		//
-		// Deprecated: numeric session ids are per-user. Use GetUserSession.
-		GetSession(sessionID string) (*model.Session, error)
-		GetUserSession(userID, sessionID string) (*model.Session, error)
+	GetUser(userID string) (*model.User, error)
+	// GetSession looks up a session by id alone.
+	//
+	// Deprecated: numeric session ids are per-user. Use GetUserSession.
+	GetSession(sessionID string) (*model.Session, error)
+	GetUserSession(userID, sessionID string) (*model.Session, error)
 	GetAllToolCalls() ([]*model.ToolCall, error)
 	// Deprecated: numeric session ids are per-user. Use GetUserToolCallsBySession.
 	GetToolCallsBySession(sessionID string) ([]*model.ToolCall, error)
@@ -35,6 +35,7 @@ type DebugStore interface {
 	GetToolCallByToolID(toolID string) (*model.ToolCall, error)
 	PutSummarizationLog(log *model.SummarizationLog) error
 	GetSummarizationLogsBySession(sessionID string) ([]*model.SummarizationLog, error)
+	GetUserSummarizationLogsBySession(userID, sessionID string) ([]*model.SummarizationLog, error)
 	GetAllSummarizationLogs() ([]*model.SummarizationLog, error)
 
 	// Route traces (Core decision/forward DAGs). Get-by-id returns (nil, nil)
@@ -114,16 +115,16 @@ type PageData struct {
 
 // DashboardStats holds statistics for the dashboard
 type DashboardStats struct {
-	TotalUsers             int
-	TotalSessions          int
-	TotalMessages          int
-	TotalFiles             int
-	TotalToolCalls         int
-	TotalPromptTokens      int
-	TotalCompletionTokens  int
-	TotalTokens            int
-	TotalCostCredits       float64
-	TopCostSessions        []CostSession
+	TotalUsers            int
+	TotalSessions         int
+	TotalMessages         int
+	TotalFiles            int
+	TotalToolCalls        int
+	TotalPromptTokens     int
+	TotalCompletionTokens int
+	TotalTokens           int
+	TotalCostCredits      float64
+	TopCostSessions       []CostSession
 }
 
 // CostSession is one session in the dashboard cost ranking.

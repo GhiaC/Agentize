@@ -64,7 +64,7 @@ func testMessagePagination(t *testing.T, st Store) {
 	putNMessages(t, st, s, 5)
 
 	// Page 1: the 2 newest.
-	page1, err := st.GetMessagesBySessionPage(s.SessionID, 2, 0)
+	page1, err := st.GetUserMessagesBySessionPage(s.UserID, s.SessionID, 2, 0)
 	if err != nil {
 		t.Fatalf("page 1: %v", err)
 	}
@@ -72,7 +72,7 @@ func testMessagePagination(t *testing.T, st Store) {
 		t.Fatalf("page 1 mismatch: %+v", contents(page1))
 	}
 	// Page 2.
-	page2, err := st.GetMessagesBySessionPage(s.SessionID, 2, 2)
+	page2, err := st.GetUserMessagesBySessionPage(s.UserID, s.SessionID, 2, 2)
 	if err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
@@ -80,7 +80,7 @@ func testMessagePagination(t *testing.T, st Store) {
 		t.Fatalf("page 2 mismatch: %+v", contents(page2))
 	}
 	// Final partial page.
-	page3, err := st.GetMessagesBySessionPage(s.SessionID, 2, 4)
+	page3, err := st.GetUserMessagesBySessionPage(s.UserID, s.SessionID, 2, 4)
 	if err != nil {
 		t.Fatalf("page 3: %v", err)
 	}
@@ -88,7 +88,7 @@ func testMessagePagination(t *testing.T, st Store) {
 		t.Fatalf("page 3 mismatch: %+v", contents(page3))
 	}
 	// Defaults: limit <= 0 returns a full default page; offset < 0 → 0.
-	all, err := st.GetMessagesBySessionPage(s.SessionID, 0, -1)
+	all, err := st.GetUserMessagesBySessionPage(s.UserID, s.SessionID, 0, -1)
 	if err != nil {
 		t.Fatalf("default page: %v", err)
 	}
@@ -96,7 +96,7 @@ func testMessagePagination(t *testing.T, st Store) {
 		t.Fatalf("default page len = %d, want 5", len(all))
 	}
 	// Parity with the unbounded variant.
-	unbounded, err := st.GetMessagesBySession(s.SessionID)
+	unbounded, err := st.GetUserMessagesBySession(s.UserID, s.SessionID)
 	if err != nil {
 		t.Fatalf("GetMessagesBySession: %v", err)
 	}
@@ -127,7 +127,7 @@ func testPutMessagesBatch(t *testing.T, st Store) {
 	if err := st.PutMessages(batch); err != nil {
 		t.Fatalf("PutMessages: %v", err)
 	}
-	msgs, err := st.GetMessagesBySession(s.SessionID)
+	msgs, err := st.GetUserMessagesBySession(s.UserID, s.SessionID)
 	if err != nil {
 		t.Fatalf("GetMessagesBySession: %v", err)
 	}
@@ -140,7 +140,7 @@ func testPutMessagesBatch(t *testing.T, st Store) {
 	if err := st.PutMessages([]*model.Message{bad}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("invalid batch: got %v, want ErrValidation", err)
 	}
-	if msgs, _ := st.GetMessagesBySession(s.SessionID); len(msgs) != 3 {
+	if msgs, _ := st.GetUserMessagesBySession(s.UserID, s.SessionID); len(msgs) != 3 {
 		t.Errorf("invalid batch must write nothing; got %d messages", len(msgs))
 	}
 
@@ -257,7 +257,7 @@ func testVerifyDetectsOrphans(t *testing.T, st Store) {
 		t.Fatalf("PutSummarizationLog: %v", err)
 	}
 
-	if err := st.Delete(s.SessionID); err != nil {
+	if err := st.DeleteUserSession(s.UserID, s.SessionID); err != nil {
 		t.Fatalf("Delete session: %v", err)
 	}
 
@@ -380,7 +380,7 @@ func testMessageSeqRestore(t *testing.T, st Store) {
 	s := newSession("user-1", model.AgentTypeLow)
 	mustPutSession(t, st, s)
 	putNMessages(t, st, s, 3) // seq_ids 1..3
-	got, err := st.Get(s.SessionID)
+	got, err := st.GetUserSession(s.UserID, s.SessionID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -416,7 +416,7 @@ func testDeletionAudit(t *testing.T, st Store) {
 
 	s := newSession("user-1", model.AgentTypeLow)
 	mustPutSession(t, st, s)
-	if err := st.Delete(s.SessionID); err != nil {
+	if err := st.DeleteUserSession(s.UserID, s.SessionID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 

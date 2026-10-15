@@ -1,12 +1,35 @@
 package store
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ghiac/agentize/model"
 	"github.com/sashabaranov/go-openai"
 )
+
+func TestUnscopedNumericSessionRequiresUserEvenWhenUnique(t *testing.T) {
+	st, err := NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	session := model.NewSessionWithID("alice", "5", model.AgentTypeConversation)
+	if err := st.Put(session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Get("5"); err == nil || !strings.Contains(err.Error(), "look up with user id") {
+		t.Fatalf("unique numeric Get = %v", err)
+	}
+	if err := st.Delete("5"); err == nil {
+		t.Fatal("unscoped Delete of a numeric session must require a user id")
+	}
+	got, err := st.GetUserSession("alice", "5")
+	if err != nil || got == nil {
+		t.Fatalf("owned session was removed: %+v %v", got, err)
+	}
+}
 
 func TestSQLiteNumericIDsAreNotGlobalPrimaryKeys(t *testing.T) {
 	st, err := NewSQLiteStore(":memory:")
@@ -27,7 +50,7 @@ func TestSQLiteNumericIDsAreNotGlobalPrimaryKeys(t *testing.T) {
 	if err := st.Put(bob); err != nil {
 		t.Fatalf("Put bob session 2: %v", err)
 	}
-	if _, err := st.Get("2"); err == nil {
+	if _, err := st.Get("2"); err == nil || !strings.Contains(err.Error(), "look up with user id") {
 		t.Fatal("unscoped Get(2) must fail closed when two users share the number")
 	}
 	got, err := st.GetUserSession("alice", "2")

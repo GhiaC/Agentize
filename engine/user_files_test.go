@@ -41,7 +41,7 @@ func TestEditImage_Billing_CarriesModelAndTokens(t *testing.T) {
 	cb := &recordingCallback{}
 	eng.Callback = cb
 
-	src, err := eng.RecordUserFile(session.SessionID, "o.png", "image/png", model.FileSourceUploaded, []byte("ORIG"))
+	src, err := eng.RecordUserFileForUser(session.UserID, "o.png", "image/png", model.FileSourceUploaded, []byte("ORIG"))
 	if err != nil {
 		t.Fatalf("RecordUserFile: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestEditImage_Billing_BeforeActionBlocks(t *testing.T) {
 	})
 	eng.Callback = &recordingCallback{blockErr: errors.New("insufficient credit")}
 
-	src, _ := eng.RecordUserFile(session.SessionID, "o.png", "image/png", model.FileSourceUploaded, []byte("ORIG"))
+	src, _ := eng.RecordUserFileForUser(session.UserID, "o.png", "image/png", model.FileSourceUploaded, []byte("ORIG"))
 	res, _ := eng.executeTool(context.Background(), session, "m1", editImageToolCall(src.FileID))
 
 	if editorCalled {
@@ -122,7 +122,7 @@ func newUserFileTestEngine(t *testing.T) (*Engine, *model.Session) {
 func TestRecordAndReadUserFile(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
 
-	uf, err := eng.RecordUserFile(session.SessionID, "notes.txt", "", model.FileSourceUploaded, []byte("hello world"))
+	uf, err := eng.RecordUserFileForUser(session.UserID, "notes.txt", "", model.FileSourceUploaded, []byte("hello world"))
 	if err != nil {
 		t.Fatalf("RecordUserFile failed: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRecordAndReadUserFile(t *testing.T) {
 	}
 
 	// Reading returns the original bytes.
-	data, meta, err := eng.ReadUserFile(uf.FileID)
+	data, meta, err := eng.ReadUserFileForUser(session.UserID, uf.FileID)
 	if err != nil {
 		t.Fatalf("ReadUserFile failed: %v", err)
 	}
@@ -204,8 +204,8 @@ func TestManageFilesTool_SaveListRead(t *testing.T) {
 func TestManageFilesTool_ListPaginationFilterAndLineEdit(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
 	base := map[string]interface{}{"__user_id__": "user-1", "__session_id__": session.SessionID}
-	first, _ := eng.RecordUserFile(session.SessionID, "alpha.txt", "text/plain", model.FileSourceUploaded, []byte("one\ntwo\nthree"))
-	_, _ = eng.RecordUserFile(session.SessionID, "beta.md", "text/markdown", model.FileSourceGenerated, []byte("beta"))
+	first, _ := eng.RecordUserFileForUser(session.UserID, "alpha.txt", "text/plain", model.FileSourceUploaded, []byte("one\ntwo\nthree"))
+	_, _ = eng.RecordUserFileForUser(session.UserID, "beta.md", "text/markdown", model.FileSourceGenerated, []byte("beta"))
 	list, err := eng.Functions.Execute("manage_files", cloneArgs(base, map[string]interface{}{"action": "list", "filter": "alpha", "sort_by": "name", "sort_order": "asc", "page": 1, "page_size": 1}))
 	if err != nil || !strings.Contains(list, "alpha.txt") || strings.Contains(list, "beta.md") {
 		t.Fatalf("filtered page = %q err=%v", list, err)
@@ -223,7 +223,7 @@ func TestManageFilesTool_ListPaginationFilterAndLineEdit(t *testing.T) {
 func TestManageFilesTool_ReadEnforcesOwnership(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
 
-	uf, err := eng.RecordUserFile(session.SessionID, "secret.txt", "", model.FileSourceUploaded, []byte("classified"))
+	uf, err := eng.RecordUserFileForUser(session.UserID, "secret.txt", "", model.FileSourceUploaded, []byte("classified"))
 	if err != nil {
 		t.Fatalf("RecordUserFile failed: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestManageFilesTool_ReadImageInjects(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
 
 	png := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A} // PNG signature
-	uf, err := eng.RecordUserFile(session.SessionID, "pic.png", "image/png", model.FileSourceUploaded, png)
+	uf, err := eng.RecordUserFileForUser(session.UserID, "pic.png", "image/png", model.FileSourceUploaded, png)
 	if err != nil {
 		t.Fatalf("RecordUserFile failed: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestManageFilesTool_GrepAndEdit(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
 	base := map[string]interface{}{"__user_id__": "user-1", "__session_id__": session.SessionID}
 
-	uf, err := eng.RecordUserFile(session.SessionID, "config.txt", "text/plain",
+	uf, err := eng.RecordUserFileForUser(session.UserID, "config.txt", "text/plain",
 		model.FileSourceUploaded, []byte("host=localhost\nport=8080\ndebug=false\n"))
 	if err != nil {
 		t.Fatalf("RecordUserFile failed: %v", err)
@@ -332,7 +332,7 @@ func TestManageFilesTool_GrepAndEdit(t *testing.T) {
 		t.Fatalf("unexpected edit result: %q", editRes)
 	}
 
-	data, _, err := eng.ReadUserFile(uf.FileID)
+	data, _, err := eng.ReadUserFileForUser(session.UserID, uf.FileID)
 	if err != nil {
 		t.Fatalf("ReadUserFile failed: %v", err)
 	}
@@ -343,8 +343,8 @@ func TestManageFilesTool_GrepAndEdit(t *testing.T) {
 
 func TestManageFilesTool_DeleteEnforcesOwnershipAndRemovesBytes(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
-	file, err := eng.RecordUserFile(
-		session.SessionID,
+	file, err := eng.RecordUserFileForUser(
+		session.UserID,
 		"delete-me.txt",
 		"text/plain",
 		model.FileSourceGenerated,
@@ -380,7 +380,7 @@ func TestManageFilesTool_DeleteEnforcesOwnershipAndRemovesBytes(t *testing.T) {
 	if _, exists, statErr := eng.Files.Stat(file.StorageKey); statErr != nil || exists {
 		t.Fatalf("file bytes still exist: exists=%v err=%v", exists, statErr)
 	}
-	meta, err := eng.Sessions.GetUserFile(file.FileID)
+	meta, err := eng.Sessions.GetUserFileForUser(session.UserID, file.FileID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestManageFilesTool_EditImageIndependent(t *testing.T) {
 		}, nil
 	})
 
-	src, err := eng.RecordUserFile(session.SessionID, "orig.png", "image/png",
+	src, err := eng.RecordUserFileForUser(session.UserID, "orig.png", "image/png",
 		model.FileSourceUploaded, []byte("ORIGINAL"))
 	if err != nil {
 		t.Fatalf("RecordUserFile failed: %v", err)
@@ -429,7 +429,7 @@ func TestManageFilesTool_EditImageIndependent(t *testing.T) {
 	}
 
 	// Original bytes unchanged.
-	origData, _, _ := eng.ReadUserFile(src.FileID)
+	origData, _, _ := eng.ReadUserFileForUser(session.UserID, src.FileID)
 	if string(origData) != "ORIGINAL" {
 		t.Errorf("original image was modified: %q", string(origData))
 	}
@@ -450,7 +450,7 @@ func TestManageFilesTool_EditImageIndependent(t *testing.T) {
 	if edited.Source != model.FileSourceGenerated {
 		t.Errorf("expected generated source, got %s", edited.Source)
 	}
-	editedData, _, _ := eng.ReadUserFile(edited.FileID)
+	editedData, _, _ := eng.ReadUserFileForUser(session.UserID, edited.FileID)
 	if string(editedData) != "EDITED-add-hat" {
 		t.Errorf("unexpected edited content: %q", string(editedData))
 	}
@@ -458,7 +458,7 @@ func TestManageFilesTool_EditImageIndependent(t *testing.T) {
 
 func TestManageFilesTool_EditImageNotConfigured(t *testing.T) {
 	eng, session := newUserFileTestEngine(t)
-	src, _ := eng.RecordUserFile(session.SessionID, "orig.png", "image/png",
+	src, _ := eng.RecordUserFileForUser(session.UserID, "orig.png", "image/png",
 		model.FileSourceUploaded, []byte("ORIGINAL"))
 
 	res, err := eng.Functions.Execute("manage_files", map[string]interface{}{

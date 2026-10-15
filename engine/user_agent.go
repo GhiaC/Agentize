@@ -225,17 +225,17 @@ func (e *Engine) loadSession(ctx context.Context, sessionID string) (*model.Sess
 }
 
 func (e *Engine) loadOwnedSession(userID, sessionID string) (*model.Session, error) {
-	if strings.TrimSpace(userID) != "" {
-		return e.Sessions.GetUserSession(userID, sessionID)
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, fmt.Errorf("sessions %q is not unique; look up with user id", sessionID)
 	}
-	// Deprecated: numeric ids are per-user. Fail-closed when two users share the number.
-	return e.Sessions.Get(sessionID)
+	return e.Sessions.GetUserSession(userID, sessionID)
 }
 
 func (e *Engine) sessionFiles(ctx context.Context, sessionID string) ([]*model.UserFile, error) {
 	userID := model.UserIDFrom(ctx)
 	if userID == "" {
-		return e.Sessions.GetUserFilesBySession(sessionID)
+		return nil, fmt.Errorf("user_files %q is not unique; look up with user id", sessionID)
 	}
 	files, err := e.Sessions.GetUserFilesByUser(userID)
 	if err != nil {

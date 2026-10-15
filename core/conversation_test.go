@@ -107,7 +107,7 @@ func TestConversationTools_InspectModelArchiveDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	session, err := eng.Sessions.Get(conv.SessionID)
+	session, err := eng.Sessions.GetUserSession(conv.UserID, conv.SessionID)
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestConversationsStayBehindTools(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	conv, _ := eng.GetConversation("alice", "1")
-	session, _ := eng.Sessions.Get(conv.SessionID)
+	session, _ := eng.Sessions.GetUserSession(conv.UserID, conv.SessionID)
 	session.Summary = model.SummaryEntries{"the user likes go for market bots"}
 	session.Tags = []string{"golang"}
 	if err := eng.Sessions.Put(session); err != nil {

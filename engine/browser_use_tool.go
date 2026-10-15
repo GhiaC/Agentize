@@ -531,7 +531,8 @@ func (e *Engine) browserUseUploads(sessionID string, args map[string]interface{}
 	var total int64
 	uploads := make([]browseruse.Upload, 0, len(fileIDs))
 	for _, fileID := range fileIDs {
-		data, meta, readErr := e.ReadUserFile(fileID)
+		userID, _ := args["__user_id__"].(string)
+		data, meta, readErr := e.ReadUserFileForUser(strings.TrimSpace(userID), fileID)
 		if readErr != nil || meta == nil || meta.SessionID != sessionID {
 			return nil, fmt.Errorf("file is not available in this session: %s", fileID)
 		}

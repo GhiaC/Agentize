@@ -130,6 +130,10 @@ func (m *mockToolCallStore) UpdateToolCallResponse(toolID, response string, exec
 	return nil
 }
 
+func (m *mockToolCallStore) UpdateUserToolCallResponse(userID, sessionID, toolID, response string, execErr error) error {
+	return m.UpdateToolCallResponse(toolID, response, execErr)
+}
+
 func (m *mockToolCallStore) UpdateMessageToolCallResponse(userID, sessionID, messageID, toolID, response string, execErr error) error {
 	return m.UpdateToolCallResponse(toolID, response, execErr)
 }
