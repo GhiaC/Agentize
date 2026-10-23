@@ -1738,6 +1738,7 @@ func (e *Engine) processChatRequest(
 	var pendingImages []openai.ChatCompletionMessage
 	protocolCorrection := ""
 	invalidContinuations := 0
+	finalAnswerOnly := false
 
 	for i := 0; i < maxIterations; i++ {
 		// Follow-ups stay in the durable FIFO. They are not injected into this turn.
@@ -1762,7 +1763,7 @@ func (e *Engine) processChatRequest(
 		}
 
 		openaiTools := toolsForLLMRequest(allTools, catalogMode, discoveredTools)
-		if toolsDisabled(ctx) {
+		if toolsDisabled(ctx) || finalAnswerOnly {
 			openaiTools = nil
 		}
 
@@ -1848,8 +1849,13 @@ func (e *Engine) processChatRequest(
 
 		// Save LLM message to DB
 		request := openai.ChatCompletionRequest{Model: modelName, Messages: reqMessages, Tools: openaiTools}
-		messageID := e.saveMessage(session, request, resp, choice, cost, llmDuration.Milliseconds())
+		messageID := e.saveMessage(session, request, resp, choice, cost, llmDuration.Milliseconds(), finalAnswerOnly)
 		choiceKind := classifyAssistantChoice(choice)
+		// A provider may ignore the missing tool catalog. Reject unsolicited
+		// calls during answer recovery before any executor can run them.
+		if finalAnswerOnly && choiceKind == assistantChoiceTools {
+			choiceKind = assistantChoiceInvalid
+		}
 		decisionStatus := model.RouteStatusOK
 		decisionDetail := fmt.Sprintf("finish_reason=%s · tool_calls=%d", choice.FinishReason, len(choice.Message.ToolCalls))
 		if choiceKind == assistantChoiceInvalid {
@@ -1869,6 +1875,10 @@ func (e *Engine) processChatRequest(
 		if choiceKind == assistantChoiceInvalid {
 			invalidContinuations++
 			protocolCorrection = invalidOutputCorrection
+			if run, ok := admittedRunFrom(ctx); (ok && run.Run != nil && run.Run.OriginKind == "alert") || invalidContinuations >= maxInvalidOutputContinuations {
+				finalAnswerOnly = true
+				protocolCorrection = "The previous model response was not a valid final answer. Recovery is answer-only: summarize the evidence and tool results already present, clearly state incomplete work, and do not request or repeat any tool or trading action."
+			}
 			if invalidContinuations > maxInvalidOutputContinuations {
 				return "", totalTokenUsage, ErrInvalidFinalOutput
 			}
@@ -1969,6 +1979,7 @@ func (e *Engine) saveMessage(
 	choice openai.ChatCompletionChoice,
 	cost float64,
 	durationMs int64,
+	answerOnly bool,
 ) string {
 	// Get user message content
 	content := choice.Message.Content
@@ -1997,7 +2008,7 @@ func (e *Engine) saveMessage(
 	msg.CostCredits = cost
 	msg.DurationMs = durationMs
 	msg.HydrateUsageMeta()
-	if classifyAssistantChoice(choice) == assistantChoiceInvalid {
+	if classifyAssistantChoice(choice) == assistantChoiceInvalid || (answerOnly && len(choice.Message.ToolCalls) > 0) {
 		if msg.Metadata == nil {
 			msg.Metadata = map[string]any{}
 		}
