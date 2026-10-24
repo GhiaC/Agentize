@@ -372,20 +372,39 @@ func (e *Engine) callLLM(ctx context.Context, model string, messages []openai.Ch
 // http.Client deadlines. Fast network failures wait 30s times the attempt, up
 // to 10 times. A client deadline already spent the completion budget, so it is
 // repeated only a couple of times. Payment and access errors fail immediately.
-// Cancelling the turn context stops the loop.
+// HTTP-success responses without choices get two additional attempts (1s/2s),
+// independently of the network budget. Cancelling the turn context stops the loop.
 func (e *Engine) callLLMWithNetworkRetry(ctx context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
 	if e.llmClient == nil {
 		return openai.ChatCompletionResponse{}, errors.New("LLM client is not configured")
 	}
 	networkRetries := 0
 	timeoutRetries := 0
+	emptyRetries := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return openai.ChatCompletionResponse{}, err
 		}
 		resp, err := e.llmClient.CreateChatCompletion(ctx, request)
 		if err == nil {
-			return resp, nil
+			if len(resp.Choices) > 0 {
+				return resp, nil
+			}
+			// HTTP success is not completion success. Repeat only this model
+			// request, preserving completed tool results and the selected model.
+			// Keep this budget separate from the much longer network retries.
+			err = errors.New("LLM response has no choices")
+			emptyRetries++
+			if emptyRetries > 2 {
+				return openai.ChatCompletionResponse{}, err
+			}
+			log.Log.Warnf("[Engine] LLMFAIL empty completion | retry=%d/2 | model=%s | prompt_tokens=%d | completion_tokens=%d", emptyRetries, request.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+			userID, _ := model.GetUserIDFromContext(ctx)
+			NotifyStatus(ctx, userID, "", StatusThinking, "The AI provider returned an incomplete response. Retrying the current step.")
+			if waitErr := llmutils.Wait(ctx, time.Duration(emptyRetries)*time.Second); waitErr != nil {
+				return openai.ChatCompletionResponse{}, waitErr
+			}
+			continue
 		}
 		// The caller's context ending is a stop or a real deadline. Do not
 		// confuse it with http.Client.Timeout, which uses the same Go error
@@ -1806,7 +1825,7 @@ func (e *Engine) processChatRequest(
 		metrics.LLMCall("agent", modelName, "ok", llmDuration, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, agentCached)
 
 		if len(resp.Choices) == 0 {
-			return "", totalTokenUsage, fmt.Errorf("no choices in LLM response")
+			return "", totalTokenUsage, FormatLLMError(errors.New("LLM response has no choices"))
 		}
 
 		choice := resp.Choices[0]

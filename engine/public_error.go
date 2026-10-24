@@ -3,6 +3,8 @@ package engine
 import "strings"
 
 const (
+	// PublicIncompleteResponse also covers failures stored by older versions.
+	PublicIncompleteResponse = "The AI provider returned an incomplete response. Retry continues from the last step."
 	// PublicModelTimeout is the chat-facing sentence for an http.Client deadline
 	// that expired while the provider was still writing the completion.
 	PublicModelTimeout = "The model ran out of time while writing its reply. Retry continues from the last step."
@@ -34,6 +36,8 @@ func PublicTurnErrorText(msg string) string {
 	}
 	low := strings.ToLower(text)
 	switch {
+	case strings.Contains(low, "no choices in llm response") || strings.Contains(low, "llm response has no choices"):
+		return PublicIncompleteResponse
 	case isModelTimeoutText(low):
 		return PublicModelTimeout
 	case strings.Contains(low, "llm request failed"):
