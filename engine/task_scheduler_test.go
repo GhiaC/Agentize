@@ -129,6 +129,90 @@ func TestTaskSchedulerPersistsEachRunAsChatTranscript(t *testing.T) {
 	}
 }
 
+func TestSameSessionCompletionDoesNotOpenASecondUserTurn(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	scheduler := NewTaskScheduler(st, func(context.Context, *model.TaskSchedule) (string, error) {
+		return "", nil
+	}, nil)
+	sessionID := "user-1-low-s0001"
+	now := time.Now().UTC()
+	schedule := &model.TaskSchedule{
+		ScheduleID: "sch-same", UserID: "user-1",
+		SourceSessionID: sessionID, SessionID: sessionID,
+		Name: "Hourly", Prompt: "check",
+		LastRunStatus: model.TaskRunSucceeded, LastOutput: "the report",
+		Status: model.TaskScheduleActive,
+	}
+	for _, item := range []*model.Message{
+		{
+			MessageID: "2", SeqID: 2, UserID: "user-1", SessionID: sessionID,
+			Role: openai.ChatMessageRoleUser, Content: "check",
+			AgentType: model.AgentTypeCore, ContentType: model.ContentTypeText, CreatedAt: now,
+		},
+		{
+			MessageID: "20", SeqID: 20, UserID: "user-1", SessionID: sessionID,
+			Role: openai.ChatMessageRoleAssistant, Content: "the report",
+			AgentType: model.AgentTypeCore, ContentType: model.ContentTypeText,
+			FinishReason: "stop", CreatedAt: now.Add(time.Second),
+		},
+	} {
+		if err := st.PutMessage(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var roles []string
+	scheduler.SetMessageFunc(func(_ context.Context, update *TaskScheduleMessageUpdate) (string, error) {
+		if update.Message == nil {
+			roles = append(roles, "state")
+			return "", nil
+		}
+		roles = append(roles, update.Message.Role)
+		return "", nil
+	})
+
+	scheduler.publishRunTranscript(context.Background(), schedule, "run-1")
+
+	messages, err := st.GetUserMessagesBySession("user-1", sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages = %d, want the original turn only", len(messages))
+	}
+	for _, role := range roles {
+		if role == openai.ChatMessageRoleUser {
+			t.Fatalf("completion reopened the turn: %v", roles)
+		}
+	}
+	if len(roles) != 1 || roles[0] != "state" {
+		t.Fatalf("callbacks = %v, want only the terminal state frame", roles)
+	}
+}
+
+func TestSameSessionWithoutTranscriptStoresAnswerOnly(t *testing.T) {
+	st := newTaskSchedulerTestStore(t)
+	scheduler := NewTaskScheduler(st, func(context.Context, *model.TaskSchedule) (string, error) {
+		return "", nil
+	}, nil)
+	sessionID := "user-1-low-s0001"
+	schedule := &model.TaskSchedule{
+		ScheduleID: "sch-empty", UserID: "user-1",
+		SourceSessionID: sessionID, SessionID: sessionID,
+		Name: "Hourly", Prompt: "check",
+		LastRunStatus: model.TaskRunSucceeded, LastOutput: "the report",
+		Status: model.TaskScheduleActive,
+	}
+	scheduler.publishRunTranscript(context.Background(), schedule, "run-1")
+
+	messages, err := st.GetUserMessagesBySession("user-1", sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != openai.ChatMessageRoleAssistant || messages[0].Content != "the report" {
+		t.Fatalf("messages = %#v, want one assistant answer and no new prompt", messages)
+	}
+}
+
 func waitScheduleRunCount(t *testing.T, scheduler *TaskScheduler, scheduleID string, want int64) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

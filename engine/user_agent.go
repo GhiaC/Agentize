@@ -368,12 +368,26 @@ func (e *Engine) callLLM(ctx context.Context, model string, messages []openai.Ch
 	return resp, err
 }
 
+// nudgeEmptyCompletion asks for a real choice after identical retries came
+// back empty. Earlier retries stay byte-for-byte the same request.
+func nudgeEmptyCompletion(request openai.ChatCompletionRequest) openai.ChatCompletionRequest {
+	messages := make([]openai.ChatCompletionMessage, len(request.Messages)+1)
+	copy(messages, request.Messages)
+	messages[len(request.Messages)] = openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleSystem,
+		Content: "The previous model response was empty. Continue the latest user request with a tool call or a final answer. Do not return an empty response.",
+	}
+	request.Messages = messages
+	return request
+}
+
 // callLLMWithNetworkRetry retries dropped connections, provider 5xx/429, and
 // http.Client deadlines. Fast network failures wait 30s times the attempt, up
 // to 10 times. A client deadline already spent the completion budget, so it is
 // repeated only a couple of times. Payment and access errors fail immediately.
-// HTTP-success responses without choices get two additional attempts (1s/2s),
-// independently of the network budget. Cancelling the turn context stops the loop.
+// HTTP-success responses without choices get three additional attempts. The
+// first two repeat the same request; the last adds an explicit answer
+// instruction. Cancelling the turn context stops the loop.
 func (e *Engine) callLLMWithNetworkRetry(ctx context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
 	if e.llmClient == nil {
 		return openai.ChatCompletionResponse{}, errors.New("LLM client is not configured")
@@ -393,12 +407,18 @@ func (e *Engine) callLLMWithNetworkRetry(ctx context.Context, request openai.Cha
 			// HTTP success is not completion success. Repeat only this model
 			// request, preserving completed tool results and the selected model.
 			// Keep this budget separate from the much longer network retries.
+			// The last attempt adds an explicit instruction: some providers
+			// return an empty choice list for the same prompt and then answer
+			// when told the previous response was empty.
 			err = errors.New("LLM response has no choices")
 			emptyRetries++
-			if emptyRetries > 2 {
+			if emptyRetries > 3 {
 				return openai.ChatCompletionResponse{}, err
 			}
-			log.Log.Warnf("[Engine] LLMFAIL empty completion | retry=%d/2 | model=%s | prompt_tokens=%d | completion_tokens=%d", emptyRetries, request.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+			if emptyRetries == 3 {
+				request = nudgeEmptyCompletion(request)
+			}
+			log.Log.Warnf("[Engine] LLMFAIL empty completion | retry=%d/3 | model=%s | prompt_tokens=%d | completion_tokens=%d", emptyRetries, request.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
 			userID, _ := model.GetUserIDFromContext(ctx)
 			NotifyStatus(ctx, userID, "", StatusThinking, "The AI provider returned an incomplete response. Retrying the current step.")
 			if waitErr := llmutils.Wait(ctx, time.Duration(emptyRetries)*time.Second); waitErr != nil {

@@ -105,37 +105,62 @@ func (s *TaskScheduler) publishRunTranscript(ctx context.Context, schedule *mode
 	sameSession := strings.TrimSpace(schedule.SessionID) == source
 	now := time.Now()
 
-	var user, assistant *model.Message
-	persist := true
 	if sameSession {
-		user, assistant = s.latestVisibleRunPair(source)
-		if user != nil || assistant != nil {
-			persist = false
-		} else {
-			user, assistant = s.synthesizeRunPair(schedule, now)
-		}
-	} else {
-		user = s.latestSourceUser(source)
-		_, srcAsst := s.latestVisibleRunPair(schedule.SessionID)
-		if srcAsst != nil {
-			id, seq := s.nextSourceMessage(schedule.UserID, source)
-			assistant = cloneMessageOntoSession(srcAsst, source, id, seq, now, schedule)
-		}
-		if assistant == nil {
-			assistant = s.synthesizeRunAssistant(schedule, now)
-		}
-		persist = assistant != nil
+		// This session already executed the turn, so its rows are the transcript.
+		// Inserting the prompt again opens a second user turn before the answer
+		// is visible, and the host then records a finished run as a failure.
+		s.publishSameSessionCompletion(ctx, schedule, now)
+		return
 	}
 
-	if sameSession {
-		s.emitChatMessage(ctx, schedule, user, StatusCustom, true, persist)
+	var user, assistant *model.Message
+	user = s.latestSourceUser(source)
+	_, srcAsst := s.latestVisibleRunPair(schedule.SessionID)
+	if srcAsst != nil {
+		id, seq := s.nextSourceMessage(schedule.UserID, source)
+		assistant = cloneMessageOntoSession(srcAsst, source, id, seq, now, schedule)
 	}
+	if assistant == nil {
+		assistant = s.synthesizeRunAssistant(schedule, now)
+	}
+	persist := assistant != nil
+
 	s.emitChatMessage(ctx, schedule, assistant, StatusCompleted, true, persist)
 	if user == nil {
 		user = s.latestSourceUser(source)
 	}
 	s.mirrorRunAuditToSource(schedule, user)
 	s.publishScheduleState(ctx, schedule)
+}
+
+// publishSameSessionCompletion tells the host the run is finished without
+// writing a second prompt onto the session that just executed it. A session
+// with no rows yet is a string-only executor, so only the answer is stored.
+func (s *TaskScheduler) publishSameSessionCompletion(ctx context.Context, schedule *model.TaskSchedule, now time.Time) {
+	if s == nil || schedule == nil {
+		return
+	}
+	source := strings.TrimSpace(schedule.SourceSessionID)
+	hasTranscript, err := s.sessionHasChatRows(source)
+	if err != nil {
+		log.Log.Warnf("[TaskScheduler] schedule %s completion left session %s unread: %v", schedule.ScheduleID, source, err)
+	} else if !hasTranscript {
+		if assistant := s.synthesizeRunAssistant(schedule, now); assistant != nil {
+			s.emitChatMessage(ctx, schedule, assistant, StatusCompleted, true, true)
+		}
+	}
+	s.publishScheduleState(ctx, schedule)
+}
+
+func (s *TaskScheduler) sessionHasChatRows(sessionID string) (bool, error) {
+	if s == nil || s.store == nil || strings.TrimSpace(sessionID) == "" {
+		return false, nil
+	}
+	page, err := s.store.GetMessagesBySessionPage(sessionID, 1, 0)
+	if err != nil {
+		return false, err
+	}
+	return len(page) > 0, nil
 }
 
 func (s *TaskScheduler) latestVisibleRunPair(sessionID string) (user, assistant *model.Message) {
@@ -178,29 +203,6 @@ func (s *TaskScheduler) latestSourceUser(sessionID string) *model.Message {
 		}
 	}
 	return nil
-}
-
-func (s *TaskScheduler) synthesizeRunPair(schedule *model.TaskSchedule, now time.Time) (user, assistant *model.Message) {
-	if schedule == nil {
-		return nil, nil
-	}
-	source := strings.TrimSpace(schedule.SourceSessionID)
-	prompt := strings.TrimSpace(schedule.Prompt)
-	if prompt != "" {
-		id, seq := s.nextSourceMessage(schedule.UserID, source)
-		if id != "" {
-			user = &model.Message{
-				MessageID: id, SeqID: seq,
-				UserID: schedule.UserID, SessionID: source,
-				Role: openai.ChatMessageRoleUser, Content: prompt,
-				AgentType: model.AgentTypeSchedule, ContentType: model.ContentTypeText,
-				Metadata:  model.NewScheduleMessageMeta(schedule),
-				CreatedAt: now,
-			}
-		}
-	}
-	assistant = s.synthesizeRunAssistant(schedule, now)
-	return user, assistant
 }
 
 func (s *TaskScheduler) synthesizeRunAssistant(schedule *model.TaskSchedule, now time.Time) *model.Message {

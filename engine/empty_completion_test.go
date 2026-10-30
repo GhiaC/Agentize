@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,7 +71,10 @@ func TestEmptyCompletionRetryBoundAndCancellation(t *testing.T) {
 	for _, body := range []string{`{}`, `{"choices":null}`, `{"choices":[]}`} {
 		t.Run(body, func(t *testing.T) {
 			requests := 0
+			var bodies []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				bodies = append(bodies, string(raw))
 				requests++
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprint(w, body)
@@ -79,8 +83,11 @@ func TestEmptyCompletionRetryBoundAndCancellation(t *testing.T) {
 			e, _ := testFinalOutputEngine(t, server.URL, nil)
 			req := openai.ChatCompletionRequest{Model: "test-model", Messages: []openai.ChatCompletionMessage{{Role: "user", Content: "hello"}}}
 			_, err := e.callLLMWithNetworkRetry(context.Background(), req)
-			if requests != 3 || PublicTurnError(err) != PublicIncompleteResponse {
+			if requests != 4 || PublicTurnError(err) != PublicIncompleteResponse {
 				t.Fatalf("requests=%d err=%v", requests, err)
+			}
+			if len(bodies) != 4 || strings.Contains(bodies[2], "previous model response was empty") || !strings.Contains(bodies[3], "previous model response was empty") {
+				t.Fatal("only the last empty-choice attempt should ask for an answer")
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
