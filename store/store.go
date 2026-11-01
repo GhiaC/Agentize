@@ -35,6 +35,7 @@ import (
 //   - Visited-node tracking is user-scoped and in-memory only (never persisted),
 //     identically on every backend.
 type Store interface {
+	model.FileOperationStore
 	// Sessions: Get, Put, Delete, List, GetNextSessionSeq.
 	model.SessionStore
 	// Read/aggregate operations and DeleteUserData used by the debug UI.

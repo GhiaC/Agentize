@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"mime"
@@ -10,10 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghiac/agentize/filemanager"
 	"github.com/ghiac/agentize/filestore"
 	"github.com/ghiac/agentize/log"
 	"github.com/ghiac/agentize/metrics"
 	"github.com/ghiac/agentize/model"
+	"path"
 )
 
 // userFileStore is the subset of store methods used for user files. Engine.Sessions
@@ -130,18 +133,20 @@ func (e *Engine) recordUserFile(userID, sessionID, name, mimeType string, source
 		mimeType = detectMIME(name, data)
 	}
 
-	// Allocate a sequential file ID and persist the incremented counter.
-	var fileID string
-	if user, err := e.Sessions.GetOrCreateUser(session.UserID); err == nil && user != nil {
-		fileID = user.NextFileID()
-		_ = e.Sessions.PutUser(user)
-	} else {
-		fileID = session.GenerateUserFileID()
-	}
-	if err := e.Sessions.Put(session); err != nil {
-		return nil, fmt.Errorf("failed to persist session: %w", err)
+	fileID, err := e.Sessions.NextUserFileID(context.Background(), session.UserID)
+	if err != nil {
+		return nil, err
 	}
 
+	details := filemanager.Inspect(data, mimeType)
+	if conversation, err := e.Sessions.GetUserConversationBySession(userID, sessionID); err != nil {
+		return nil, err
+	} else if conversation != nil {
+		details.ConversationID = conversation.ConversationID
+		if source == model.FileSourceGenerated && !strings.HasPrefix(name, "chats/") {
+			name = path.Join("chats", conversation.ConversationID, "generated", fileID, filemanager.SafeName(name))
+		}
+	}
 	key := fmt.Sprintf("%s/%s-%s", session.UserID, fileID, sanitizeFileName(name))
 	storageKey, err := e.Files.Save(key, bytes.NewReader(data))
 	if err != nil {
@@ -150,6 +155,7 @@ func (e *Engine) recordUserFile(userID, sessionID, name, mimeType string, source
 
 	uf := &model.UserFile{
 		FileID:       fileID,
+		Details:      details,
 		UserID:       session.UserID,
 		SessionID:    sessionID,
 		Name:         name,
@@ -193,6 +199,10 @@ func (e *Engine) updateOwnedFileContent(st userFileStore, meta *model.UserFile, 
 		return nil, fmt.Errorf("failed to write file bytes: %w", err)
 	}
 	meta.Size = int64(len(data))
+	details := filemanager.Inspect(data, meta.MIMEType)
+	details.ConversationID = meta.Details.ConversationID
+	details.IngestionKey = meta.Details.IngestionKey
+	meta.Details = details
 	if err := st.PutUserFile(meta); err != nil {
 		return nil, fmt.Errorf("failed to update file metadata: %w", err)
 	}
@@ -438,4 +448,23 @@ func isTextMIME(mimeType string) bool {
 		return true
 	}
 	return false
+}
+
+func (e *Engine) readToolFile(meta *model.UserFile) ([]byte, error) {
+	if e.Files == nil {
+		return nil, fmt.Errorf("file store is unavailable")
+	}
+	reader, err := e.Files.Open(meta.StorageKey)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(io.LimitReader(reader, filemanager.MaxChatUploadBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > filemanager.MaxChatUploadBytes {
+		return nil, fmt.Errorf("file exceeds tool read limit")
+	}
+	return data, nil
 }

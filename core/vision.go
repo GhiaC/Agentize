@@ -118,10 +118,15 @@ func (ch *CoreHandler) ProcessMessageWithImage(
 	}
 
 	// Record the inbound image as a user file (best-effort) when a recorder is wired.
-	if ch.fileRecorder != nil {
+	if ch.userFileRecorder != nil || ch.fileRecorder != nil {
 		imageName := "image" + imageExtension(imageMimeType)
 		recStart := time.Now()
-		_, recErr := ch.fileRecorder(coreSession.SessionID, imageName, imageMimeType, model.FileSourceUploaded, imageData)
+		var recErr error
+		if ch.userFileRecorder != nil {
+			_, recErr = ch.userFileRecorder(userID, coreSession.SessionID, imageName, imageMimeType, model.FileSourceUploaded, imageData)
+		} else {
+			_, recErr = ch.fileRecorder(coreSession.SessionID, imageName, imageMimeType, model.FileSourceUploaded, imageData)
+		}
 		metrics.FileOp("upload", metrics.Status(recErr), time.Since(recStart))
 		if recErr != nil {
 			log.Log.Warnf("[CoreHandler] ⚠️  Failed to record uploaded image as user file: %v", recErr)

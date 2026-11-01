@@ -24,5 +24,5 @@ func (ag *Agentize) ShareFileManagerWithCore(handler *core.CoreHandler) {
 		return
 	}
 	ag.ShareFileManagerWithAgents(handler.GetAgents())
-	handler.SetFileRecorder(ag.RecordUserFile)
+	handler.SetUserFileRecorder(ag.engine.RecordUserFileInSession)
 }

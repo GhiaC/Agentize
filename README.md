@@ -315,6 +315,7 @@ testcontainers and self-skips when Docker is unavailable.
 | Doc | Topic |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture |
+| [docs/CHAT_FILES.md](docs/CHAT_FILES.md) | Conversation attachments, private delivery, persistence, tests and later MinIO migration |
 | [docs/CORE_AGENT.md](docs/CORE_AGENT.md) | Core router + system-prompt assembly |
 | [docs/REVIEWS.md](docs/REVIEWS.md) | Human approval for tool calls |
 | [docs/WORKFLOWS.md](docs/WORKFLOWS.md) | Deterministic Core workflow DAGs and scheduled state machines |

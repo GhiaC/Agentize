@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghiac/agentize/agentmanager"
 	"github.com/ghiac/agentize/engine"
+	"github.com/ghiac/agentize/filemanager"
 	"github.com/ghiac/agentize/log"
 	"github.com/ghiac/agentize/metrics"
 	"github.com/ghiac/agentize/model"
@@ -528,6 +529,20 @@ func (ch *CoreHandler) callAgent(
 	}
 
 	sessionID, err := ch.getOrCreateActiveSession(userID, agent.Config.AgentType)
+	if runtime := filemanager.RuntimeFrom(ctx); runtime != nil {
+		if runtime.Scope.UserID != userID {
+			return "", fmt.Errorf("file turn owner mismatch")
+		}
+		if err := runtime.Service.ValidateScope(runtime.Scope); err != nil {
+			return "", err
+		}
+		if runtime.Worker == agent.Config.AgentType {
+			sessionID, err = runtime.Scope.SessionID, nil
+		}
+		if runtime.Introduction != "" {
+			message += "\n\n" + runtime.Introduction
+		}
+	}
 	if err != nil {
 		log.Log.Errorf("[CoreHandler] ❌ Failed to get/create active session | UserID: %s | Agent: %s | Error: %v",
 			userID, agent.Config.Name, err)

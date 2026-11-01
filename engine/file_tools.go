@@ -1,13 +1,16 @@
 package engine
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/ghiac/agentize/filemanager"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ghiac/agentize/log"
 	"github.com/ghiac/agentize/metrics"
@@ -327,18 +330,19 @@ func ManageFilesToolDefinition() openai.Tool {
 				"- save: store 'content' as a new text file named 'name'; returns the new file_id.\n" +
 				"- edit: edit a text file in place — replace text, replace a line range, or overwrite the whole file.\n" +
 				"- edit_image: edit an image file (file_id) per 'instruction' using an image model; the edited image is saved as a NEW independent file and its file_id is returned.\n" +
-				"- delete: permanently delete an owned file's bytes and metadata.",
+				"- delete: permanently delete an owned file's bytes and metadata.\n" +
+				"- send: send an owned file privately to the current user; check the returned delivery state before claiming success.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"enum":        []string{"list", "read", "grep", "save", "edit", "edit_image", "delete"},
+						"enum":        []string{"list", "read", "grep", "save", "edit", "edit_image", "delete", "send"},
 						"description": "The operation to perform.",
 					},
 					"file_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Target file id. Required for read, edit, edit_image, and delete; optional for grep.",
+						"description": "Target file id. Required for read, edit, edit_image, delete, and send; optional for grep.",
 					},
 					"name": map[string]interface{}{
 						"type":        "string",
@@ -448,11 +452,29 @@ func (e *Engine) manageFilesFunction() model.ToolFunction {
 		case "edit_image":
 			s, opErr := e.manageFilesEditImage(userID, sessionID, args)
 			return recordFileOp("edit_image", start, s, opErr)
+		case "send":
+			ctx, _ := args["__file_context__"].(context.Context)
+			if ctx == nil || ctx.Err() != nil {
+				return "File delivery is unavailable for this turn.", nil
+			}
+			runtime := filemanager.RuntimeFrom(ctx)
+			if runtime == nil {
+				return "File delivery is unavailable for this run.", nil
+			}
+			fileID, err := getStringArg(args, "file_id")
+			if err != nil {
+				return "", err
+			}
+			result, err := runtime.Send(ctx, userID, fileID)
+			if err != nil {
+				return "File delivery failed or is unavailable; do not claim delivery succeeded.", nil
+			}
+			return filemanager.DeliveryJSON(result), nil
 		case "delete":
 			s, opErr := e.manageFilesDelete(userID, args)
 			return recordFileOp("delete", start, s, opErr)
 		default:
-			return fmt.Sprintf("Unknown action %q. Valid actions: list, read, grep, save, edit, edit_image, delete.", action), nil
+			return fmt.Sprintf("Unknown action %q. Valid actions: list, read, grep, save, edit, edit_image, delete, send.", action), nil
 		}
 	}
 }
@@ -579,7 +601,7 @@ func (e *Engine) manageFilesRead(userID string, args map[string]interface{}) (st
 		status = "error"
 		return errMsg, nil
 	}
-	data, _, err := e.readStoredFile(meta)
+	data, err := e.readToolFile(meta)
 	if err != nil {
 		status = "error"
 		return fmt.Sprintf("Error reading file: %v", err), nil
@@ -597,7 +619,7 @@ func (e *Engine) manageFilesRead(userID string, args map[string]interface{}) (st
 		return msg, &injectedImage{DataURL: dataURL, Name: meta.Name}
 	}
 
-	if !isTextMIME(meta.MIMEType) {
+	if !isTextMIME(meta.MIMEType) || filemanager.Inspect(data).LineCount == nil {
 		return fmt.Sprintf("File %s (%s, %d bytes) is a binary file and cannot be shown as text.",
 			meta.Name, meta.MIMEType, meta.Size), nil
 	}
@@ -621,13 +643,16 @@ func (e *Engine) manageFilesRead(userID string, args map[string]interface{}) (st
 			end = start + limit
 		}
 		slice := strings.Join(lines[start:end], "\n")
+		if len(slice) > maxFileReadChars {
+			slice = boundedFileText(slice) + "\n[truncated: use a narrower range]"
+		}
 		return fmt.Sprintf("File %s (%s, %d bytes), lines %d-%d of %d:\n\n%s",
 			meta.Name, meta.MIMEType, meta.Size, start+1, end, len(lines), slice), nil
 	}
 
 	if len(content) > maxFileReadChars {
 		return fmt.Sprintf("File %s (%s, %d bytes), showing first %d characters:\n\n%s\n\n[truncated: %d of %d bytes shown — use offset/limit to read more]",
-			meta.Name, meta.MIMEType, meta.Size, maxFileReadChars, content[:maxFileReadChars], maxFileReadChars, meta.Size), nil
+			meta.Name, meta.MIMEType, meta.Size, maxFileReadChars, boundedFileText(content), maxFileReadChars, meta.Size), nil
 	}
 	return fmt.Sprintf("File %s (%s, %d bytes):\n\n%s", meta.Name, meta.MIMEType, meta.Size, content), nil
 }
@@ -670,14 +695,20 @@ func (e *Engine) manageFilesGrep(userID string, args map[string]interface{}) (st
 		if !isTextMIME(f.MIMEType) {
 			continue
 		}
-		data, _, err := e.readStoredFile(f)
+		data, err := e.readToolFile(f)
 		if err != nil {
+			continue
+		}
+		if filemanager.Inspect(data).LineCount == nil {
 			continue
 		}
 		for i, line := range strings.Split(string(data), "\n") {
 			if matcher(line) {
 				matches++
-				b.WriteString(fmt.Sprintf("%s:%d: %s\n", f.FileID, i+1, strings.TrimRight(line, "\r")))
+				b.WriteString(fmt.Sprintf("%s:%d: %s\n", f.FileID, i+1, boundedFileText(strings.TrimRight(line, "\r"))))
+				if b.Len() >= maxFileReadChars {
+					return boundedFileText(b.String()) + "\n[truncated: narrow the search]", nil
+				}
 				if matches >= maxGrepMatches {
 					b.WriteString(fmt.Sprintf("... (stopped at %d matches)\n", maxGrepMatches))
 					return b.String(), nil
@@ -866,4 +897,15 @@ func intArg(args map[string]interface{}, key string) int {
 	default:
 		return 0
 	}
+}
+
+func boundedFileText(value string) string {
+	if len(value) <= maxFileReadChars {
+		return value
+	}
+	value = value[:maxFileReadChars]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }

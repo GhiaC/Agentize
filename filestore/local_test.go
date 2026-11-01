@@ -81,3 +81,30 @@ func TestLocalFileStore_PathTraversalRejected(t *testing.T) {
 		t.Errorf("Save normalized in-base key: %v", err)
 	}
 }
+
+// A failed upload must not replace an already published object with partial bytes.
+func TestLocalSaveFailurePreservesPublishedObject(t *testing.T) {
+	store, err := NewLocalFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save("owner/object", strings.NewReader("original")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save("owner/object", io.MultiReader(strings.NewReader("partial"), localFailReader{})); err == nil {
+		t.Fatal("failed reader reported success")
+	}
+	r, err := store.Open("owner/object")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	data, err := io.ReadAll(r)
+	if err != nil || string(data) != "original" {
+		t.Fatal("failed upload corrupted published bytes")
+	}
+}
+
+type localFailReader struct{}
+
+func (localFailReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }

@@ -802,6 +802,11 @@ func (s *MongoDBStore) DeleteUserData(userID string) error {
 		return fmt.Errorf("failed to delete messages: %w", err)
 	}
 
+	for _, name := range []string{"file_operations", "file_counters"} {
+		if _, err := s.database.Collection(name).DeleteMany(ctx, userFilter); err != nil {
+			return err
+		}
+	}
 	// Delete user_files by user_id
 	if _, err := s.userFilesCollection.DeleteMany(ctx, userFilter); err != nil {
 		return fmt.Errorf("failed to delete user_files: %w", err)

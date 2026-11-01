@@ -2153,6 +2153,9 @@ func (e *Engine) executeTool(
 	}
 	args["__user_id__"] = session.UserID
 	args["__session_id__"] = sessionID
+	if toolCall.Function.Name == "manage_files" {
+		args["__file_context__"] = ctx
+	}
 	// Check callback before execution. Expose a tool's "action" arg (e.g.
 	// manage_files edit_image) so the host can pre-block expensive media actions.
 	if e.Callback != nil {

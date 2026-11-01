@@ -473,6 +473,7 @@ var postgreSQLMigrations = []postgreSQLMigration{
 	// turn failed before the user message was stored.
 	{5, "durable session execution queue", postgreSQLSessionAdmission},
 	{6, "durable admission metadata", `ALTER TABLE session_runs ADD COLUMN IF NOT EXISTS metadata TEXT NOT NULL DEFAULT '{}'`},
+	{7, "conversation file metadata and operations", `ALTER TABLE user_files ADD COLUMN IF NOT EXISTS details TEXT NOT NULL DEFAULT '{}';` + fileOperationsSchema},
 }
 
 // Foreign keys are intentionally omitted on session/user children: Delete of a

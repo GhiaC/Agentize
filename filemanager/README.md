@@ -32,3 +32,10 @@ Text reads are capped at 2 MiB, scanner lines at 1 MiB, and HTTP uploads at
 20 MiB. Raw downloads preserve a resolved MIME type and filename. Image and
 PDF previews are inline; other types stay attachment-only. Empty or
 `application/octet-stream` uploads are typed from the filename.
+
+## Chat integration
+
+`ChatService` prepares owned conversation attachments and durable receipts;
+`Runtime` binds the prepared turn and its optional private sender to Core and
+workers. See [conversation files](../docs/CHAT_FILES.md) for persistence,
+idempotency, `manage_files send`, tests and the later MinIO adapter.

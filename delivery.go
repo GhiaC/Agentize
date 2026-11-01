@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ghiac/agentize/filemanager"
 	"github.com/ghiac/agentize/model"
 )
 
@@ -53,6 +54,21 @@ func (ag *Agentize) DeliverGeneratedFiles(
 		return fmt.Errorf("generated file sender is not configured")
 	}
 
+	if runtime := filemanager.RuntimeFrom(ctx); runtime != nil {
+		var failures []error
+		for _, file := range files {
+			if file == nil {
+				continue
+			}
+			result, err := runtime.Send(ctx, userID, file.FileID)
+			if err != nil {
+				failures = append(failures, err)
+			} else if result.State != "sent" {
+				failures = append(failures, fmt.Errorf("file %s delivery %s", file.FileID, result.State))
+			}
+		}
+		return errors.Join(failures...)
+	}
 	var deliveryErrors []error
 	for _, candidate := range files {
 		if candidate == nil {

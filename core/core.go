@@ -163,7 +163,8 @@ type CoreHandler struct {
 
 	// fileRecorder, when set, records files the user sends (e.g. images) as
 	// user files. Wire it to Agentize.RecordUserFile via SetFileRecorder.
-	fileRecorder FileRecorder
+	fileRecorder     FileRecorder
+	userFileRecorder UserFileRecorder
 
 	// conversationEngine runs Conversation create/list/send without routing
 	// through call_agent_low/high. Optional; conversation tools fail closed
@@ -175,6 +176,10 @@ type CoreHandler struct {
 // FileRecorder records an uploaded or generated file against a session. Its
 // signature matches engine.Engine.RecordUserFile / Agentize.RecordUserFile.
 type FileRecorder func(sessionID, name, mimeType string, source model.FileSource, data []byte) (*model.UserFile, error)
+
+type UserFileRecorder func(userID, sessionID, name, mimeType string, source model.FileSource, data []byte) (*model.UserFile, error)
+
+func (ch *CoreHandler) SetUserFileRecorder(recorder UserFileRecorder) { ch.userFileRecorder = recorder }
 
 // cachedSystemPrompt is a per-user snapshot of the assembled Core system-prompt
 // array together with the time it was built, so generateSystemPrompt can expire it.

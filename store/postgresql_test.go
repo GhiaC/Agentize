@@ -112,8 +112,8 @@ func TestPostgreSQLSchemaHasProductionIndexes(t *testing.T) {
 		}
 	}
 	latest := postgreSQLMigrations[len(postgreSQLMigrations)-1]
-	if latest.version != 5 || !strings.Contains(latest.sql, "CREATE TABLE IF NOT EXISTS session_runs") {
-		t.Fatalf("latest PostgreSQL migration = %d, want session admission version 5", latest.version)
+	if latest.version != 7 || !strings.Contains(latest.sql, "CREATE TABLE IF NOT EXISTS file_operations") {
+		t.Fatalf("latest PostgreSQL migration = %d, want conversation-file version 7", latest.version)
 	}
 	if !strings.Contains(postgreSQLSchema, "CREATE TABLE IF NOT EXISTS session_runs") {
 		t.Fatal("fresh PostgreSQL schema missing session_runs")
@@ -197,8 +197,8 @@ func openPostgreSQLTestStore(t *testing.T) *PostgreSQLStore {
 func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
 	st := openPostgreSQLTestStore(t)
 	version, err := st.SchemaVersion()
-	if err != nil || version != 4 {
-		t.Fatalf("SchemaVersion = %d (%v), want 4", version, err)
+	if err != nil || version != 7 {
+		t.Fatalf("SchemaVersion = %d (%v), want 7", version, err)
 	}
 	if stats := st.PoolStats(); stats.MaxOpenConnections <= 0 {
 		t.Fatalf("PoolStats.MaxOpenConnections = %d", stats.MaxOpenConnections)
@@ -213,7 +213,7 @@ func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
 	if err := st.Put(s); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	got, err := st.Get(s.SessionID)
+	got, err := st.GetUserSession(s.UserID, s.SessionID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
 	if err := st.PutMessage(msg); err != nil {
 		t.Fatalf("PutMessage: %v", err)
 	}
-	msgs, err := st.GetMessagesBySession(s.SessionID)
+	msgs, err := st.GetUserMessagesBySession(s.UserID, s.SessionID)
 	if err != nil || len(msgs) != 1 || msgs[0].Content != "hello jsonb" {
 		t.Fatalf("messages = %#v err=%v", msgs, err)
 	}
@@ -425,12 +425,12 @@ func TestPostgreSQLStoreLiveReopenIdempotent(t *testing.T) {
 		reopened.ownedEphemeralSchema = true
 		_ = reopened.Close()
 	})
-	got, err := reopened.Get(s.SessionID)
+	got, err := reopened.GetUserSession(s.UserID, s.SessionID)
 	if err != nil || got.Title != "kept" {
 		t.Fatalf("durable reopen lost session: %v %+v", err, got)
 	}
 	version, err := reopened.SchemaVersion()
-	if err != nil || version != 4 {
+	if err != nil || version != 7 {
 		t.Fatalf("schema version after reopen = %d (%v)", version, err)
 	}
 }

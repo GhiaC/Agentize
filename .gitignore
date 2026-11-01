@@ -43,6 +43,7 @@ browseruse/sidecar/.env
 !/docs/
 /docs/*
 !/docs/context-architecture.md
+!/docs/CHAT_FILES.md
 .cursor/rules/postgres-first.mdc
 AGENTS.md
 .codegraph/codegraph.db

@@ -21,6 +21,7 @@ const (
 // UserFile is distinct from OpenedFile: OpenedFile tracks knowledge-tree nodes
 // opened during a session, whereas UserFile tracks actual user documents.
 type UserFile struct {
+	Details FileDetails `json:"details,omitempty"`
 	// FileID is the per-user numeric increment (FormatID(seq)).
 	FileID string
 

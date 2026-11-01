@@ -69,15 +69,23 @@ func (l *LocalFileStore) Save(key string, r io.Reader) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", fmt.Errorf("failed to create file directory: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := os.CreateTemp(filepath.Dir(path), ".upload-*")
 	if err != nil {
-		return "", fmt.Errorf("failed to create file: %w", err)
+		return "", fmt.Errorf("create temporary file: %w", err)
 	}
-	defer f.Close()
-
+	temp := f.Name()
+	defer os.Remove(temp)
 	if _, err := io.Copy(f, r); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
+		_ = f.Close()
+		return "", err
 	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(temp, path); err != nil {
+		return "", err
+	}
+
 	return key, nil
 }
 

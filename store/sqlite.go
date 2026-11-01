@@ -536,6 +536,12 @@ var sqliteMigrations = []sqliteMigration{
 	{20, "durable admission metadata", func(tx *sql.Tx) error {
 		return addColumns(tx, "session_runs", `metadata TEXT NOT NULL DEFAULT '{}'`)
 	}},
+	{21, "conversation file metadata and operations", func(tx *sql.Tx) error {
+		if err := addColumns(tx, "user_files", `details TEXT NOT NULL DEFAULT '{}'`); err != nil {
+			return err
+		}
+		return execAll(tx, fileOperationsSchema)
+	}},
 }
 
 // runMigrations applies every migration newer than the recorded schema version.
@@ -852,6 +858,11 @@ func (s *SQLiteStore) DeleteUserData(userID string) error {
 	}
 	defer tx.Rollback()
 
+	for _, table := range []string{"file_operations", "file_counters"} {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE user_id = ?", userID); err != nil {
+			return err
+		}
+	}
 	// Delete in order (child tables first, then sessions, then update user).
 	// summarization_logs / tool_calls / opened_files also match by session_id so
 	// older rows with an empty user_id still go away.
@@ -1992,8 +2003,8 @@ func (s *SQLiteStore) PutUserFile(f *model.UserFile) error {
 
 	_, err := s.execWrite(
 		`INSERT OR REPLACE INTO user_files (
-			file_id, user_id, session_id, name, mime_type, size, storage_key, source, parent_file_id, summary, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			file_id, user_id, session_id, name, mime_type, size, storage_key, source, parent_file_id, summary, created_at, details
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.FileID,
 		f.UserID,
 		f.SessionID,
@@ -2005,6 +2016,7 @@ func (s *SQLiteStore) PutUserFile(f *model.UserFile) error {
 		f.ParentFileID,
 		f.Summary,
 		f.CreatedAt.Unix(),
+		fileDetailsJSON(f.Details),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to store user file: %w", err)
@@ -2017,7 +2029,7 @@ func scanUserFile(scanner interface {
 	Scan(dest ...interface{}) error
 }) (*model.UserFile, error) {
 	f := &model.UserFile{}
-	var source string
+	var source, details string
 	var createdAt int64
 	err := scanner.Scan(
 		&f.FileID,
@@ -2031,8 +2043,12 @@ func scanUserFile(scanner interface {
 		&f.ParentFileID,
 		&f.Summary,
 		&createdAt,
+		&details,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(details), &f.Details); err != nil {
 		return nil, err
 	}
 	f.Source = model.FileSource(source)
@@ -2040,7 +2056,7 @@ func scanUserFile(scanner interface {
 	return f, nil
 }
 
-const userFileColumns = `file_id, user_id, session_id, name, mime_type, size, storage_key, source, parent_file_id, summary, created_at`
+const userFileColumns = `file_id, user_id, session_id, name, mime_type, size, storage_key, source, parent_file_id, summary, created_at, details`
 
 // GetUserFile returns a single user file by ID, or nil if not found.
 func (s *SQLiteStore) GetUserFile(fileID string) (*model.UserFile, error) {
