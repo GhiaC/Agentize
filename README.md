@@ -269,6 +269,22 @@ memory:
   persist: ["summary", "facts"]
 ```
 
+Node access is enforced by the engine on reads, discovery, opened-node prompts,
+restored tool schemas and execution. Only tools belonging to an open node with
+read and execute permission can run. Node authorization is checked again at the
+function-registry boundary after approval, including captured registry functions
+and registry replacement. Host-only functions absent from the knowledge tree
+retain their existing host guards; platform context/file/schedule tools keep
+their own identity checks.
+
+Policies are read fresh at authorization boundaries, so revocation does not need
+a binary rebuild or cache invalidation. User overrides take precedence over
+trusted host-supplied groups and roles (`Engine.KnowledgeMemberships`), then
+inherited and default permissions. Completely unconfigured nodes preserve legacy
+public access; an explicit empty default denies access. Configure `s` for discovery,
+`r` for reads and `x` for traversal/execution. Symlink aliases and paths outside
+`root/` are rejected. Closing a node remains possible after revocation or deletion.
+
 ### `tools.json`
 
 ```json

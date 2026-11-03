@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -266,5 +267,33 @@ func TestFunctionRegistry_DisableToolTemporarily(t *testing.T) {
 	}
 	if !errors.As(err, &disabledErr) {
 		t.Errorf("Expected ToolDisabledError, got %T", err)
+	}
+}
+
+func TestExecutionGuardSurvivesCapturedFunctionsAndReplacement(t *testing.T) {
+	registry := NewFunctionRegistry()
+	calls := 0
+	registry.MustRegister("guarded", "Guarded", func(map[string]interface{}) (string, error) { calls++; return "ok", nil })
+	captured, _ := registry.Get("guarded")
+	registry.SetExecutionGuard("access", func(name string, args map[string]interface{}) error {
+		if !registry.Has(name) {
+			t.Fatal("guard cannot inspect the unlocked registry")
+		}
+		if args["__user_id__"] != "owner" {
+			return fmt.Errorf("access denied")
+		}
+		return nil
+	})
+	if _, err := captured(map[string]interface{}{"__user_id__": "intruder"}); err == nil {
+		t.Fatal("captured function bypassed newly installed guard")
+	}
+	if err := registry.RegisterOrReplace("guarded", "Guarded", func(map[string]interface{}) (string, error) { calls++; return "new", nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Execute("guarded", map[string]interface{}{"__user_id__": "intruder"}); err == nil {
+		t.Fatal("replacement removed access guard")
+	}
+	if value, err := registry.Execute("guarded", map[string]interface{}{"__user_id__": "owner"}); err != nil || value != "new" || calls != 1 {
+		t.Fatalf("allowed execution value=%s err=%v calls=%d", value, err, calls)
 	}
 }

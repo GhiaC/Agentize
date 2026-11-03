@@ -81,10 +81,13 @@ type ToolExecutor func(toolName string, args map[string]interface{}) (string, er
 // It intentionally exposes only the operations that are consumed by InfraAgent.
 // Engine uses SessionStore for all state management, including conversation history.
 type Engine struct {
-	Repo      *fsrepo.NodeRepository
-	Sessions  store.Store
-	Functions *model.FunctionRegistry
-	Executor  ToolExecutor
+	// KnowledgeMemberships resolves trusted host-managed roles and groups, never model arguments.
+	KnowledgeMemberships func(userID string) (roles, groups []string)
+	knowledgeToolNames   sync.Map
+	Repo                 *fsrepo.NodeRepository
+	Sessions             store.Store
+	Functions            *model.FunctionRegistry
+	Executor             ToolExecutor
 	// Files is the pluggable byte storage for user files. When nil, the
 	// manage_files tool and user-file recording are disabled.
 	Files filestore.FileStore
@@ -267,6 +270,7 @@ func (e *Engine) UseFunctionRegistry(registry *model.FunctionRegistry) {
 	e.RegisterManageFilesTool()
 	e.RegisterManageContextTool()
 	e.RegisterManageKnowledgeTool()
+	e.registerKnowledgeExecutionGuard()
 	e.RegisterTextTools()
 	e.RegisterTaskSchedulerTool()
 	e.RegisterBrowserUseTool()
@@ -635,13 +639,19 @@ func (e *Engine) openFile(userID, sessionID, path string) (string, error) {
 		return "", fmt.Errorf("session not found: %w", err)
 	}
 
+	node, err := e.readableKnowledgeNode(session.UserID, path)
+	if err != nil {
+		return "", err
+	}
+	path = node.Path
+
 	// Check if already opened
 	alreadyOpened := false
 	for _, digest := range session.NodeDigests {
 		if digest.Path == path {
 			alreadyOpened = true
 			// Already opened, return content
-			node, err := e.Repo.LoadNode(path)
+			node, err := e.readableKnowledgeNode(session.UserID, path)
 			if err != nil {
 				return "", fmt.Errorf("failed to load node: %w", err)
 			}
@@ -680,7 +690,7 @@ func (e *Engine) openFile(userID, sessionID, path string) (string, error) {
 	}
 
 	// Load the node
-	node, err := e.Repo.LoadNode(path)
+	node, err = e.readableKnowledgeNode(session.UserID, path)
 	if err != nil {
 		return "", fmt.Errorf("file not found: %s", path)
 	}
@@ -717,6 +727,12 @@ func (e *Engine) CloseFile(sessionID string, path string) error {
 }
 
 func (e *Engine) closeFile(userID, sessionID, path string) error {
+	canonical, err := fsrepo.NormalizeNodePath(path)
+	if err != nil {
+		return err
+	}
+	path = canonical
+
 	if path == "root" {
 		return fmt.Errorf("cannot close root node")
 	}
@@ -729,7 +745,7 @@ func (e *Engine) closeFile(userID, sessionID, path string) error {
 	found := false
 	newDigests := make([]model.NodeDigest, 0, len(session.NodeDigests))
 	for _, digest := range session.NodeDigests {
-		if digest.Path == path {
+		if normalized, err := fsrepo.NormalizeNodePath(digest.Path); err == nil && normalized == path {
 			found = true
 			continue
 		}
@@ -1154,15 +1170,20 @@ func (e *Engine) buildOpenedNodesPrompt(session *model.Session) string {
 	var sb strings.Builder
 	sb.WriteString("# Opened Knowledge Nodes\n\n")
 	sb.WriteString("These nodes are currently open in this session. Opening another node ADDS to this list; it does not close previous nodes. Tools from every listed node stay callable until you close that node with close_node. Never close root.\n\n")
-	for i, digest := range session.NodeDigests {
+	visibleIndex := 0
+	for _, digest := range session.NodeDigests {
+		if _, err := e.readableKnowledgeNode(session.UserID, digest.Path); err != nil {
+			continue
+		}
+		visibleIndex++
 		title := strings.TrimSpace(digest.Title)
 		if title == "" {
 			title = digest.Path
 		}
-		fmt.Fprintf(&sb, "## %d. %s\n", i+1, title)
+		fmt.Fprintf(&sb, "## %d. %s\n", visibleIndex, title)
 		fmt.Fprintf(&sb, "- Path: `%s`\n", digest.Path)
 		if e != nil && e.Repo != nil {
-			node, err := e.Repo.LoadNode(digest.Path)
+			node, err := e.readableKnowledgeNode(session.UserID, digest.Path)
 			if err == nil && node != nil {
 				if strings.TrimSpace(node.Description) != "" {
 					fmt.Fprintf(&sb, "- Description: %s\n", node.Description)
@@ -1252,7 +1273,7 @@ func (e *Engine) GetTools(session *model.Session) []openai.Tool {
 	registry := model.NewToolRegistry(model.MergeStrategyOverride)
 	if session != nil && e.Repo != nil {
 		for _, digest := range session.NodeDigests {
-			node, err := e.Repo.LoadNode(digest.Path)
+			node, err := e.executableKnowledgeNode(session.UserID, digest.Path)
 			if err != nil {
 				continue
 			}
@@ -1950,7 +1971,7 @@ func (e *Engine) processChatRequest(
 				if toolsDisabled(ctx) {
 					result = "Tools are disabled for this automated alert turn."
 				} else if toolCall.Function.Name == searchToolsName {
-					result, discoveredTools = e.executeSearchTools(allTools, toolCall.Function.Arguments, discoveredTools)
+					result, discoveredTools = e.executeSearchToolsForUser(session.UserID, allTools, toolCall.Function.Arguments, discoveredTools)
 					e.recordSearchToolsOnTurn(ctx, session, messageID, toolCall, result)
 				} else {
 					result, inject = e.executeTool(ctx, session, messageID, toolCall)
@@ -2155,6 +2176,12 @@ func (e *Engine) executeTool(
 	args["__session_id__"] = sessionID
 	if toolCall.Function.Name == "manage_files" {
 		args["__file_context__"] = ctx
+	}
+	if err := e.CheckKnowledgeToolAccess(session.UserID, sessionID, toolCall.Function.Name); err != nil {
+		if persister != nil {
+			persister.Update(session, messageID, toolID, err.Error(), err)
+		}
+		return err.Error(), nil
 	}
 	// Check callback before execution. Expose a tool's "action" arg (e.g.
 	// manage_files edit_image) so the host can pre-block expensive media actions.

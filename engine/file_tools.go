@@ -88,11 +88,7 @@ func (e *Engine) createOpenFileFunction() model.ToolFunction {
 		}
 		if session, getErr := e.loadOwnedSession(stringArg(args, "__user_id__"), sessionID); getErr == nil && session != nil {
 			openPaths := make([]string, 0, len(session.NodeDigests))
-			for _, digest := range session.NodeDigests {
-				if digest.Path != "" {
-					openPaths = append(openPaths, digest.Path)
-				}
-			}
+			openPaths = e.openKnowledgePaths(session)
 			payload["open_nodes"] = openPaths
 			payload["closed_previous"] = false
 		}

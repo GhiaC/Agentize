@@ -48,7 +48,7 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 		userID, _ := args["__user_id__"].(string)
 		switch action {
 		case "get", "open":
-			node, err := e.Repo.LoadNode(path)
+			node, err := e.readableKnowledgeNode(userID, path)
 			if err != nil {
 				return "", err
 			}
@@ -60,6 +60,7 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 					return "", err
 				}
 			}
+			path = node.Path
 			payload := map[string]interface{}{"path": node.Path, "title": node.Title, "description": node.Description, "summary": node.Summary, "content": node.Content}
 			if action == "open" {
 				payload["opened"] = true
@@ -67,11 +68,7 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 				payload["closed_previous"] = false
 				if session, getErr := e.loadOwnedSession(userID, sessionID); getErr == nil && session != nil {
 					openPaths := make([]string, 0, len(session.NodeDigests))
-					for _, digest := range session.NodeDigests {
-						if digest.Path != "" {
-							openPaths = append(openPaths, digest.Path)
-						}
-					}
+					openPaths = e.openKnowledgePaths(session)
 					payload["open_nodes"] = openPaths
 				}
 			}
@@ -90,7 +87,7 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 				return "", fmt.Errorf("query is required for search")
 			}
 			var nodes []map[string]interface{}
-			e.walkKnowledge(path, func(node *model.Node) {
+			e.walkVisibleKnowledge(userID, path, func(node *model.Node) {
 				haystack := strings.ToLower(strings.Join([]string{node.Path, node.Title, node.Description, node.Summary}, " "))
 				if action == "list" || strings.Contains(haystack, query) {
 					nodes = append(nodes, map[string]interface{}{"path": node.Path, "title": node.Title, "description": node.Description, "summary": node.Summary, "tools": activeNodeToolNames(node)})
@@ -117,10 +114,7 @@ func (e *Engine) manageKnowledgeFunction() model.ToolFunction {
 			if end > len(nodes) {
 				end = len(nodes)
 			}
-			return boundedKnowledgeJSON(map[string]interface{}{
-				"items": nodes[offset:end], "offset": offset, "limit": limit, "total": len(nodes),
-				"next_offset": end, "done": end == len(nodes),
-			}), nil
+			return knowledgePage(nodes, offset, end, limit), nil
 		default:
 			return "", fmt.Errorf("unsupported knowledge action %q", action)
 		}
@@ -154,11 +148,62 @@ func activeNodeToolNames(node *model.Node) []string {
 }
 
 func boundedKnowledgeJSON(value interface{}) string {
-	b, _ := json.Marshal(value)
+	b, err := json.Marshal(value)
+	if err != nil {
+		return `{"error":"cannot encode knowledge result"}`
+	}
 	if len(b) <= maxKnowledgeResultChars {
 		return string(b)
 	}
-	return string(b[:maxKnowledgeResultChars]) + "..."
+	// Preserve valid JSON and UTF-8. Large content is explicitly marked instead of cutting a JSON token.
+	if payload, ok := value.(map[string]interface{}); ok {
+		copy := make(map[string]interface{}, len(payload)+1)
+		for key, val := range payload {
+			copy[key] = val
+		}
+		if content, ok := copy["content"].(string); ok {
+			copy["truncated"] = true
+			runes := []rune(content)
+			lo, hi := 0, len(runes)
+			for lo < hi {
+				mid := (lo + hi + 1) / 2
+				copy["content"] = string(runes[:mid])
+				data, _ := json.Marshal(copy)
+				if len(data) <= maxKnowledgeResultChars {
+					lo = mid
+				} else {
+					hi = mid - 1
+				}
+			}
+			copy["content"] = string(runes[:lo])
+			data, _ := json.Marshal(copy)
+			if len(data) <= maxKnowledgeResultChars {
+				return string(data)
+			}
+		}
+	}
+	return `{"truncated":true,"error":"knowledge result exceeds size limit; request a smaller page"}`
+}
+
+func knowledgePage(nodes []map[string]interface{}, offset, end, limit int) string {
+	for {
+		payload := map[string]interface{}{"items": nodes[offset:end], "offset": offset, "limit": limit, "total": len(nodes), "next_offset": end, "done": end == len(nodes)}
+		data, _ := json.Marshal(payload)
+		if len(data) <= maxKnowledgeResultChars {
+			return string(data)
+		}
+		if end-offset > 1 {
+			end--
+			continue
+		}
+		// One large metadata item must still make progress through pagination.
+		if end > offset {
+			item := nodes[offset]
+			payload["items"] = []map[string]interface{}{{"path": item["path"], "truncated": true}}
+			return boundedKnowledgeJSON(payload)
+		}
+		return boundedKnowledgeJSON(payload)
+	}
 }
 
 type knowledgeToolHit struct {
@@ -168,6 +213,10 @@ type knowledgeToolHit struct {
 }
 
 func (e *Engine) searchKnowledgeToolCatalog(query string, limit int) []knowledgeToolHit {
+	return e.searchKnowledgeToolCatalogForUser("", query, limit)
+}
+
+func (e *Engine) searchKnowledgeToolCatalogForUser(userID, query string, limit int) []knowledgeToolHit {
 	query = strings.ToLower(strings.TrimSpace(query))
 	if limit <= 0 {
 		limit = toolCatalogSearchLimit
@@ -181,7 +230,7 @@ func (e *Engine) searchKnowledgeToolCatalog(query string, limit int) []knowledge
 		score int
 	}
 	var ranked []scored
-	e.walkKnowledge("root", func(node *model.Node) {
+	e.walkVisibleKnowledge(userID, "root", func(node *model.Node) {
 		for _, tool := range node.Tools {
 			if tool.Status != model.ToolStatusActive || platformKnowledgeToolName(tool.Name) {
 				continue

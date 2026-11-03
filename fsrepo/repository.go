@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,8 +41,12 @@ func NewNodeRepository(rootPath string) (*NodeRepository, error) {
 		return nil, fmt.Errorf("root path does not exist: %s", absPath)
 	}
 
+	realRoot, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve root path: %w", err)
+	}
 	return &NodeRepository{
-		rootPath: absPath,
+		rootPath: realRoot,
 		cache:    make(map[string]*model.Node),
 	}, nil
 }
@@ -54,9 +59,62 @@ func (r *NodeRepository) SetSummaryGenerator(generator SummaryGenerator) {
 // LoadNode loads a node from the filesystem by its path
 // Path should be relative to root (e.g., "root", "root/next")
 func (r *NodeRepository) LoadNode(path string) (*model.Node, error) {
+	return r.loadNode(path, true)
+}
+
+// LoadNodeFresh rechecks the on-disk policy at authorization boundaries.
+func (r *NodeRepository) LoadNodeFresh(path string) (*model.Node, error) {
+	return r.loadNode(path, false)
+}
+
+// NormalizeNodePath validates a logical path without requiring the node to exist.
+func NormalizeNodePath(nodePath string) (string, error) {
+	if strings.Contains(nodePath, "\\") || filepath.IsAbs(nodePath) {
+		return "", fmt.Errorf("invalid knowledge path")
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(nodePath))
+	if cleaned != "root" && !strings.HasPrefix(cleaned, "root/") {
+		return "", fmt.Errorf("knowledge path must stay under root")
+	}
+	return cleaned, nil
+}
+
+// CanonicalPath rejects filesystem aliases before reading or authorizing a node.
+func (r *NodeRepository) CanonicalPath(nodePath string) (string, error) {
+	cleaned, err := NormalizeNodePath(nodePath)
+	if err != nil {
+		return "", err
+	}
+
+	full := filepath.Join(r.rootPath, filepath.FromSlash(cleaned))
+	resolved, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return "", err
+	}
+	if resolved != full {
+		return "", fmt.Errorf("knowledge path aliases are not allowed")
+	}
+	for _, name := range []string{"node.yaml", "node.md", "tools.json"} {
+		info, err := os.Lstat(filepath.Join(full, name))
+		if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("knowledge file aliases are not allowed")
+		}
+	}
+	return cleaned, nil
+}
+
+func (r *NodeRepository) loadNode(path string, useCache bool) (*model.Node, error) {
+	canonical, err := r.CanonicalPath(path)
+	if err != nil {
+		return nil, err
+	}
+	path = canonical
 	// Check cache first
 	r.mu.RLock()
-	if cached, ok := r.cache[path]; ok {
+	if cached, ok := r.cache[path]; useCache && ok {
 		r.mu.RUnlock()
 		return cached, nil
 	}
@@ -107,12 +165,16 @@ func (r *NodeRepository) LoadNode(path string) (*model.Node, error) {
 	content, err := r.loadNodeContent(fullPath)
 	if err == nil {
 		node.Content = content
+	} else if !os.IsNotExist(err) {
+		return nil, err
 	}
 
 	// Load tools.json (optional)
 	tools, err := r.loadTools(fullPath)
 	if err == nil {
 		node.Tools = tools
+	} else if !os.IsNotExist(err) {
+		return nil, err
 	}
 
 	// Calculate hash and set metadata
@@ -130,6 +192,11 @@ func (r *NodeRepository) LoadNode(path string) (*model.Node, error) {
 // GetChildren returns all child nodes for a given path
 // It scans the directory for subdirectories
 func (r *NodeRepository) GetChildren(path string) ([]string, error) {
+	canonical, err := r.CanonicalPath(path)
+	if err != nil {
+		return nil, err
+	}
+	path = canonical
 	fullPath := filepath.Join(r.rootPath, path)
 
 	var children []string

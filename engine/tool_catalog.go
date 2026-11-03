@@ -251,13 +251,17 @@ func formatSearchToolsResult(hits []toolCatalogHit) string {
 }
 
 func (e *Engine) executeSearchTools(all []openai.Tool, arguments string, discovered []string) (string, []string) {
+	return e.executeSearchToolsForUser("", all, arguments, discovered)
+}
+
+func (e *Engine) executeSearchToolsForUser(userID string, all []openai.Tool, arguments string, discovered []string) (string, []string) {
 	var args map[string]interface{}
 	query := ""
 	if json.Unmarshal([]byte(arguments), &args) == nil {
 		query, _ = args["query"].(string)
 	}
 	if e != nil && e.Repo != nil {
-		hits := e.searchKnowledgeToolCatalog(query, toolCatalogSearchLimit)
+		hits := e.searchKnowledgeToolCatalogForUser(userID, query, toolCatalogSearchLimit)
 		return formatKnowledgeSearchToolsResult(hits), discovered
 	}
 	hits := searchToolCatalog(all, query, toolCatalogSearchLimit)

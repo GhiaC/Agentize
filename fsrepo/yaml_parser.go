@@ -79,9 +79,6 @@ func (a *yamlAuth) toModel() model.Auth {
 	if a.inheritSet {
 		out.Inherit = a.inherit
 	}
-	if out.Default == nil {
-		out.Default = &model.Permissions{}
-	}
 	if out.Users == nil {
 		out.Users = make(map[string]*model.Permissions)
 	}

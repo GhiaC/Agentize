@@ -192,7 +192,7 @@ func TestSearchToolsReturnsNodePathWithoutActivating(t *testing.T) {
 	if err := st.Put(session); err != nil {
 		t.Fatal(err)
 	}
-	result, discovered := eng.executeSearchTools(eng.GetTools(session), `{"query":"child"}`, nil)
+	result, discovered := eng.executeSearchToolsForUser(session.UserID, eng.GetTools(session), `{"query":"child"}`, nil)
 	if !strings.Contains(result, "child_tool") || !strings.Contains(result, "root/child") {
 		t.Fatalf("search_tools: %s", result)
 	}

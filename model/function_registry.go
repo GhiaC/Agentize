@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -20,6 +21,7 @@ type registeredEntry struct {
 type FunctionRegistry struct {
 	mu        sync.RWMutex
 	functions map[string]registeredEntry // tool name -> function + display name
+	guards    map[string]func(string, map[string]interface{}) error
 }
 
 // NewFunctionRegistry creates a new function registry
@@ -139,12 +141,47 @@ func (fr *FunctionRegistry) GetDisplayName(toolName string) string {
 }
 
 // Get retrieves a function for a tool name
+// SetExecutionGuard installs a named guard that survives function replacement.
+// Guards receive engine-injected identity and run outside the registry lock.
+func (fr *FunctionRegistry) SetExecutionGuard(name string, guard func(string, map[string]interface{}) error) {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	if fr.guards == nil {
+		fr.guards = make(map[string]func(string, map[string]interface{}) error)
+	}
+	if guard == nil {
+		delete(fr.guards, name)
+	} else {
+		fr.guards[name] = guard
+	}
+}
+
 func (fr *FunctionRegistry) Get(toolName string) (ToolFunction, bool) {
 	fr.mu.RLock()
-	defer fr.mu.RUnlock()
-
 	entry, ok := fr.functions[toolName]
-	return entry.Fn, ok
+	fr.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	return func(args map[string]interface{}) (string, error) {
+		fr.mu.RLock()
+		keys := make([]string, 0, len(fr.guards))
+		for key := range fr.guards {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		guards := make([]func(string, map[string]interface{}) error, 0, len(keys))
+		for _, key := range keys {
+			guards = append(guards, fr.guards[key])
+		}
+		fr.mu.RUnlock()
+		for _, guard := range guards {
+			if err := guard(toolName, args); err != nil {
+				return "", err
+			}
+		}
+		return entry.Fn(args)
+	}, true
 }
 
 // Execute executes a tool function by name
