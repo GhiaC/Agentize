@@ -58,6 +58,10 @@ type LLMConfig struct {
 	// BackupDisabled if true, skips all backup providers and goes straight to the default LLM.
 	BackupDisabled bool
 
+	// ForceConfiguredModel sends every engine completion to Model. Chats that stored
+	// another provider's model id still answer with this connection's model.
+	ForceConfiguredModel bool
+
 	// SchedulerDisableLogs if true, SessionScheduler does not emit any logs (overrides config from env)
 	SchedulerDisableLogs bool
 	// SummaryModel overrides the scheduler summarization model (from config/env) when non-empty
@@ -291,6 +295,7 @@ func (e *Engine) UseLLMConfig(config LLMConfig) error {
 	client := openai.NewClientWithConfig(openaiConfig)
 	e.llmClient = client
 	e.llmConfig = config
+	e.bindSchedulerLLM(client, config)
 	e.InitializeTaskScheduler()
 	if e.taskScheduler != nil {
 		e.taskScheduler.Start(context.Background())
@@ -319,7 +324,7 @@ func (e *Engine) UseLLMConfig(config LLMConfig) error {
 				e.schedulerMu.Lock()
 				if e.scheduler == nil {
 					e.schedulerMu.Unlock()
-					if err := e.startScheduler(ctx, client); err != nil {
+					if err := e.startScheduler(ctx, e.llmClient); err != nil {
 						log.Log.Warnf("[Engine] ⚠️  Failed to start scheduler: %v", err)
 					}
 				} else {
@@ -332,14 +337,40 @@ func (e *Engine) UseLLMConfig(config LLMConfig) error {
 	return nil
 }
 
+// bindSchedulerLLM points an already-running summarizer at the client UseLLMConfig just installed.
+func (e *Engine) bindSchedulerLLM(client *openai.Client, cfg LLMConfig) {
+	if e == nil {
+		return
+	}
+	e.schedulerMu.Lock()
+	defer e.schedulerMu.Unlock()
+	if e.scheduler == nil || client == nil {
+		return
+	}
+	e.scheduler.llmClient = client
+	model := strings.TrimSpace(cfg.SummaryModel)
+	if model == "" {
+		model = strings.TrimSpace(cfg.Model)
+	}
+	if cfg.ForceConfiguredModel && model != "" {
+		e.scheduler.config.SummaryModel = model
+	}
+	if e.scheduler.sessionHandler != nil {
+		e.scheduler.sessionHandler.SetLLMClient(&openAIClientWrapperForSessionHandler{Client: client})
+	}
+}
+
 const backupCooldownDuration = 1 * time.Second
 
 // callLLM tries the backup LLM providers in order (if configured and not disabled), then falls back
 // to the default OpenAI client. This is the single entry point for all LLM calls
 // in the Engine, ensuring consistent fallback behaviour.
 func (e *Engine) callLLM(ctx context.Context, model string, messages []openai.ChatCompletionMessage, tools []openai.Tool) (openai.ChatCompletionResponse, error) {
-	// Try backup providers chain first (only if not disabled)
-	if !e.llmConfig.BackupDisabled {
+	if e.llmConfig.ForceConfiguredModel {
+		if forced := strings.TrimSpace(e.llmConfig.Model); forced != "" {
+			model = forced
+		}
+	} else if !e.llmConfig.BackupDisabled {
 		if resp, ok := e.backups.TryBackup(ctx, messages, tools, "Engine"); ok {
 			return resp, nil
 		}
@@ -536,6 +567,17 @@ func (e *Engine) startScheduler(ctx context.Context, llmClient *openai.Client) e
 	}
 
 	e.schedulerMu.Lock()
+	if e.llmClient != nil {
+		scheduler.llmClient = e.llmClient
+	}
+	if e.llmConfig.ForceConfiguredModel {
+		if model := strings.TrimSpace(e.llmConfig.Model); model != "" {
+			scheduler.config.SummaryModel = model
+		}
+	}
+	if scheduler.sessionHandler != nil && scheduler.llmClient != nil {
+		scheduler.sessionHandler.SetLLMClient(&openAIClientWrapperForSessionHandler{Client: scheduler.llmClient})
+	}
 	e.scheduler = scheduler
 	e.schedulerMu.Unlock()
 	// Start scheduler in background goroutine to avoid blocking initialization
