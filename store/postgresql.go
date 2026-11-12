@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ghiac/agentize/debuger"
+	"github.com/ghiac/agentize/mcpauth"
 	"github.com/lib/pq"
 )
 
@@ -474,6 +475,7 @@ var postgreSQLMigrations = []postgreSQLMigration{
 	{5, "durable session execution queue", postgreSQLSessionAdmission},
 	{6, "durable admission metadata", `ALTER TABLE session_runs ADD COLUMN IF NOT EXISTS metadata TEXT NOT NULL DEFAULT '{}'`},
 	{7, "conversation file metadata and operations", `ALTER TABLE user_files ADD COLUMN IF NOT EXISTS details TEXT NOT NULL DEFAULT '{}';` + fileOperationsSchema},
+	{8, "shared MCP authentication and audit", mcpauth.PostgreSQLSchema},
 }
 
 // Foreign keys are intentionally omitted on session/user children: Delete of a
@@ -645,3 +647,6 @@ ALTER TABLE task_schedule_runs ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DE
 UPDATE task_schedule_runs SET user_id = COALESCE(data->>'user_id', '') WHERE user_id = '';
 CREATE INDEX IF NOT EXISTS idx_schedule_runs_user_schedule_started ON task_schedule_runs(user_id, schedule_id, started_at DESC, run_id DESC);
 `
+
+// MCPStore uses this PostgreSQLStore's schema and connection pool; there is no fallback.
+func (s *PostgreSQLStore) MCPStore() *mcpauth.PostgresStore { return mcpauth.NewPostgresStore(s.db) }

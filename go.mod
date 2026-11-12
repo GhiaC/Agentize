@@ -8,10 +8,14 @@ require (
 	github.com/go-echarts/go-echarts/v2 v2.6.7
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/lib/pq v1.10.9
+	github.com/oklog/ulid/v2 v2.1.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sashabaranov/go-openai v1.40.0
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/mongodb v0.42.0
+	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
+	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
+	github.com/xeipuuv/gojsonschema v1.2.0
 	go.mongodb.org/mongo-driver v1.15.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.29.6

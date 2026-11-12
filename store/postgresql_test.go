@@ -112,8 +112,8 @@ func TestPostgreSQLSchemaHasProductionIndexes(t *testing.T) {
 		}
 	}
 	latest := postgreSQLMigrations[len(postgreSQLMigrations)-1]
-	if latest.version != 7 || !strings.Contains(latest.sql, "CREATE TABLE IF NOT EXISTS file_operations") {
-		t.Fatalf("latest PostgreSQL migration = %d, want conversation-file version 7", latest.version)
+	if latest.version != 8 || !strings.Contains(latest.sql, "CREATE TABLE IF NOT EXISTS mcp_credentials") {
+		t.Fatalf("latest PostgreSQL migration = %d, want MCP version 8", latest.version)
 	}
 	if !strings.Contains(postgreSQLSchema, "CREATE TABLE IF NOT EXISTS session_runs") {
 		t.Fatal("fresh PostgreSQL schema missing session_runs")
@@ -197,8 +197,8 @@ func openPostgreSQLTestStore(t *testing.T) *PostgreSQLStore {
 func TestPostgreSQLStoreLiveSchemaAndRoundTrip(t *testing.T) {
 	st := openPostgreSQLTestStore(t)
 	version, err := st.SchemaVersion()
-	if err != nil || version != 7 {
-		t.Fatalf("SchemaVersion = %d (%v), want 7", version, err)
+	if err != nil || version != 8 {
+		t.Fatalf("SchemaVersion = %d (%v), want 8", version, err)
 	}
 	if stats := st.PoolStats(); stats.MaxOpenConnections <= 0 {
 		t.Fatalf("PoolStats.MaxOpenConnections = %d", stats.MaxOpenConnections)
@@ -430,7 +430,7 @@ func TestPostgreSQLStoreLiveReopenIdempotent(t *testing.T) {
 		t.Fatalf("durable reopen lost session: %v %+v", err, got)
 	}
 	version, err := reopened.SchemaVersion()
-	if err != nil || version != 7 {
+	if err != nil || version != 8 {
 		t.Fatalf("schema version after reopen = %d (%v)", version, err)
 	}
 }
